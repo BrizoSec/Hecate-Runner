@@ -4,7 +4,7 @@ Autonomous hunt draft orchestrator for the [Nebulock Agentic Threat Hunting Fram
 
 `sec7669` sits on top of ATHF and turns it into a persistent, 24/7 hunting loop:
 
-1. Pulls fresh CTI from a configured source (file queue, AlienVault OTX, or RSS/Atom feeds; MISP still open)
+1. Pulls fresh CTI from a configured source (file queue, AlienVault OTX, RSS/Atom feeds, or MISP)
 2. Calls the ATHF `hypothesis-generator` agent (which uses a local Ollama-served LLM)
 3. Writes structured draft hunt records into your ATHF workspace
 4. Never auto-executes queries — a human proposes a bounded query and separately approves running it (see [Query execution](#query-execution-propose-dont-run) below); nothing runs unattended
@@ -163,6 +163,29 @@ One feed being down or blocking automated requests doesn't stop entries from the
 
 Same dual-mode support as OTX: `SEC7669_CTI_PROVIDER=rss` pulls directly from the configured feeds every orchestrator cycle instead of routing through the file queue via the poller timer.
 
+### MISP CTI provider
+
+```bash
+# Point at your MISP instance and a dedicated automation key (Administration
+# -> List Auth Keys -> Add authentication key in the MISP UI -- not a
+# personal user's key):
+# MISP_BASE_URL=https://localhost:8443
+# MISP_API_KEY=...
+# SEC7669_MISP_VERIFY_SSL=false   # only for self-signed dev/test instances
+
+# One-off: route the oldest unrouted published event
+uv run sec7669 misp-poll
+
+# Persistent: poll hourly, independent of the orchestrator's 6h cycle
+sudo systemctl enable --now sec7669-misp-poller.timer
+```
+
+Polls `POST /events/restSearch`, filtered to `published` events, incrementally synced via a `timestamp`-based cursor (`.misp_cursor_state.json`) the same way OTX's `modified_since` works. TLP is tag-based in MISP (`tlp:white`/`tlp:red`/etc.) rather than a dedicated field like OTX has — an event with an explicit `tlp:red` or `tlp:amber` tag is excluded, but an event with **no** TLP tag at all defaults to safe/included, matching how `OtxProvider` treats a missing TLP field. Like RSS (and unlike OTX), an event doesn't need a MITRE Galaxy/technique mapping to be considered high signal — a curated MISP instance is itself the filter. When a Galaxy cluster *is* attached, technique IDs are read from `GalaxyCluster.meta.external_id` (confirmed against MISP's own bundled ATT&CK galaxy library), with a regex fallback across tag names in case a given MISP/galaxy version omits that field.
+
+Same dual-mode support as OTX/RSS: `SEC7669_CTI_PROVIDER=misp` pulls directly from MISP every orchestrator cycle instead of routing through the file queue via the poller timer.
+
+**Standing up a local MISP instance for dev/test:** see [MISP/misp-docker](https://github.com/MISP/misp-docker) — `docker compose up`, then create a dedicated Auth key as above. If it's sharing a host with a k3s cluster running Traefik as ingress, note that Traefik claims ports 80/443 system-wide via iptables NAT (including loopback-originated traffic) — invisible to `ss`, confirmed only by comparing TLS certificate identity. Use non-standard host ports (e.g. 8080/8443) and set `BASE_URL` (MISP's own env var) to match.
+
 ## Configuration
 
 All config comes from environment variables (or a `.env` file in the working directory). See [.env.example](.env.example) for the full list.
@@ -177,10 +200,12 @@ Key ones:
 | `SEC7669_LLM_TIMEOUT_SEC` | Hard timeout on any single `athf` invocation (research call and hypothesis call each get their own budget) | `600` |
 | `SEC7669_RESEARCH_ENABLED` | Run `athf research new` (web-grounded) before hypothesis generation | `true` |
 | `SEC7669_RESEARCH_DEPTH` | `basic` (~5 min) or `advanced` (~15-20 min) research depth | `basic` |
-| `SEC7669_CTI_PROVIDER` | Which CTI source to use (`file`, `otx`, or `rss`) | `file` |
+| `SEC7669_CTI_PROVIDER` | Which CTI source to use (`file`, `otx`, `rss`, or `misp`) | `file` |
 | `OTX_API_KEY` | AlienVault OTX API key — required for `cti_provider=otx` and `sec7669 otx-poll` | — |
 | `SEC7669_RSS_FEED_URLS` | Comma-separated RSS/Atom feed URLs — no API key needed | 4 verified defaults, see `.env.example` |
 | `SEC7669_RSS_MAX_ENTRY_AGE_DAYS` | Ignore RSS entries older than this | `30` |
+| `MISP_BASE_URL` / `MISP_API_KEY` | MISP instance + dedicated automation Auth key — required for `cti_provider=misp` and `sec7669 misp-poll` | — |
+| `SEC7669_MISP_VERIFY_SSL` | Set false only for self-signed dev/test MISP instances | `true` |
 | `SEC7669_QUERY_PROVIDER` | Backend for `sec7669 approve` (`mock` or `splunk`) — see [Query execution](#query-execution-propose-dont-run) | `mock` |
 | `SEC7669_MAX_QUERY_TIME_RANGE_DAYS` | Hard ceiling on a proposed query's time range | `7` |
 | `SEC7669_MAX_QUERY_LIMIT` | Hard ceiling on a proposed query's result limit | `1000` |
@@ -201,7 +226,8 @@ Open the folder in VS Code. Recommended extensions live in `.vscode/extensions.j
 
 - [x] Phase 4a: file-based CTI queue + orchestrator + systemd
 - [x] Phase 4b/5: AlienVault OTX CTI provider + poller timer
-- [x] Phase 4c: RSS/Atom CTI provider + poller timer, no API key required (4 verified default feeds; CISA's advisory feed tried and excluded — blocks automated requests on every path regardless of User-Agent). MISP still open — no live MISP instance to build and validate against yet, same reasoning as the Splunk query provider.
+- [x] Phase 4c: RSS/Atom CTI provider + poller timer, no API key required (4 verified default feeds; CISA's advisory feed tried and excluded — blocks automated requests on every path regardless of User-Agent).
+- [~] Phase 4d: MISP CTI provider + poller timer — built and unit-tested against field shapes verified from MISP's own bundled test fixtures (not guessed), but not yet live-verified against a real instance the way RSS was. A local misp-docker instance exists in this environment for exactly that purpose; live verification is the next step once a dedicated automation Auth key is available.
 - [x] Phase 5b: notification hooks — Slack webhook on draft creation (`SEC7669_SLACK_WEBHOOK_URL`, no-op if unset); email still open
 - [x] Phase 6a: web-search grounding via TAVILY (`athf research new` wired into the orchestrator, mandatory when enabled — a research failure aborts the cycle rather than falling back to ungrounded) + model swap to qwen2.5:14b
 - [x] Phase 6b: eval harness (`athf eval` — known-answer fixtures replacing manual spot checks; found ungrounded generation scores ~30% on MITRE technique recall, which is why research grounding is mandatory-when-enabled rather than a soft fallback)

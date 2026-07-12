@@ -1,0 +1,13 @@
+[Unit]
+Description=Poll MISP for new published events every hour
+Requires=sec7669-misp-poller.service
+
+[Timer]
+# Fire 5 minutes after boot, then hourly. Same cadence as the other pollers.
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=sec7669-misp-poller.service
+
+[Install]
+WantedBy=timers.target

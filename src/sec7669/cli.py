@@ -7,6 +7,7 @@ Commands:
     sec7669 doctor        Sanity-check the deployment
     sec7669 otx-poll      Route one high-signal OTX pulse into the CTI queue
     sec7669 rss-poll      Route one high-signal RSS/Atom entry into the CTI queue
+    sec7669 misp-poll     Route one high-signal MISP event into the CTI queue
     sec7669 propose       Stage a bounded query for a hunt, pending approval
     sec7669 pending       List queries awaiting approval
     sec7669 approve       Execute a previously proposed, guardrail-passed query
@@ -29,6 +30,7 @@ from rich.table import Table
 
 from sec7669 import __version__
 from sec7669.config import Settings
+from sec7669.misp_poller import run_misp_poll
 from sec7669.orchestrator import build_default_orchestrator
 from sec7669.otx_poller import run_otx_poll
 from sec7669.query_execution import ProposedQuery, get_provider, validate_guardrails
@@ -121,6 +123,26 @@ def rss_poll() -> None:
     console.print(f"[bold]Routed:[/bold] {result.routed}")
     if result.routed_entry_ids:
         console.print(f"[bold]Entry:[/bold] {', '.join(result.routed_entry_ids)}")
+    if result.skipped_queue_occupied:
+        console.print("[yellow]CTI queue slot occupied - skipped this poll.[/yellow]")
+    if result.error:
+        console.print(f"[red]Error:[/red] {result.error}")
+
+    raise typer.Exit(code=0 if result.ok else 1)
+
+
+@app.command(name="misp-poll")
+def misp_poll() -> None:
+    """Route the next high-signal MISP event into the CTI queue, if any."""
+    settings = Settings()  # type: ignore[call-arg]
+    _configure_logging(settings)
+
+    result = run_misp_poll(settings)
+
+    console.print()
+    console.print(f"[bold]Routed:[/bold] {result.routed}")
+    if result.routed_event_uuids:
+        console.print(f"[bold]Event:[/bold] {', '.join(result.routed_event_uuids)}")
     if result.skipped_queue_occupied:
         console.print("[yellow]CTI queue slot occupied - skipped this poll.[/yellow]")
     if result.error:
@@ -366,6 +388,12 @@ def doctor() -> None:
             bool(settings.otx_api_key),
             "OTX_API_KEY set (required for cti_provider=otx)",
             "Set OTX_API_KEY in .env — get a free-tier key at https://otx.alienvault.com",
+        )
+    if settings.cti_provider == "misp":
+        check(
+            bool(settings.misp_base_url) and bool(settings.misp_api_key),
+            "MISP_BASE_URL / MISP_API_KEY set (required for cti_provider=misp)",
+            "Set both in .env — use a dedicated automation key, not a personal user's key.",
         )
     # Checked unconditionally (not gated on cti_provider == "rss") because
     # `rss-poll` runs independently, same as `otx-poll` — most deployments

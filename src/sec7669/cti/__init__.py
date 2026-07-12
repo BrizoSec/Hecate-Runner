@@ -5,10 +5,19 @@ from __future__ import annotations
 from sec7669.config import Settings
 from sec7669.cti.base import CTIItem, CTIProvider
 from sec7669.cti.file_queue import FileQueueProvider
+from sec7669.cti.misp import MispProvider
 from sec7669.cti.otx import OtxProvider
 from sec7669.cti.rss import RssProvider
 
-__all__ = ["CTIItem", "CTIProvider", "FileQueueProvider", "OtxProvider", "RssProvider", "get_provider"]
+__all__ = [
+    "CTIItem",
+    "CTIProvider",
+    "FileQueueProvider",
+    "MispProvider",
+    "OtxProvider",
+    "RssProvider",
+    "get_provider",
+]
 
 
 def get_provider(name: str, *, settings: Settings) -> CTIProvider:
@@ -30,5 +39,15 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             cursor_file=settings.rss_cursor_file,
             max_entry_age_days=settings.rss_max_entry_age_days,
             request_timeout_sec=settings.rss_request_timeout_sec,
+        )
+    if name == "misp":
+        return MispProvider(
+            base_url=settings.misp_base_url or "",
+            api_key=settings.misp_api_key or "",
+            cursor_file=settings.misp_cursor_file,
+            max_event_age_days=settings.misp_max_event_age_days,
+            page_limit=settings.misp_page_limit,
+            request_timeout_sec=settings.misp_request_timeout_sec,
+            verify_ssl=settings.misp_verify_ssl,
         )
     raise ValueError(f"Unknown CTI provider: {name!r}")

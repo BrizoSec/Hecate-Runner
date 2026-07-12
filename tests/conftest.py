@@ -48,6 +48,12 @@ def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Setti
         "SEC7669_RSS_FEED_URLS",
         "SEC7669_RSS_MAX_ENTRY_AGE_DAYS",
         "SEC7669_RSS_REQUEST_TIMEOUT_SEC",
+        "MISP_BASE_URL",
+        "MISP_API_KEY",
+        "SEC7669_MISP_VERIFY_SSL",
+        "SEC7669_MISP_MAX_EVENT_AGE_DAYS",
+        "SEC7669_MISP_PAGE_LIMIT",
+        "SEC7669_MISP_REQUEST_TIMEOUT_SEC",
     ]:
         monkeypatch.delenv(var, raising=False)
 

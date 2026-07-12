@@ -5,8 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from sec7669.config import Settings
-from sec7669.cti import FileQueueProvider, get_provider
+from sec7669.cti import FileQueueProvider, MispProvider, get_provider
 from sec7669.cti.base import CTIItem
 
 
@@ -62,10 +64,18 @@ def test_factory_returns_file_provider(settings: Settings) -> None:
     assert isinstance(provider, FileQueueProvider)
 
 
+def test_factory_returns_misp_provider(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MISP_BASE_URL", "https://misp.example.com")
+    monkeypatch.setenv("MISP_API_KEY", "test-key")
+    misp_settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    provider = get_provider("misp", settings=misp_settings)
+    assert isinstance(provider, MispProvider)
+
+
 def test_factory_unknown_raises(settings: Settings) -> None:
     try:
-        get_provider("misp", settings=settings)
+        get_provider("bigquery", settings=settings)
     except ValueError as e:
-        assert "misp" in str(e)
+        assert "bigquery" in str(e)
     else:
         raise AssertionError("expected ValueError")

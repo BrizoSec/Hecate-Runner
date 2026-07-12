@@ -23,6 +23,8 @@ install -m 0644 "$REPO_ROOT/systemd/sec7669-otx-poller.service" "$UNIT_DIR/sec76
 install -m 0644 "$REPO_ROOT/systemd/sec7669-otx-poller.timer" "$UNIT_DIR/sec7669-otx-poller.timer"
 install -m 0644 "$REPO_ROOT/systemd/sec7669-rss-poller.service" "$UNIT_DIR/sec7669-rss-poller.service"
 install -m 0644 "$REPO_ROOT/systemd/sec7669-rss-poller.timer" "$UNIT_DIR/sec7669-rss-poller.timer"
+install -m 0644 "$REPO_ROOT/systemd/sec7669-misp-poller.service" "$UNIT_DIR/sec7669-misp-poller.service"
+install -m 0644 "$REPO_ROOT/systemd/sec7669-misp-poller.timer" "$UNIT_DIR/sec7669-misp-poller.timer"
 
 echo "==> Reloading systemd"
 systemctl daemon-reload
@@ -41,3 +43,7 @@ echo
 echo "   RSS feed polling has sensible defaults out of the box (no API key needed):"
 echo "   sudo systemctl enable --now sec7669-rss-poller.timer"
 echo "   sudo systemctl start sec7669-rss-poller.service     # force one poll"
+echo
+echo "   If MISP_BASE_URL and MISP_API_KEY are set, also enable the MISP poller:"
+echo "   sudo systemctl enable --now sec7669-misp-poller.timer"
+echo "   sudo systemctl start sec7669-misp-poller.service    # force one poll"

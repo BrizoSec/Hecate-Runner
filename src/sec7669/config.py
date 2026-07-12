@@ -48,7 +48,7 @@ class Settings(BaseSettings):
         le=3600,
         alias="SEC7669_LLM_TIMEOUT_SEC",
     )
-    cti_provider: Literal["file", "otx", "rss"] = Field(
+    cti_provider: Literal["file", "otx", "rss", "misp"] = Field(
         default="file",
         alias="SEC7669_CTI_PROVIDER",
         description="Which CTI source to use.",
@@ -149,6 +149,46 @@ class Settings(BaseSettings):
         alias="SEC7669_RSS_REQUEST_TIMEOUT_SEC",
     )
 
+    # --- MISP CTI provider ---------------------------------------------------
+    misp_base_url: str | None = Field(
+        default=None,
+        alias="MISP_BASE_URL",
+        description="Base URL of the MISP instance, e.g. https://localhost:8443. Required for cti_provider=misp.",
+    )
+    misp_api_key: str | None = Field(
+        default=None,
+        alias="MISP_API_KEY",
+        description=(
+            "MISP Auth key. Required for cti_provider=misp and `sec7669 misp-poll`. "
+            "Use a dedicated automation key, not a personal user's key."
+        ),
+    )
+    misp_verify_ssl: bool = Field(
+        default=True,
+        alias="SEC7669_MISP_VERIFY_SSL",
+        description="Set to false only for self-signed dev/test instances (e.g. a local misp-docker deployment).",
+    )
+    misp_max_event_age_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        alias="SEC7669_MISP_MAX_EVENT_AGE_DAYS",
+        description="Ignore events published before this many days ago.",
+    )
+    misp_page_limit: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        alias="SEC7669_MISP_PAGE_LIMIT",
+        description="Events fetched per restSearch call.",
+    )
+    misp_request_timeout_sec: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=120.0,
+        alias="SEC7669_MISP_REQUEST_TIMEOUT_SEC",
+    )
+
     # --- Notifications --------------------------------------------------------
     slack_webhook_url: str | None = Field(
         default=None,
@@ -162,7 +202,7 @@ class Settings(BaseSettings):
     # Field names whose values must never appear in `sec7669 config` output —
     # anyone holding the raw webhook URL can post into the channel, same as
     # an API key.
-    _SENSITIVE_FIELDS: ClassVar[set[str]] = {"otx_api_key", "slack_webhook_url"}
+    _SENSITIVE_FIELDS: ClassVar[set[str]] = {"otx_api_key", "slack_webhook_url", "misp_api_key"}
 
     # --- Query execution ("propose, don't run") --------------------------------
     query_provider: Literal["mock", "splunk"] = Field(
@@ -232,6 +272,10 @@ class Settings(BaseSettings):
     def rss_feed_urls(self) -> list[str]:
         """Parsed, whitespace-trimmed feed URL list from SEC7669_RSS_FEED_URLS."""
         return [url.strip() for url in self.rss_feed_urls_raw.split(",") if url.strip()]
+
+    @property
+    def misp_cursor_file(self) -> Path:
+        return self.athf_workspace / ".misp_cursor_state.json"
 
     @property
     def hunts_root(self) -> Path:
