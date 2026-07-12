@@ -7,7 +7,7 @@ Autonomous hunt draft orchestrator for the [Nebulock Agentic Threat Hunting Fram
 1. Pulls fresh CTI from a configured source (file queue, or AlienVault OTX; MISP/RSS later)
 2. Calls the ATHF `hypothesis-generator` agent (which uses a local Ollama-served LLM)
 3. Writes structured draft hunt records into your ATHF workspace
-4. Never auto-executes queries — humans review and advance the hunt
+4. Never auto-executes queries — a human proposes a bounded query and separately approves running it (see [Query execution](#query-execution-propose-dont-run) below); nothing runs unattended
 
 Runs as a systemd timer on a hunting host, or manually via `sec7669 run`.
 
@@ -44,6 +44,29 @@ Runs as a systemd timer on a hunting host, or manually via `sec7669 run`.
 ```
 
 Research grounding runs before hypothesis generation on every cycle by default (`SEC7669_RESEARCH_ENABLED=true`). **A research failure aborts the cycle** (refunds the quota, leaves the CTI queued for retry) rather than falling back to an ungrounded hypothesis: `athf eval` measured ungrounded generation at ~30% accuracy on known-answer MITRE technique fixtures, so an ungrounded draft isn't a degraded-but-useful fallback, it's an unreliable one. Set `SEC7669_RESEARCH_ENABLED=false` to explicitly opt out of research and always generate ungrounded (e.g. for offline testing) — that's a deliberate choice, different from a research call failing mid-cycle.
+
+## Query execution: propose, don't run
+
+A draft hunt's CHECK section still says "sec7669 DOES NOT auto-generate queries" — that hasn't changed, and won't until query *authoring* has its own eval-backed accuracy check the way hypothesis generation now does. What's new is a bounded bridge for the query a *human* writes, so running it doesn't mean dropping to a raw SIEM CLI:
+
+```
+sec7669 propose H-0016 --query '...' --data-source splunk \
+  --time-range-days 7 --limit 100 --justification '...'
+    |
+    v   guardrails checked (time range, result limit, non-empty) -- reject outright if violated
+.pending_queries/H-0016.json
+    |
+    v   sec7669 pending          (see what's staged)
+    v   sec7669 approve H-0016   (re-checks guardrails, prompts to confirm, then executes)
+    v   sec7669 reject H-0016    (discard without running)
+    |
+    v
+QueryProvider.execute()  -->  mock (default) | splunk (shells out to `athf splunk search`)
+```
+
+Guardrails (`SEC7669_MAX_QUERY_TIME_RANGE_DAYS`, default 7; `SEC7669_MAX_QUERY_LIMIT`, default 1000) mirror ATHF's own `AGENTS.md` Query Guardrails section, and are re-checked at `approve` time, not just at `propose` time — if the staged file was hand-edited or the ceilings changed in between, `approve` refuses rather than trusting the earlier check.
+
+**`SEC7669_QUERY_PROVIDER=mock` is the default and, as of this writing, the only backend that's actually been run.** There is no live Splunk instance in this environment to validate `SplunkQueryProvider` against yet — it shells out to `athf splunk search` (same subprocess pattern as `AthfClient`) and is unit-tested against a fake `athf` binary, but nothing here has touched a real SIEM. Treat it as ready-to-wire, not proven, until it has. Switching from mock to a real backend is meant to be a config change (`SEC7669_QUERY_PROVIDER=splunk` + `SPLUNK_HOST`/`SPLUNK_TOKEN` in the ATHF workspace `.env`), not new code — `sec7669 doctor` checks for both when the provider is set to `splunk`.
 
 ## Quickstart (local dev)
 
@@ -134,6 +157,10 @@ Key ones:
 | `SEC7669_RESEARCH_DEPTH` | `basic` (~5 min) or `advanced` (~15-20 min) research depth | `basic` |
 | `SEC7669_CTI_PROVIDER` | Which CTI source to use (`file` or `otx`) | `file` |
 | `OTX_API_KEY` | AlienVault OTX API key — required for `cti_provider=otx` and `sec7669 otx-poll` | — |
+| `SEC7669_QUERY_PROVIDER` | Backend for `sec7669 approve` (`mock` or `splunk`) — see [Query execution](#query-execution-propose-dont-run) | `mock` |
+| `SEC7669_MAX_QUERY_TIME_RANGE_DAYS` | Hard ceiling on a proposed query's time range | `7` |
+| `SEC7669_MAX_QUERY_LIMIT` | Hard ceiling on a proposed query's result limit | `1000` |
+| `SEC7669_SLACK_WEBHOOK_URL` | Slack incoming webhook — posts on every draft creation, no-op if unset | — |
 
 ## Development
 
@@ -153,7 +180,9 @@ Open the folder in VS Code. Recommended extensions live in `.vscode/extensions.j
 - [x] Phase 5b: notification hooks — Slack webhook on draft creation (`SEC7669_SLACK_WEBHOOK_URL`, no-op if unset); email still open
 - [x] Phase 6a: web-search grounding via TAVILY (`athf research new` wired into the orchestrator, mandatory when enabled — a research failure aborts the cycle rather than falling back to ungrounded) + model swap to qwen2.5:14b
 - [x] Phase 6b: eval harness (`athf eval` — known-answer fixtures replacing manual spot checks; found ungrounded generation scores ~30% on MITRE technique recall, which is why research grounding is mandatory-when-enabled rather than a soft fallback)
-- [ ] Phase 7: Level 3 execution — MCP connector for CrowdStrike so Observe queries run automatically
+- [x] Phase 6c: ATT&CK STIX grounding in research prompts (`athf attack lookup` fed into HuntResearcherAgent's tradecraft/telemetry/synthesis skills instead of asking the model to recall technique metadata — closed cold-recall's ~30% accuracy to 100% on the same model, per `athf eval --grounded`)
+- [~] Phase 7a: propose/approve query execution bridge (`sec7669 propose` / `pending` / `approve` / `reject`) — guardrail enforcement and the approval flow are built and tested; the `splunk` backend is unvalidated against a real instance since none exists in this environment yet. `mock` remains the default until it does. Query *authoring* is still human-only — no LLM drafts or approves a query.
+- [ ] Phase 7b: Level 3 execution — MCP connector for CrowdStrike (or whichever EDR/SIEM materializes first) so Observe queries can eventually be proposed automatically, still gated by the approval step above
 
 ## License
 

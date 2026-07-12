@@ -133,6 +133,32 @@ class Settings(BaseSettings):
     # an API key.
     _SENSITIVE_FIELDS: ClassVar[set[str]] = {"otx_api_key", "slack_webhook_url"}
 
+    # --- Query execution ("propose, don't run") --------------------------------
+    query_provider: Literal["mock", "splunk"] = Field(
+        default="mock",
+        alias="SEC7669_QUERY_PROVIDER",
+        description=(
+            "Backend for `sec7669 approve`. 'mock' touches nothing real — the "
+            "default until real data-source access is configured. 'splunk' "
+            "shells out to `athf splunk search` (requires SPLUNK_HOST/SPLUNK_TOKEN "
+            "in the ATHF workspace)."
+        ),
+    )
+    max_query_time_range_days: int = Field(
+        default=7,
+        ge=1,
+        le=30,
+        alias="SEC7669_MAX_QUERY_TIME_RANGE_DAYS",
+        description="Hard ceiling on a proposed query's time range. Matches AGENTS.md's Query Guardrails.",
+    )
+    max_query_limit: int = Field(
+        default=1000,
+        ge=1,
+        le=10000,
+        alias="SEC7669_MAX_QUERY_LIMIT",
+        description="Hard ceiling on a proposed query's result limit. Matches AGENTS.md's Query Guardrails.",
+    )
+
     # --- Derived paths ------------------------------------------------------
 
     @property
@@ -170,6 +196,10 @@ class Settings(BaseSettings):
     @property
     def hunts_root(self) -> Path:
         return self.athf_workspace / "hunts" / "production"
+
+    @property
+    def pending_queries_dir(self) -> Path:
+        return self.athf_workspace / ".pending_queries"
 
     # --- Validators ---------------------------------------------------------
 

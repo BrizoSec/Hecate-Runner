@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def notify_draft_created(settings: Settings, result: "RunResult") -> None:
+def notify_draft_created(settings: Settings, result: RunResult) -> None:
     """Post a Slack message for a newly created draft. No-op if unconfigured."""
     if not settings.slack_webhook_url:
         return

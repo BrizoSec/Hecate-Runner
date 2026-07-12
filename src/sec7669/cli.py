@@ -6,6 +6,10 @@ Commands:
     sec7669 config        Dump effective config (redacts secrets)
     sec7669 doctor        Sanity-check the deployment
     sec7669 otx-poll      Route one high-signal OTX pulse into the CTI queue
+    sec7669 propose       Stage a bounded query for a hunt, pending approval
+    sec7669 pending       List queries awaiting approval
+    sec7669 approve       Execute a previously proposed, guardrail-passed query
+    sec7669 reject        Discard a proposed query without executing it
 """
 
 from __future__ import annotations
@@ -26,6 +30,8 @@ from sec7669 import __version__
 from sec7669.config import Settings
 from sec7669.orchestrator import build_default_orchestrator
 from sec7669.otx_poller import run_otx_poll
+from sec7669.query_execution import ProposedQuery, get_provider, validate_guardrails
+from sec7669.query_store import PendingQueryStore
 from sec7669.state import OrchestratorState
 
 app = typer.Typer(
@@ -99,6 +105,154 @@ def otx_poll() -> None:
         console.print(f"[red]Error:[/red] {result.error}")
 
     raise typer.Exit(code=0 if result.ok else 1)
+
+
+@app.command()
+def propose(
+    hunt_id: Annotated[str, typer.Argument(help="Hunt this query is for, e.g. H-0016")],
+    query: Annotated[str, typer.Option("--query", help="The query text (e.g. SPL)")],
+    data_source: Annotated[str, typer.Option("--data-source", help="e.g. splunk")],
+    time_range_days: Annotated[int, typer.Option("--time-range-days", help="Bounded lookback window")],
+    limit: Annotated[int, typer.Option("--limit", help="Max results")],
+    justification: Annotated[str, typer.Option("--justification", help="Why this query, why these bounds")] = "",
+) -> None:
+    """Stage a bounded query for a hunt. Rejected outright if it violates guardrails.
+
+    This does not execute anything — it only stages a proposal for
+    `sec7669 approve` to run later. Nothing here writes queries for you;
+    you (or, in the future, a separately-evaluated agent) provide the query
+    text.
+    """
+    settings = Settings()  # type: ignore[call-arg]
+    proposed = ProposedQuery(
+        hunt_id=hunt_id,
+        data_source=data_source,
+        query_text=query,
+        time_range_days=time_range_days,
+        limit=limit,
+        justification=justification,
+    )
+
+    violations = validate_guardrails(
+        proposed,
+        max_time_range_days=settings.max_query_time_range_days,
+        max_limit=settings.max_query_limit,
+    )
+    if violations:
+        console.print(f"[red]Query rejected — {len(violations)} guardrail violation(s):[/red]")
+        for v in violations:
+            console.print(f"  [red]✗[/red] {v}")
+        raise typer.Exit(code=1)
+
+    store = PendingQueryStore(settings.pending_queries_dir)
+    path = store.save(proposed)
+    console.print(f"[green]✓[/green] Proposed query staged for {hunt_id} at {path}")
+    console.print(f"  Data source: {data_source}  |  Time range: {time_range_days}d  |  Limit: {limit}")
+    console.print(f"\nRun [bold]sec7669 approve {hunt_id}[/bold] to execute, or [bold]sec7669 reject {hunt_id}[/bold] to discard.")
+
+
+@app.command()
+def pending() -> None:
+    """List queries awaiting approval."""
+    settings = Settings()  # type: ignore[call-arg]
+    store = PendingQueryStore(settings.pending_queries_dir)
+    queries = store.list_all()
+
+    if not queries:
+        console.print("[dim]No queries pending approval.[/dim]")
+        return
+
+    table = Table(title="Pending queries", show_header=True, header_style="bold cyan")
+    table.add_column("Hunt")
+    table.add_column("Data source")
+    table.add_column("Range")
+    table.add_column("Limit")
+    table.add_column("Proposed at")
+    table.add_column("Query", overflow="fold")
+    for q in queries:
+        table.add_row(q.hunt_id, q.data_source, f"{q.time_range_days}d", str(q.limit), q.proposed_at, q.query_text)
+    console.print(table)
+
+
+@app.command()
+def approve(
+    hunt_id: Annotated[str, typer.Argument(help="Hunt whose pending query should be executed")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip the confirmation prompt")] = False,
+) -> None:
+    """Execute a previously proposed, guardrail-passed query.
+
+    Re-validates guardrails before executing — defense in depth in case the
+    staged file was hand-edited or the configured ceilings changed since
+    `propose` ran. This is the one command in sec7669 that can touch a real
+    system when SEC7669_QUERY_PROVIDER is set to a real backend; it's the
+    deliberate human checkpoint the rest of the pipeline is built around.
+    """
+    settings = Settings()  # type: ignore[call-arg]
+    _configure_logging(settings, to_stdout=False)
+    store = PendingQueryStore(settings.pending_queries_dir)
+    proposed = store.load(hunt_id)
+
+    if proposed is None:
+        console.print(f"[red]No pending query for {hunt_id}.[/red] Run `sec7669 pending` to see what's staged.")
+        raise typer.Exit(code=1)
+
+    violations = validate_guardrails(
+        proposed,
+        max_time_range_days=settings.max_query_time_range_days,
+        max_limit=settings.max_query_limit,
+    )
+    if violations:
+        console.print(f"[red]Refusing to execute — {len(violations)} guardrail violation(s) on re-check:[/red]")
+        for v in violations:
+            console.print(f"  [red]✗[/red] {v}")
+        console.print("[dim]Left staged — fix and re-propose, or `sec7669 reject` to discard.[/dim]")
+        raise typer.Exit(code=1)
+
+    console.print(f"[bold]Hunt:[/bold] {proposed.hunt_id}")
+    console.print(f"[bold]Data source:[/bold] {proposed.data_source} (provider: {settings.query_provider})")
+    console.print(f"[bold]Query:[/bold] {proposed.query_text}")
+    console.print(f"[bold]Time range:[/bold] {proposed.time_range_days}d  [bold]Limit:[/bold] {proposed.limit}")
+    if proposed.justification:
+        console.print(f"[bold]Justification:[/bold] {proposed.justification}")
+
+    if not yes and not typer.confirm("\nExecute this query?"):
+        console.print("[yellow]Cancelled — query remains staged.[/yellow]")
+        raise typer.Exit(code=1)
+
+    provider = get_provider(settings.query_provider, athf_bin=settings.athf_bin_resolved, workspace=settings.athf_workspace)
+    result = provider.execute(proposed)
+
+    console.print()
+    console.print(f"[bold]Outcome:[/bold] {result.outcome}")
+    console.print(f"[bold]Provider:[/bold] {result.provider}")
+    console.print(f"[bold]Row count:[/bold] {result.row_count}")
+    if result.detail:
+        console.print(f"[bold]Detail:[/bold] {result.detail[:1000]}")
+
+    if result.ok:
+        store.remove(hunt_id)
+    else:
+        console.print("[dim]Left staged since execution failed — retry with `sec7669 approve` once fixed.[/dim]")
+
+    raise typer.Exit(code=0 if result.ok else 1)
+
+
+@app.command()
+def reject(
+    hunt_id: Annotated[str, typer.Argument(help="Hunt whose pending query should be discarded")],
+    reason: Annotated[str | None, typer.Option("--reason", help="Why, for the log")] = None,
+) -> None:
+    """Discard a proposed query without executing it."""
+    settings = Settings()  # type: ignore[call-arg]
+    store = PendingQueryStore(settings.pending_queries_dir)
+    proposed = store.load(hunt_id)
+
+    if proposed is None:
+        console.print(f"[red]No pending query for {hunt_id}.[/red]")
+        raise typer.Exit(code=1)
+
+    store.remove(hunt_id)
+    console.print(f"[green]✓[/green] Rejected pending query for {hunt_id}" + (f" ({reason})" if reason else ""))
 
 
 @app.command()
@@ -204,6 +358,18 @@ def doctor() -> None:
         "SEC7669_SLACK_WEBHOOK_URL set (draft-created notifications)",
         "Optional — without it, drafts land silently in hunts/production/ with no alert.",
     )
+    if settings.query_provider == "splunk":
+        check(
+            _env_key_available(settings, "SPLUNK_HOST") and _env_key_available(settings, "SPLUNK_TOKEN"),
+            "SPLUNK_HOST / SPLUNK_TOKEN set (required for SEC7669_QUERY_PROVIDER=splunk)",
+            "Set both in the ATHF workspace .env — see `athf splunk test` to verify connectivity "
+            "before running `sec7669 approve` against it.",
+        )
+    else:
+        console.print(
+            f"[dim]i Query provider is '{settings.query_provider}' — `sec7669 approve` cannot touch a real "
+            "system yet. Set SEC7669_QUERY_PROVIDER=splunk once real access exists.[/dim]"
+        )
 
     if problems:
         console.print(f"\n[red]{len(problems)} problem(s) found[/red]")
@@ -214,21 +380,25 @@ def doctor() -> None:
 # --- Helpers ---------------------------------------------------------------
 
 
-def _tavily_key_available(settings: Settings) -> bool:
-    """Check both places TAVILY_API_KEY could actually reach the athf subprocess.
+def _env_key_available(settings: Settings, key_name: str) -> bool:
+    """Check both places an ATHF-subprocess-only env var could actually be set.
 
     ``athf``'s own CLI calls ``load_dotenv()`` from its cwd (the ATHF
     workspace) independently of whatever env sec7669 was started with — so
-    the key being absent from sec7669's own process env doesn't mean
-    research will run ungrounded; it may already be set in the workspace's
-    own .env file.
+    a key being absent from sec7669's own process env doesn't mean the athf
+    subprocess won't see it; it may already be set in the workspace's own
+    .env file.
     """
-    if os.getenv("TAVILY_API_KEY"):
+    if os.getenv(key_name):
         return True
     workspace_env = settings.athf_workspace / ".env"
     if workspace_env.exists():
-        return bool(dotenv_values(workspace_env).get("TAVILY_API_KEY"))
+        return bool(dotenv_values(workspace_env).get(key_name))
     return False
+
+
+def _tavily_key_available(settings: Settings) -> bool:
+    return _env_key_available(settings, "TAVILY_API_KEY")
 
 
 def _has_write(path: Path) -> bool:
