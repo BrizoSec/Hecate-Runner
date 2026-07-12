@@ -1,0 +1,63 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "sec7669: run (dry-run)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "sec7669",
+            "args": ["run", "--dry-run"],
+            "justMyCode": false,
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "sec7669: run (real)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "sec7669",
+            "args": ["run"],
+            "justMyCode": false,
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "sec7669: status",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "sec7669",
+            "args": ["status"],
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "sec7669: doctor",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "sec7669",
+            "args": ["doctor"],
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "pytest: current file",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["${file}", "-v"],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "pytest: all",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["-v"],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

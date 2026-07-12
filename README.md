@@ -1,0 +1,160 @@
+# sec7669
+
+Autonomous hunt draft orchestrator for the [Nebulock Agentic Threat Hunting Framework (ATHF)](https://github.com/Nebulock-Inc/agentic-threat-hunting-framework).
+
+`sec7669` sits on top of ATHF and turns it into a persistent, 24/7 hunting loop:
+
+1. Pulls fresh CTI from a configured source (file queue, or AlienVault OTX; MISP/RSS later)
+2. Calls the ATHF `hypothesis-generator` agent (which uses a local Ollama-served LLM)
+3. Writes structured draft hunt records into your ATHF workspace
+4. Never auto-executes queries — humans review and advance the hunt
+
+Runs as a systemd timer on a hunting host, or manually via `sec7669 run`.
+
+## Design principles
+
+- **Read-context, not hard dependency on ATHF.** `sec7669` shells out to the `athf` CLI; it does not import ATHF as a library. ATHF and `sec7669` version independently.
+- **Human-in-the-loop by default.** Every generated hunt is `status: planning` with a "review required" banner. Nothing auto-executes.
+- **Guardrails first.** Daily draft quotas, hard timeouts on LLM calls, structured logs, per-run state persistence.
+- **Testable in isolation.** No network, no LLM, no ATHF required to run unit tests locally.
+
+## Architecture
+
+```
+                        cti_queue/next.txt         <-- CTI provider (file or OTX)
+                                |
+                                v
++------------------+     +--------------+     +----------------------+     +----------------+
+| systemd timer    | --> | sec7669 run  | --> | athf research new    | --> | Ollama (local) |
+| every 6h + boot  |     | (this repo)  |     | (5-skill, web-search  |     | qwen2.5:14b    |
++------------------+     +--------------+     | grounded via Tavily)  |     +----------------+
+                                |              +----------------------+
+                                |                        |
+                                |                 research_id (R-XXXX)
+                                v                        |
+                     +--------------------------+        |
+                     | athf hypothesis-generator | <------+
+                     +--------------------------+
+                                |
+                                v
+                     hunts/production/YYYY/QN/H-XXXX.md  (spawned_from: R-XXXX)
+                     research/R-XXXX.md
+                     logs/orchestrator.log
+                     .orchestrator_state.json
+```
+
+Research grounding runs before hypothesis generation on every cycle by default (`SEC7669_RESEARCH_ENABLED=true`). **A research failure aborts the cycle** (refunds the quota, leaves the CTI queued for retry) rather than falling back to an ungrounded hypothesis: `athf eval` measured ungrounded generation at ~30% accuracy on known-answer MITRE technique fixtures, so an ungrounded draft isn't a degraded-but-useful fallback, it's an unreliable one. Set `SEC7669_RESEARCH_ENABLED=false` to explicitly opt out of research and always generate ungrounded (e.g. for offline testing) — that's a deliberate choice, different from a research call failing mid-cycle.
+
+## Quickstart (local dev)
+
+```bash
+# Clone
+git clone https://github.com/BrizoSec/sec7669.git
+cd sec7669
+
+# uv installs Python + venv + deps in one shot
+uv sync --dev
+
+# Copy env template and edit
+cp .env.example .env
+# edit .env to point ATHF_WORKSPACE at wherever your ATHF workspace lives
+
+# Run tests
+uv run pytest
+
+# Preview an orchestrator cycle (uses your local ATHF workspace)
+uv run sec7669 run --dry-run
+
+# Real run (invokes athf hypothesis-generator + writes a draft hunt)
+uv run sec7669 run
+```
+
+## Deploy to k3s-core
+
+```bash
+# Push repo
+git push origin main
+
+# On k3s-core
+cd ~
+git clone https://github.com/BrizoSec/sec7669.git
+cd sec7669
+
+# Install with uv (recommended) or pip
+uv sync
+
+# Env
+cp .env.example .env
+$EDITOR .env
+
+# Install systemd units
+sudo ./scripts/install-systemd.sh
+
+# Prime a CTI blurb and force a run
+echo "APT actor X observed using T1053.005 scheduled tasks" > $ATHF_WORKSPACE/cti_queue/next.txt
+sudo systemctl start sec7669-orchestrator.service
+
+# Enable persistent scheduling
+sudo systemctl enable --now sec7669-orchestrator.timer
+sudo systemctl list-timers sec7669-orchestrator.timer
+```
+
+### Optional: AlienVault OTX CTI provider
+
+Instead of (or alongside) hand-dropping CTI into `cti_queue/next.txt`, `sec7669` can pull it from [AlienVault OTX](https://otx.alienvault.com) pulses you're subscribed to.
+
+```bash
+# Get a free-tier API key at https://otx.alienvault.com/settings, then:
+echo 'OTX_API_KEY=your-key-here' >> .env
+
+# One-off: route the next high-signal pulse into the CTI queue
+uv run sec7669 otx-poll
+
+# Persistent: poll hourly, independent of the orchestrator's 6h cycle
+sudo systemctl enable --now sec7669-otx-poller.timer
+```
+
+The poller filters for high-signal pulses (TLP white/green, has a MITRE ATT&CK mapping, not older than `SEC7669_OTX_MAX_PULSE_AGE_DAYS`) and routes the oldest unrouted one into `cti_queue/next.txt`, so the existing orchestrator picks it up on its normal schedule — OTX polling frequency and hypothesis-generation frequency stay decoupled. A cursor file (`.otx_cursor_state.json` in the ATHF workspace) tracks the last pulse routed so nothing is re-ingested.
+
+You can also skip the file queue entirely and have the orchestrator pull directly from OTX every cycle by setting `SEC7669_CTI_PROVIDER=otx` — in that mode you don't need the poller timer at all.
+
+## Configuration
+
+All config comes from environment variables (or a `.env` file in the working directory). See [.env.example](.env.example) for the full list.
+
+Key ones:
+
+| Var | Purpose | Default |
+|-----|---------|---------|
+| `ATHF_WORKSPACE` | Path to the ATHF workspace | `~/agentic-threat-hunting-framework` |
+| `ATHF_BIN` | Path to the `athf` CLI | `<workspace>/.venv/bin/athf` |
+| `SEC7669_MAX_DRAFTS_PER_DAY` | Cap on drafts per 24h | `4` |
+| `SEC7669_LLM_TIMEOUT_SEC` | Hard timeout on any single `athf` invocation (research call and hypothesis call each get their own budget) | `600` |
+| `SEC7669_RESEARCH_ENABLED` | Run `athf research new` (web-grounded) before hypothesis generation | `true` |
+| `SEC7669_RESEARCH_DEPTH` | `basic` (~5 min) or `advanced` (~15-20 min) research depth | `basic` |
+| `SEC7669_CTI_PROVIDER` | Which CTI source to use (`file` or `otx`) | `file` |
+| `OTX_API_KEY` | AlienVault OTX API key — required for `cti_provider=otx` and `sec7669 otx-poll` | — |
+
+## Development
+
+- Python 3.11+
+- Managed with [uv](https://docs.astral.sh/uv/)
+- Linted with [ruff](https://docs.astral.sh/ruff/), type-checked with [mypy](https://mypy.readthedocs.io/)
+- Tested with pytest — run `uv run pytest` for full suite with coverage
+
+### VS Code
+
+Open the folder in VS Code. Recommended extensions live in `.vscode/extensions.json` and will be suggested on first open. Run/debug configs live in `.vscode/launch.json` — pick "Run orchestrator (dry-run)" from the Run panel.
+
+## Roadmap
+
+- [x] Phase 4a: file-based CTI queue + orchestrator + systemd
+- [x] Phase 4b/5: AlienVault OTX CTI provider + poller timer (MISP, RSS still open)
+- [x] Phase 5b: notification hooks — Slack webhook on draft creation (`SEC7669_SLACK_WEBHOOK_URL`, no-op if unset); email still open
+- [x] Phase 6a: web-search grounding via TAVILY (`athf research new` wired into the orchestrator, mandatory when enabled — a research failure aborts the cycle rather than falling back to ungrounded) + model swap to qwen2.5:14b
+- [x] Phase 6b: eval harness (`athf eval` — known-answer fixtures replacing manual spot checks; found ungrounded generation scores ~30% on MITRE technique recall, which is why research grounding is mandatory-when-enabled rather than a soft fallback)
+- [ ] Phase 7: Level 3 execution — MCP connector for CrowdStrike so Observe queries run automatically
+
+## License
+
+MIT

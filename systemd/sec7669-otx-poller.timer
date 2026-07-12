@@ -1,0 +1,15 @@
+[Unit]
+Description=Poll AlienVault OTX for new pulses every hour
+Requires=sec7669-otx-poller.service
+
+[Timer]
+# Fire 5 minutes after boot, then hourly. Kept independent of the
+# orchestrator's 6h cadence so fresh CTI shows up quickly even though
+# hypothesis-generation still runs on its own slower, quota-gated schedule.
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=sec7669-otx-poller.service
+
+[Install]
+WantedBy=timers.target

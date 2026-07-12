@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# uv
+.uv-cache/
+
+# Testing
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+htmlcov/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# IDEs
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code local settings (not meant to be shared)
+.claude/
+
+# VS Code — keep launch/settings/extensions checked in, ignore user-local overrides
+.vscode/*.log
+.vscode/.ropeproject
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Runtime state (should live in the ATHF workspace, not the repo)
+logs/
+*.log
+.orchestrator_state.json
+
+# OS
+.DS_Store
+Thumbs.db

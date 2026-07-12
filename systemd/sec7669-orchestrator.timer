@@ -1,0 +1,13 @@
+[Unit]
+Description=Run sec7669 orchestrator every 6 hours
+Requires=sec7669-orchestrator.service
+
+[Timer]
+# Fire 2 minutes after boot, then every 6 hours thereafter.
+OnBootSec=2min
+OnUnitActiveSec=6h
+Persistent=true
+Unit=sec7669-orchestrator.service
+
+[Install]
+WantedBy=timers.target
