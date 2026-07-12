@@ -6,8 +6,9 @@ from sec7669.config import Settings
 from sec7669.cti.base import CTIItem, CTIProvider
 from sec7669.cti.file_queue import FileQueueProvider
 from sec7669.cti.otx import OtxProvider
+from sec7669.cti.rss import RssProvider
 
-__all__ = ["CTIItem", "CTIProvider", "FileQueueProvider", "OtxProvider", "get_provider"]
+__all__ = ["CTIItem", "CTIProvider", "FileQueueProvider", "OtxProvider", "RssProvider", "get_provider"]
 
 
 def get_provider(name: str, *, settings: Settings) -> CTIProvider:
@@ -22,5 +23,12 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             page_limit=settings.otx_page_limit,
             max_pulse_age_days=settings.otx_max_pulse_age_days,
             request_timeout_sec=settings.otx_request_timeout_sec,
+        )
+    if name == "rss":
+        return RssProvider(
+            feed_urls=settings.rss_feed_urls,
+            cursor_file=settings.rss_cursor_file,
+            max_entry_age_days=settings.rss_max_entry_age_days,
+            request_timeout_sec=settings.rss_request_timeout_sec,
         )
     raise ValueError(f"Unknown CTI provider: {name!r}")

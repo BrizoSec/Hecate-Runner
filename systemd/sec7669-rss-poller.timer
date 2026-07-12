@@ -1,0 +1,15 @@
+[Unit]
+Description=Poll security research RSS/Atom feeds for new entries every hour
+Requires=sec7669-rss-poller.service
+
+[Timer]
+# Fire 5 minutes after boot, then hourly. Same cadence as the OTX poller —
+# feeds are small (a handful of KB each), so there's no real cost to
+# checking hourly even though blog posts publish far less often than that.
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=sec7669-rss-poller.service
+
+[Install]
+WantedBy=timers.target

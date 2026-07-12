@@ -6,6 +6,7 @@ Commands:
     sec7669 config        Dump effective config (redacts secrets)
     sec7669 doctor        Sanity-check the deployment
     sec7669 otx-poll      Route one high-signal OTX pulse into the CTI queue
+    sec7669 rss-poll      Route one high-signal RSS/Atom entry into the CTI queue
     sec7669 propose       Stage a bounded query for a hunt, pending approval
     sec7669 pending       List queries awaiting approval
     sec7669 approve       Execute a previously proposed, guardrail-passed query
@@ -32,6 +33,7 @@ from sec7669.orchestrator import build_default_orchestrator
 from sec7669.otx_poller import run_otx_poll
 from sec7669.query_execution import ProposedQuery, get_provider, validate_guardrails
 from sec7669.query_store import PendingQueryStore
+from sec7669.rss_poller import run_rss_poll
 from sec7669.state import OrchestratorState
 
 app = typer.Typer(
@@ -99,6 +101,26 @@ def otx_poll() -> None:
     console.print(f"[bold]Routed:[/bold] {result.routed}")
     if result.routed_pulse_ids:
         console.print(f"[bold]Pulse ID:[/bold] {', '.join(result.routed_pulse_ids)}")
+    if result.skipped_queue_occupied:
+        console.print("[yellow]CTI queue slot occupied - skipped this poll.[/yellow]")
+    if result.error:
+        console.print(f"[red]Error:[/red] {result.error}")
+
+    raise typer.Exit(code=0 if result.ok else 1)
+
+
+@app.command(name="rss-poll")
+def rss_poll() -> None:
+    """Route the next high-signal RSS/Atom entry into the CTI queue, if any."""
+    settings = Settings()  # type: ignore[call-arg]
+    _configure_logging(settings)
+
+    result = run_rss_poll(settings)
+
+    console.print()
+    console.print(f"[bold]Routed:[/bold] {result.routed}")
+    if result.routed_entry_ids:
+        console.print(f"[bold]Entry:[/bold] {', '.join(result.routed_entry_ids)}")
     if result.skipped_queue_occupied:
         console.print("[yellow]CTI queue slot occupied - skipped this poll.[/yellow]")
     if result.error:
@@ -345,6 +367,14 @@ def doctor() -> None:
             "OTX_API_KEY set (required for cti_provider=otx)",
             "Set OTX_API_KEY in .env — get a free-tier key at https://otx.alienvault.com",
         )
+    # Checked unconditionally (not gated on cti_provider == "rss") because
+    # `rss-poll` runs independently, same as `otx-poll` — most deployments
+    # run the main loop on cti_provider=file and feed it via a poller timer.
+    check(
+        bool(settings.rss_feed_urls),
+        f"RSS feed URLs configured ({len(settings.rss_feed_urls)} feeds)",
+        "Set SEC7669_RSS_FEED_URLS to a comma-separated list of feed URLs.",
+    )
     if settings.research_enabled:
         warn(
             _tavily_key_available(settings),

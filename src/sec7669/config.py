@@ -48,7 +48,7 @@ class Settings(BaseSettings):
         le=3600,
         alias="SEC7669_LLM_TIMEOUT_SEC",
     )
-    cti_provider: Literal["file", "otx"] = Field(
+    cti_provider: Literal["file", "otx", "rss"] = Field(
         default="file",
         alias="SEC7669_CTI_PROVIDER",
         description="Which CTI source to use.",
@@ -116,6 +116,37 @@ class Settings(BaseSettings):
         ge=5.0,
         le=120.0,
         alias="SEC7669_OTX_REQUEST_TIMEOUT_SEC",
+    )
+
+    # --- RSS CTI provider --------------------------------------------------
+    rss_feed_urls_raw: str = Field(
+        default=(
+            "https://thedfirreport.com/feed/,"
+            "https://blog.talosintelligence.com/rss/,"
+            "https://unit42.paloaltonetworks.com/feed/,"
+            "https://www.microsoft.com/en-us/security/blog/feed/"
+        ),
+        alias="SEC7669_RSS_FEED_URLS",
+        description=(
+            "Comma-separated RSS/Atom feed URLs. Defaults to four verified, "
+            "reputable security research blogs (The DFIR Report, Talos, Unit42, "
+            "Microsoft Security Blog) — a curation choice, not a technical "
+            "requirement; swap freely. CISA's advisory feed was tried and "
+            "excluded: it 403s on automated requests regardless of path."
+        ),
+    )
+    rss_max_entry_age_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        alias="SEC7669_RSS_MAX_ENTRY_AGE_DAYS",
+        description="Ignore entries published before this many days ago.",
+    )
+    rss_request_timeout_sec: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=120.0,
+        alias="SEC7669_RSS_REQUEST_TIMEOUT_SEC",
     )
 
     # --- Notifications --------------------------------------------------------
@@ -192,6 +223,15 @@ class Settings(BaseSettings):
     @property
     def otx_cursor_file(self) -> Path:
         return self.athf_workspace / ".otx_cursor_state.json"
+
+    @property
+    def rss_cursor_file(self) -> Path:
+        return self.athf_workspace / ".rss_cursor_state.json"
+
+    @property
+    def rss_feed_urls(self) -> list[str]:
+        """Parsed, whitespace-trimmed feed URL list from SEC7669_RSS_FEED_URLS."""
+        return [url.strip() for url in self.rss_feed_urls_raw.split(",") if url.strip()]
 
     @property
     def hunts_root(self) -> Path:

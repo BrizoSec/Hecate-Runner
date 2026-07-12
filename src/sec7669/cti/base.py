@@ -1,8 +1,9 @@
 """CTI provider abstraction.
 
 Every provider yields a stream of ``CTIItem`` instances that the orchestrator
-turns into hunt drafts. The file-queue provider is the only implementation
-today; OTX/MISP/RSS come later.
+turns into hunt drafts. Implementations today: file queue, AlienVault OTX,
+RSS/Atom feeds. MISP is still open — no live MISP instance to build and
+validate against yet.
 """
 
 from __future__ import annotations

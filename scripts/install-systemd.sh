@@ -21,6 +21,8 @@ install -m 0644 "$REPO_ROOT/systemd/sec7669-orchestrator.service" "$UNIT_DIR/sec
 install -m 0644 "$REPO_ROOT/systemd/sec7669-orchestrator.timer" "$UNIT_DIR/sec7669-orchestrator.timer"
 install -m 0644 "$REPO_ROOT/systemd/sec7669-otx-poller.service" "$UNIT_DIR/sec7669-otx-poller.service"
 install -m 0644 "$REPO_ROOT/systemd/sec7669-otx-poller.timer" "$UNIT_DIR/sec7669-otx-poller.timer"
+install -m 0644 "$REPO_ROOT/systemd/sec7669-rss-poller.service" "$UNIT_DIR/sec7669-rss-poller.service"
+install -m 0644 "$REPO_ROOT/systemd/sec7669-rss-poller.timer" "$UNIT_DIR/sec7669-rss-poller.timer"
 
 echo "==> Reloading systemd"
 systemctl daemon-reload
@@ -35,3 +37,7 @@ echo
 echo "   If SEC7669_CTI_PROVIDER=file and OTX_API_KEY is set, also enable the poller:"
 echo "   sudo systemctl enable --now sec7669-otx-poller.timer"
 echo "   sudo systemctl start sec7669-otx-poller.service     # force one poll"
+echo
+echo "   RSS feed polling has sensible defaults out of the box (no API key needed):"
+echo "   sudo systemctl enable --now sec7669-rss-poller.timer"
+echo "   sudo systemctl start sec7669-rss-poller.service     # force one poll"

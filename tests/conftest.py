@@ -45,6 +45,9 @@ def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Setti
         "SEC7669_OTX_PAGE_LIMIT",
         "SEC7669_OTX_MAX_PULSE_AGE_DAYS",
         "SEC7669_OTX_REQUEST_TIMEOUT_SEC",
+        "SEC7669_RSS_FEED_URLS",
+        "SEC7669_RSS_MAX_ENTRY_AGE_DAYS",
+        "SEC7669_RSS_REQUEST_TIMEOUT_SEC",
     ]:
         monkeypatch.delenv(var, raising=False)
 

@@ -4,7 +4,7 @@ Autonomous hunt draft orchestrator for the [Nebulock Agentic Threat Hunting Fram
 
 `sec7669` sits on top of ATHF and turns it into a persistent, 24/7 hunting loop:
 
-1. Pulls fresh CTI from a configured source (file queue, or AlienVault OTX; MISP/RSS later)
+1. Pulls fresh CTI from a configured source (file queue, AlienVault OTX, or RSS/Atom feeds; MISP still open)
 2. Calls the ATHF `hypothesis-generator` agent (which uses a local Ollama-served LLM)
 3. Writes structured draft hunt records into your ATHF workspace
 4. Never auto-executes queries — a human proposes a bounded query and separately approves running it (see [Query execution](#query-execution-propose-dont-run) below); nothing runs unattended
@@ -141,6 +141,28 @@ The poller filters for high-signal pulses (TLP white/green, has a MITRE ATT&CK m
 
 You can also skip the file queue entirely and have the orchestrator pull directly from OTX every cycle by setting `SEC7669_CTI_PROVIDER=otx` — in that mode you don't need the poller timer at all.
 
+### RSS/Atom CTI provider (no API key required)
+
+Unlike OTX, this needs no signup or credential — it polls a configured list of security research blog feeds directly.
+
+```bash
+# Works out of the box with four verified defaults (The DFIR Report, Talos,
+# Unit42, Microsoft Security Blog) -- override with your own list:
+# SEC7669_RSS_FEED_URLS=https://a.example.com/feed/,https://b.example.com/feed/
+
+# One-off: route the oldest unrouted entry across all configured feeds
+uv run sec7669 rss-poll
+
+# Persistent: poll hourly, independent of the orchestrator's 6h cycle
+sudo systemctl enable --now sec7669-rss-poller.timer
+```
+
+Unlike OTX's crowdsourced pulse firehose (filtered by TLP + ATT&CK mapping), the "high signal" filter here is mostly the curation itself — every URL in the list is a feed you picked, not an open subscription. Entries are only filtered by age (`SEC7669_RSS_MAX_ENTRY_AGE_DAYS`, default 30) and dedup (`.rss_cursor_state.json`, one cursor per feed URL). A MITRE technique ID is still extracted from the title/summary when present and included as metadata, but its absence doesn't exclude an entry.
+
+One feed being down or blocking automated requests doesn't stop entries from the others — CISA's advisory feed was tried while building this and excluded from the defaults for exactly that reason (403s on every path tried, with or without a browser-like User-Agent).
+
+Same dual-mode support as OTX: `SEC7669_CTI_PROVIDER=rss` pulls directly from the configured feeds every orchestrator cycle instead of routing through the file queue via the poller timer.
+
 ## Configuration
 
 All config comes from environment variables (or a `.env` file in the working directory). See [.env.example](.env.example) for the full list.
@@ -155,8 +177,10 @@ Key ones:
 | `SEC7669_LLM_TIMEOUT_SEC` | Hard timeout on any single `athf` invocation (research call and hypothesis call each get their own budget) | `600` |
 | `SEC7669_RESEARCH_ENABLED` | Run `athf research new` (web-grounded) before hypothesis generation | `true` |
 | `SEC7669_RESEARCH_DEPTH` | `basic` (~5 min) or `advanced` (~15-20 min) research depth | `basic` |
-| `SEC7669_CTI_PROVIDER` | Which CTI source to use (`file` or `otx`) | `file` |
+| `SEC7669_CTI_PROVIDER` | Which CTI source to use (`file`, `otx`, or `rss`) | `file` |
 | `OTX_API_KEY` | AlienVault OTX API key — required for `cti_provider=otx` and `sec7669 otx-poll` | — |
+| `SEC7669_RSS_FEED_URLS` | Comma-separated RSS/Atom feed URLs — no API key needed | 4 verified defaults, see `.env.example` |
+| `SEC7669_RSS_MAX_ENTRY_AGE_DAYS` | Ignore RSS entries older than this | `30` |
 | `SEC7669_QUERY_PROVIDER` | Backend for `sec7669 approve` (`mock` or `splunk`) — see [Query execution](#query-execution-propose-dont-run) | `mock` |
 | `SEC7669_MAX_QUERY_TIME_RANGE_DAYS` | Hard ceiling on a proposed query's time range | `7` |
 | `SEC7669_MAX_QUERY_LIMIT` | Hard ceiling on a proposed query's result limit | `1000` |
@@ -176,7 +200,8 @@ Open the folder in VS Code. Recommended extensions live in `.vscode/extensions.j
 ## Roadmap
 
 - [x] Phase 4a: file-based CTI queue + orchestrator + systemd
-- [x] Phase 4b/5: AlienVault OTX CTI provider + poller timer (MISP, RSS still open)
+- [x] Phase 4b/5: AlienVault OTX CTI provider + poller timer
+- [x] Phase 4c: RSS/Atom CTI provider + poller timer, no API key required (4 verified default feeds; CISA's advisory feed tried and excluded — blocks automated requests on every path regardless of User-Agent). MISP still open — no live MISP instance to build and validate against yet, same reasoning as the Splunk query provider.
 - [x] Phase 5b: notification hooks — Slack webhook on draft creation (`SEC7669_SLACK_WEBHOOK_URL`, no-op if unset); email still open
 - [x] Phase 6a: web-search grounding via TAVILY (`athf research new` wired into the orchestrator, mandatory when enabled — a research failure aborts the cycle rather than falling back to ungrounded) + model swap to qwen2.5:14b
 - [x] Phase 6b: eval harness (`athf eval` — known-answer fixtures replacing manual spot checks; found ungrounded generation scores ~30% on MITRE technique recall, which is why research grounding is mandatory-when-enabled rather than a soft fallback)
