@@ -105,6 +105,25 @@ def test_picks_oldest_unrouted_candidate(
     assert item.identifier == "pulse-old"
 
 
+def test_missing_modified_does_not_win_oldest_over_a_real_older_pulse(
+    tmp_path: Path, sample_otx_pulse: dict[str, Any]
+) -> None:
+    """Regression test: a pulse with a missing/unparseable `modified` value
+    used to sort via the raw string `p.get("modified", "")`, defaulting to
+    "" -- which sorts lexicographically before any real ISO8601 date string,
+    i.e. "oldest possible" -- so it would always win "oldest wins" against
+    every pulse with a real, later `modified` value, regardless of true age.
+    Must now sort as newest (lowest priority) so a real, verifiably-older
+    pulse wins instead."""
+    no_modified = dict(sample_otx_pulse, id="pulse-no-modified", modified="")
+    really_older = dict(sample_otx_pulse, id="pulse-old", modified="2026-06-01T00:00:00.000000")
+    provider = _make_provider(tmp_path, [no_modified, really_older])
+
+    item = provider.next_item()
+    assert item is not None
+    assert item.identifier == "pulse-old"
+
+
 def test_sends_api_key_header_and_modified_since(
     tmp_path: Path, sample_otx_pulse: dict[str, Any]
 ) -> None:
@@ -163,6 +182,30 @@ def test_cursor_state_corrupt_file_resets(tmp_path: Path) -> None:
     cursor = OtxCursorState.load(path)
     assert cursor.last_modified == ""
     assert cursor.seen_ids_at_cursor == []
+
+
+def test_advance_ignores_a_stale_older_modified_time() -> None:
+    """Regression test: advance() used to unconditionally overwrite
+    last_modified with whatever it was called with, no matter its value. A
+    stale/late advance() call (e.g. from an overlapping poll acknowledging
+    an older pulse after a newer one already advanced the cursor) used to
+    regress the cursor backward, making already-routed pulses look unrouted
+    again and get re-drafted under a new hunt ID."""
+    cursor = OtxCursorState(last_modified="2026-06-01T00:00:00.000000", seen_ids_at_cursor=["pulse-newer"])
+
+    cursor.advance("2026-05-01T00:00:00.000000", "pulse-older-stale")
+
+    assert cursor.last_modified == "2026-06-01T00:00:00.000000"
+    assert cursor.seen_ids_at_cursor == ["pulse-newer"]
+
+
+def test_advance_still_moves_forward_normally() -> None:
+    cursor = OtxCursorState(last_modified="2026-06-01T00:00:00.000000", seen_ids_at_cursor=["pulse-old"])
+
+    cursor.advance("2026-07-01T00:00:00.000000", "pulse-new")
+
+    assert cursor.last_modified == "2026-07-01T00:00:00.000000"
+    assert cursor.seen_ids_at_cursor == ["pulse-new"]
 
 
 # --- HTTP error handling -------------------------------------------------------

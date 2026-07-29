@@ -6,10 +6,13 @@ subprocess or filesystem side effects other than writing the final file.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import re
-from dataclasses import dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,6 +28,35 @@ class DraftHuntRequest:
     hypothesis: HypothesisResult
     generated_at: datetime
     research_id: str | None = None
+    tactics: list[str] = field(default_factory=list)
+    platforms: list[str] = field(default_factory=list)
+
+
+@contextmanager
+def hunt_id_lock(hunts_root: Path) -> Iterator[None]:
+    """Serialize the "compute next hunt ID, then write that file" critical
+    section across processes.
+
+    Without this, two overlapping `sec7669 run` invocations (a manual run
+    while the hourly timer also fires, or two cycles overlapping because one
+    ran long) can both call next_hunt_id() before either has written its
+    file, both compute the same H-00NN, and the second write silently
+    clobbers the first draft's content -- different hypothesis, different
+    CTI grounding -- with no error, even though the first draft's
+    quota/notification had already fired for content that's now gone.
+
+    Callers must call next_hunt_id() AND write_draft() (or draft_hunt_path()
+    + the write) both inside this context -- allocating the ID outside the
+    lock (or releasing it between allocation and write) defeats the point.
+    """
+    hunts_root.mkdir(parents=True, exist_ok=True)
+    lock_path = hunts_root / ".hunt_id.lock"
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 def next_hunt_id(hunts_root: Path) -> str:
@@ -54,11 +86,19 @@ def render_draft(req: DraftHuntRequest) -> str:
     """Return the full markdown content for a draft hunt."""
     hyp = req.hypothesis
     techniques = hyp.techniques or ["TXXXX"]
+    # Real tactics/platforms come from an ATT&CK lookup keyed off hyp.techniques
+    # (see Orchestrator._resolve_ttps) — when that lookup found nothing (no
+    # techniques to resolve, unknown ID, STIX unavailable), an explicit
+    # "unclassified"/"Unknown" placeholder is honest about the gap instead of
+    # defaulting to a fixed tactic/platform that's usually wrong for the CTI.
+    tactics = req.tactics or ["unclassified"]
+    platforms = req.platforms or ["Unknown"]
+    data_sources = hyp.data_sources or ["CrowdStrike"]
 
     def bullets(items: list[str]) -> str:
         return "\n".join(f"- {i}" for i in items) if items else "- [TBD]"
 
-    # YAML frontmatter — techniques serialized with json.dumps to get valid quoting
+    # YAML frontmatter — list fields serialized with json.dumps to get valid quoting
     frontmatter = (
         "---\n"
         f"hunt_id: {req.hunt_id}\n"
@@ -66,10 +106,10 @@ def render_draft(req: DraftHuntRequest) -> str:
         "status: planning\n"
         f"date: {req.generated_at.strftime('%Y-%m-%d')}\n"
         "hunter: sec7669 orchestrator (draft)\n"
-        "platform: [Windows]\n"
-        "tactics: [credential-access]\n"
+        f"platform: {json.dumps(platforms)}\n"
+        f"tactics: {json.dumps(tactics)}\n"
         f"techniques: {json.dumps(techniques)}\n"
-        "data_sources: [CrowdStrike]\n"
+        f"data_sources: {json.dumps(data_sources)}\n"
         + (f"spawned_from: {req.research_id}\n" if req.research_id else "")
         + "related_hunts: []\n"
         "findings_count: 0\n"

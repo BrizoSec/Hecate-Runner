@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sec7669.athf_client import AthfClient, AthfError, HypothesisResult, ResearchResult
+from sec7669.athf_client import AthfClient, AthfError, HypothesisResult, ResearchResult, TechniqueMetadata
 from sec7669.config import Settings
 from sec7669.cti import FileQueueProvider
 from sec7669.orchestrator import Orchestrator, derive_research_topic
@@ -21,6 +21,14 @@ def mock_athf(
     mock = MagicMock(spec=AthfClient)
     mock.hypothesis_generator.return_value = sample_hypothesis
     mock.research_new.return_value = sample_research_result
+    # Matches sample_hypothesis's T1003.001 so tests asserting on rendered
+    # draft content see real-looking tactics/platform, not an empty lookup.
+    mock.lookup_technique.return_value = TechniqueMetadata(
+        technique_id="T1003.001",
+        tactics=["credential-access"],
+        platforms=["Windows"],
+        found=True,
+    )
     return mock
 
 
@@ -136,6 +144,71 @@ def test_athf_error_refunds_quota(
     assert result.outcome == "athf_error"
     # CTI stays in queue for retry
     assert (workspace / "cti_queue" / "next.txt").exists()
+
+
+def test_write_failure_refunds_quota_and_leaves_cti_queued(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    workspace: Path,
+    mock_athf: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: next_hunt_id()/write_draft() had no failure handling
+    at all -- a disk/permission error there used to propagate to the
+    top-level catch-all, permanently burning a quota slot with nothing
+    produced and no refund."""
+    import sec7669.orchestrator as orchestrator_module
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(orchestrator_module, "write_draft", _boom)
+
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    result = orch.run_once()
+
+    assert result.outcome == "write_error"
+    # CTI stays in queue for retry -- it was never acknowledged.
+    assert (workspace / "cti_queue" / "next.txt").exists()
+
+
+def test_acknowledge_failure_does_not_fail_the_cycle_or_refund_quota(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    workspace: Path,
+    mock_athf: MagicMock,
+) -> None:
+    """Regression test: self.cti.acknowledge(item) ran unguarded AFTER the
+    draft file was already written. If it raised, the exception propagated
+    to run_once()'s top-level catch-all, which (a) marked the whole cycle as
+    failed (state.mark_run(success=False)) despite a real draft having been
+    produced, and (b) left the CTI item's cursor unadvanced, so it would be
+    picked up and re-drafted under a new ID next cycle -- duplicate content,
+    a second quota slot burned. A real draft on disk must count as success,
+    not a cycle failure, even when acknowledge() itself blows up."""
+
+    class _AcknowledgeFailsProvider:
+        def __init__(self, inner: FileQueueProvider) -> None:
+            self._inner = inner
+
+        def next_item(self):  # type: ignore[no-untyped-def]
+            return self._inner.next_item()
+
+        def acknowledge(self, item: object) -> None:
+            raise RuntimeError("simulated acknowledge failure")
+
+    orch = Orchestrator(
+        settings=settings,
+        athf=mock_athf,
+        cti_provider=_AcknowledgeFailsProvider(file_queue_with_cti),  # type: ignore[arg-type]
+    )
+    result = orch.run_once()
+
+    # The draft still succeeded -- acknowledge() failing is isolated, not a
+    # cycle-level failure, and quota is NOT refunded (a real draft exists).
+    assert result.outcome == "draft_created"
+    assert result.draft_path is not None
+    assert result.draft_path.exists()
 
 
 def test_empty_hypothesis_refunds_quota(

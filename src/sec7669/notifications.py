@@ -34,5 +34,13 @@ def notify_draft_created(settings: Settings, result: RunResult) -> None:
     try:
         response = httpx.post(settings.slack_webhook_url, json={"text": text}, timeout=10.0)
         response.raise_for_status()
-    except httpx.HTTPError as exc:
+    except Exception as exc:
+        # Deliberately broad, not just httpx.HTTPError: a malformed
+        # SEC7669_SLACK_WEBHOOK_URL raises httpx.InvalidURL, which inherits
+        # directly from Exception, not HTTPError -- narrower except clauses
+        # here would violate this module's own stated contract ("every
+        # function here catches its own errors ... instead of raising").
+        # Currently double-covered by orchestrator.py's own broad catch
+        # around self.notify(result), but this module shouldn't rely on its
+        # caller to keep a promise it makes itself.
         log.warning("Slack notification failed (%s); draft was still created successfully", exc)

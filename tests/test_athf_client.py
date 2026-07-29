@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from sec7669.athf_client import AthfClient, AthfError
+from sec7669.athf_client import AthfClient, AthfError, TechniqueMetadata
 
 # Real `athf research new --output json` prints a human-readable progress
 # banner to stdout *before* the JSON payload, even in JSON mode — the parser
@@ -191,3 +191,63 @@ def test_research_new_omits_technique_when_none(
     athf_client.research_new(topic="Scheduled task abuse")
 
     assert "--technique" not in captured["cmd"]
+
+
+def test_lookup_technique_end_to_end(athf_client: AthfClient, tmp_path: Path) -> None:
+    fake = _make_fake_athf(
+        tmp_path,
+        '#!/bin/sh\nprintf \'%s\' \'{"id": "T1098", "name": "Account Manipulation", '
+        '"tactics": ["persistence", "privilege-escalation"], "platforms": ["Windows", "Linux"], '
+        '"is_subtechnique": false, "parent_id": null}\'\n',
+    )
+    athf_client.athf_bin = fake
+    result = athf_client.lookup_technique("T1098")
+    assert result == TechniqueMetadata(
+        technique_id="T1098",
+        tactics=["persistence", "privilege-escalation"],
+        platforms=["Windows", "Linux"],
+        found=True,
+    )
+
+
+def test_lookup_technique_builds_expected_command(
+    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(self: AthfClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
+        captured["cmd"] = cmd
+        return '{"id": "T1003.001", "tactics": ["credential-access"], "platforms": ["Windows"]}'
+
+    monkeypatch.setattr(AthfClient, "_run", fake_run)
+    athf_client.lookup_technique("T1003.001")
+
+    cmd = captured["cmd"]
+    assert cmd[-4:] == ["attack", "lookup", "T1003.001", "--json"]
+
+
+def test_lookup_technique_not_found_returns_unresolved(athf_client: AthfClient, tmp_path: Path) -> None:
+    fake = _make_fake_athf(
+        tmp_path,
+        '#!/bin/sh\nprintf \'%s\' \'{"error": "not_found", "technique_id": "T9999"}\'\n',
+    )
+    athf_client.athf_bin = fake
+    result = athf_client.lookup_technique("T9999")
+    assert result.found is False
+    assert result.tactics == []
+    assert result.platforms == []
+
+
+def test_lookup_technique_athf_failure_is_non_fatal(athf_client: AthfClient, tmp_path: Path) -> None:
+    fake = _make_fake_athf(tmp_path, "#!/bin/sh\necho boom >&2; exit 1\n")
+    athf_client.athf_bin = fake
+    result = athf_client.lookup_technique("T1098")
+    assert result.found is False
+
+
+def test_lookup_technique_malformed_json_is_non_fatal(
+    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(AthfClient, "_run", lambda self, cmd, *, timeout_sec=None: "not valid json")
+    result = athf_client.lookup_technique("T1098")
+    assert result.found is False

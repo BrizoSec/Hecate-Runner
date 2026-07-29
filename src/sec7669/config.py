@@ -48,10 +48,24 @@ class Settings(BaseSettings):
         le=3600,
         alias="SEC7669_LLM_TIMEOUT_SEC",
     )
-    cti_provider: Literal["file", "otx", "rss", "misp"] = Field(
+    cti_provider: Literal["file", "otx", "rss", "misp", "multi"] = Field(
         default="file",
         alias="SEC7669_CTI_PROVIDER",
-        description="Which CTI source to use.",
+        description=(
+            "Which CTI source to use. 'multi' fans out across the sources "
+            "listed in SEC7669_CTI_MULTI_PROVIDERS."
+        ),
+    )
+    cti_multi_providers_raw: str = Field(
+        default="rss,otx,misp",
+        alias="SEC7669_CTI_MULTI_PROVIDERS",
+        description=(
+            "Comma-separated sub-provider names to combine when "
+            "SEC7669_CTI_PROVIDER=multi (from: file, otx, rss, misp — not "
+            "'multi' itself). Listed order only matters for the very first "
+            "cycle; after that, which source gets first pick round-robins "
+            "automatically so one high-volume source can't crowd out the others."
+        ),
     )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO",
@@ -278,8 +292,17 @@ class Settings(BaseSettings):
         return self.athf_workspace / ".misp_cursor_state.json"
 
     @property
+    def cti_multi_provider_names(self) -> list[str]:
+        """Parsed, whitespace-trimmed sub-provider list from SEC7669_CTI_MULTI_PROVIDERS."""
+        return [name.strip() for name in self.cti_multi_providers_raw.split(",") if name.strip()]
+
+    @property
+    def multi_cursor_file(self) -> Path:
+        return self.athf_workspace / ".multi_cti_cursor_state.json"
+
+    @property
     def hunts_root(self) -> Path:
-        return self.athf_workspace / "hunts" / "production"
+        return self.athf_workspace / "hunts"
 
     @property
     def pending_queries_dir(self) -> Path:

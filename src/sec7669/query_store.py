@@ -11,6 +11,7 @@ import json
 import logging
 from pathlib import Path
 
+from sec7669.atomic_write import atomic_write_text
 from sec7669.query_execution import ProposedQuery
 
 log = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ class PendingQueryStore:
     def save(self, query: ProposedQuery) -> Path:
         self.store_dir.mkdir(parents=True, exist_ok=True)
         path = self._path(query.hunt_id)
-        path.write_text(json.dumps(query.to_dict(), indent=2))
+        atomic_write_text(path, json.dumps(query.to_dict(), indent=2))
         log.info("Staged proposed query for %s at %s", query.hunt_id, path)
         return path
 

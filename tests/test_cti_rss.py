@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,7 +11,14 @@ import httpx
 import pytest
 
 from sec7669.cti.base import CTIItem
-from sec7669.cti.rss import RssCursorState, RssError, RssProvider, _entry_to_blurb, _strip_html
+from sec7669.cti.rss import (
+    RssCursorState,
+    RssError,
+    RssProvider,
+    _entry_published,
+    _entry_to_blurb,
+    _strip_html,
+)
 
 FEED_A = "https://feed-a.example.com/rss/"
 FEED_B = "https://feed-b.example.com/rss/"
@@ -135,6 +143,43 @@ def test_picks_oldest_unrouted_candidate_across_feeds(tmp_path: Path) -> None:
     assert item.identifier == "https://feed-a.example.com/old"
 
 
+def test_entry_published_falls_back_to_non_rfc822_date_format(tmp_path: Path) -> None:
+    """Regression test: CrowdStrike's blog emits pubDate as
+    "Jul 15, 2026 00:00:00-0500" -- no weekday, comma-separated, no space
+    before the offset -- which isn't RFC822 and feedparser's own parser
+    leaves published_parsed/updated_parsed as None for. _entry_published
+    must still recover the real date from the raw string rather than
+    treating the entry as dateless."""
+    provider = _make_provider(
+        tmp_path, {FEED_A: [_entry(pub_date="Jul 15, 2026 00:00:00-0500")]}
+    )
+    entries = provider._fetch_entries(FEED_A)
+    assert entries[0].get("published_parsed") is None  # confirms feedparser itself can't parse it
+
+    published = _entry_published(entries[0])
+    assert published == datetime(2026, 7, 15, 5, 0, 0, tzinfo=UTC)  # -0500 normalized to UTC
+
+
+def test_entry_published_returns_none_for_truly_unparseable_date() -> None:
+    assert _entry_published({"published": "not a date at all"}) is None
+    assert _entry_published({}) is None
+
+
+def test_unparseable_date_does_not_win_oldest_over_a_real_older_date(tmp_path: Path) -> None:
+    """Regression test: an entry whose date feedparser AND the strptime
+    fallback both fail on used to sort as datetime.min (oldest possible),
+    letting it win "oldest wins" against every other feed indefinitely
+    regardless of its true age. It must now sort as newest (lowest
+    priority) so a real, verifiably-older entry from another feed wins."""
+    unparseable = _entry(link="https://feed-a.example.com/no-date", pub_date="not a date at all")
+    really_older = _entry(link="https://feed-b.example.com/old", pub_date=_days_ago(10))
+    provider = _make_provider(tmp_path, {FEED_A: [unparseable], FEED_B: [really_older]})
+
+    item = provider.next_item()
+    assert item is not None
+    assert item.identifier == "https://feed-b.example.com/old"
+
+
 def test_one_feed_failing_does_not_block_others(tmp_path: Path) -> None:
     good_entry = _entry(link="https://feed-b.example.com/good")
     provider = _make_provider(
@@ -178,7 +223,7 @@ def test_acknowledge_advances_and_persists_cursor(tmp_path: Path) -> None:
     provider.acknowledge(item)
 
     cursor = RssCursorState.load(provider.cursor_file)
-    assert cursor.last_seen_id[FEED_A] == "https://feed-a.example.com/post-1"
+    assert cursor.seen_ids[FEED_A] == ["https://feed-a.example.com/post-1"]
 
 
 def test_acknowledged_entry_is_not_returned_again(tmp_path: Path) -> None:
@@ -199,7 +244,46 @@ def test_cursor_state_corrupt_file_resets(tmp_path: Path) -> None:
     path = tmp_path / "cursor.json"
     path.write_text("{not valid json")
     cursor = RssCursorState.load(path)
-    assert cursor.last_seen_id == {}
+    assert cursor.seen_ids == {}
+
+
+def test_cursor_loads_legacy_single_last_seen_id_format(tmp_path: Path) -> None:
+    """Back-compat: cursor files written before the seen-set fix stored a
+    single 'last_seen_id' string per feed. Loading one must not lose that
+    entry's already-routed status."""
+    path = tmp_path / "cursor.json"
+    path.write_text(json.dumps({"last_seen_id": {FEED_A: "entry-a1"}}))
+
+    cursor = RssCursorState.load(path)
+    assert cursor.already_routed(FEED_A, "entry-a1")
+
+
+def test_previously_routed_entry_is_not_reprocessed_after_a_later_entry_in_same_feed_is_acknowledged(
+    tmp_path: Path,
+) -> None:
+    """Regression: RssCursorState used to store only the single most
+    recently acknowledged entry ID per feed. Acknowledging entry B after A
+    overwrote A's ID, so A looked unrouted again on the next poll and got
+    reprocessed indefinitely -- the exact bug behind duplicate research
+    docs being generated for the same article over and over in production."""
+    entry_a = _entry(link="https://feed-a.example.com/a", pub_date=_days_ago(5))
+    entry_b = _entry(link="https://feed-a.example.com/b", pub_date=_days_ago(1))
+    provider = _make_provider(tmp_path, {FEED_A: [entry_a, entry_b]})
+
+    first = provider.next_item()
+    assert first is not None
+    assert first.identifier == entry_a["link"]
+    provider.acknowledge(first)
+
+    second = provider.next_item()
+    assert second is not None
+    assert second.identifier == entry_b["link"]
+    provider.acknowledge(second)
+
+    # Both entries have now been routed; neither should come back, and in
+    # particular entry_a must not resurface just because entry_b was
+    # acknowledged afterward.
+    assert provider.next_item() is None
 
 
 def test_cursor_tracks_multiple_feeds_independently(tmp_path: Path) -> None:

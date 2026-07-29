@@ -6,6 +6,7 @@ from sec7669.config import Settings
 from sec7669.cti.base import CTIItem, CTIProvider
 from sec7669.cti.file_queue import FileQueueProvider
 from sec7669.cti.misp import MispProvider
+from sec7669.cti.multi import MultiProvider
 from sec7669.cti.otx import OtxProvider
 from sec7669.cti.rss import RssProvider
 
@@ -14,6 +15,7 @@ __all__ = [
     "CTIProvider",
     "FileQueueProvider",
     "MispProvider",
+    "MultiProvider",
     "OtxProvider",
     "RssProvider",
     "get_provider",
@@ -50,4 +52,14 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             request_timeout_sec=settings.misp_request_timeout_sec,
             verify_ssl=settings.misp_verify_ssl,
         )
+    if name == "multi":
+        sub_names = settings.cti_multi_provider_names
+        if not sub_names:
+            raise ValueError(
+                "SEC7669_CTI_MULTI_PROVIDERS must list at least one provider when SEC7669_CTI_PROVIDER=multi"
+            )
+        if "multi" in sub_names:
+            raise ValueError("SEC7669_CTI_MULTI_PROVIDERS cannot include 'multi' itself")
+        sub_providers = [get_provider(sub_name, settings=settings) for sub_name in sub_names]
+        return MultiProvider(providers=sub_providers, cursor_file=settings.multi_cursor_file)
     raise ValueError(f"Unknown CTI provider: {name!r}")

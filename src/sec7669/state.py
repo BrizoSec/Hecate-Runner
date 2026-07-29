@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from sec7669.atomic_write import atomic_write_text
+
 log = logging.getLogger(__name__)
 
 
@@ -34,8 +36,7 @@ class OrchestratorState:
             return cls()
 
     def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(asdict(self), indent=2))
+        atomic_write_text(path, json.dumps(asdict(self), indent=2))
 
     # --- Behaviors ---------------------------------------------------------
 

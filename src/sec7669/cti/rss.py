@@ -12,11 +12,20 @@ to seed research topics) so it can ride along as structured metadata, but
 its absence doesn't exclude an entry — plenty of good tradecraft writeups
 describe TTPs in prose without citing a T-code.
 
-Cursor state (last-seen entry ID per feed URL) is persisted to disk, same
-shape and reasoning as OtxCursorState: repeat polls don't re-ingest an
-entry, and a crash mid-cycle doesn't lose position. Each feed's failure
-(network error, malformed XML, blocked request) is isolated — one broken
-feed doesn't stop entries from other configured feeds being considered.
+Cursor state (the set of already-routed entry IDs per feed URL) is
+persisted to disk so repeat polls don't re-ingest an entry, and a crash
+mid-cycle doesn't lose position. Unlike OTX's incremental "modified since"
+API sync, RSS/Atom feeds return their full current window on every
+request with no server-side cursor — so, unlike OtxCursorState, a single
+last-seen ID per feed isn't enough: only one candidate is acknowledged per
+poll cycle (the globally oldest across all feeds), so a feed with several
+unrouted entries has older ones routed one at a time across many cycles,
+and the single last-seen ID gets overwritten — and its previous value
+forgotten — every time a newer entry in the same feed is later
+acknowledged. The full per-feed seen-ID set avoids that. Each feed's
+failure (network error, malformed XML, blocked request) is isolated — one
+broken feed doesn't stop entries from other configured feeds being
+considered.
 """
 
 from __future__ import annotations
@@ -33,6 +42,7 @@ from typing import Any
 import feedparser
 import httpx
 
+from sec7669.atomic_write import atomic_write_text
 from sec7669.cti.base import CTIItem, CTIProvider
 
 log = logging.getLogger(__name__)
@@ -49,11 +59,17 @@ class RssError(RuntimeError):
     """Raised when an RSS provider operation fails outright (not per-feed)."""
 
 
+#: Cap on remembered entry IDs per feed, oldest dropped first. Bounds file
+#: growth indefinitely while comfortably covering any real feed's window
+#: (typically 10-50 entries) many times over.
+_MAX_SEEN_IDS_PER_FEED = 500
+
+
 @dataclass
 class RssCursorState:
-    """Per-feed last-seen entry ID, persisted between polls."""
+    """Per-feed set of already-routed entry IDs, persisted between polls."""
 
-    last_seen_id: dict[str, str] = field(default_factory=dict)
+    seen_ids: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path) -> RssCursorState:
@@ -61,20 +77,28 @@ class RssCursorState:
             return cls()
         try:
             data = json.loads(path.read_text())
-            return cls(last_seen_id=dict(data.get("last_seen_id", {})))
+            seen_ids = data.get("seen_ids")
+            if seen_ids is None:
+                # Back-compat with the old single-last-seen-ID format.
+                seen_ids = {feed: [entry_id] for feed, entry_id in data.get("last_seen_id", {}).items()}
+            return cls(seen_ids={feed: list(ids) for feed, ids in seen_ids.items()})
         except (json.JSONDecodeError, TypeError) as exc:
             log.warning("RSS cursor file %s corrupt (%s); resetting", path, exc)
             return cls()
 
     def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"last_seen_id": self.last_seen_id}, indent=2))
+        atomic_write_text(path, json.dumps({"seen_ids": self.seen_ids}, indent=2))
 
     def already_routed(self, feed_url: str, entry_id: str) -> bool:
-        return self.last_seen_id.get(feed_url) == entry_id
+        return entry_id in self.seen_ids.get(feed_url, [])
 
     def advance(self, feed_url: str, entry_id: str) -> None:
-        self.last_seen_id[feed_url] = entry_id
+        ids = self.seen_ids.setdefault(feed_url, [])
+        if entry_id in ids:
+            return
+        ids.append(entry_id)
+        if len(ids) > _MAX_SEEN_IDS_PER_FEED:
+            del ids[: len(ids) - _MAX_SEEN_IDS_PER_FEED]
 
 
 class RssProvider(CTIProvider):
@@ -134,8 +158,14 @@ class RssProvider(CTIProvider):
 
         # Oldest unrouted candidate first, mirroring OtxProvider — a stable,
         # fair ordering across feeds rather than always favoring whichever
-        # feed happens to be checked first.
-        candidates.sort(key=lambda pair: _entry_published(pair[1]) or datetime.min.replace(tzinfo=UTC))
+        # feed happens to be checked first. An entry whose date we couldn't
+        # parse at all sorts as *newest* (lowest priority), not oldest: an
+        # unverifiable age has no business jumping ahead of entries we know
+        # for certain are older. (This used to fall back to datetime.min --
+        # oldest-possible -- which let entries with unparseable dates, e.g.
+        # a feed emitting a non-RFC822 format, win "oldest" against every
+        # other feed indefinitely, regardless of their actual age.)
+        candidates.sort(key=lambda pair: _entry_published(pair[1]) or datetime.max.replace(tzinfo=UTC))
         feed_url, entry = candidates[0]
         return _entry_to_cti_item(feed_url, entry)
 
@@ -171,25 +201,45 @@ def _entry_id(entry: dict[str, Any]) -> str:
     return str(entry.get("id") or entry.get("link") or "")
 
 
+# feedparser's own date parser misses some real-world formats it still can't
+# make sense of -- e.g. CrowdStrike's blog emits `published`/`updated` as
+# "Jul 15, 2026 00:00:00-0500" (no weekday, comma-separated, no space before
+# the UTC offset), which isn't RFC822 and feedparser leaves *_parsed as None
+# for. Tried as a fallback, in order, against the raw (unparsed) string
+# fields when feedparser's own parse comes back empty.
+_FALLBACK_DATE_FORMATS = (
+    "%b %d, %Y %H:%M:%S%z",  # CrowdStrike: "Jul 15, 2026 00:00:00-0500"
+)
+
+
 def _entry_published(entry: dict[str, Any]) -> datetime | None:
     parsed_time = entry.get("published_parsed") or entry.get("updated_parsed")
-    if not parsed_time:
-        return None
-    try:
-        # Indexed rather than `datetime(*parsed_time[:6], tzinfo=UTC)`: feedparser
-        # gives no type stubs, so a starred unpack of an untyped slice reads to
-        # mypy as possibly colliding with the explicit tzinfo kwarg.
-        return datetime(
-            parsed_time[0],
-            parsed_time[1],
-            parsed_time[2],
-            parsed_time[3],
-            parsed_time[4],
-            parsed_time[5],
-            tzinfo=UTC,
-        )
-    except (TypeError, ValueError, IndexError):
-        return None
+    if parsed_time:
+        try:
+            # Indexed rather than `datetime(*parsed_time[:6], tzinfo=UTC)`: feedparser
+            # gives no type stubs, so a starred unpack of an untyped slice reads to
+            # mypy as possibly colliding with the explicit tzinfo kwarg.
+            return datetime(
+                parsed_time[0],
+                parsed_time[1],
+                parsed_time[2],
+                parsed_time[3],
+                parsed_time[4],
+                parsed_time[5],
+                tzinfo=UTC,
+            )
+        except (TypeError, ValueError, IndexError):
+            pass
+
+    raw = entry.get("published") or entry.get("updated")
+    if raw:
+        for fmt in _FALLBACK_DATE_FORMATS:
+            try:
+                return datetime.strptime(raw, fmt).astimezone(UTC)
+            except ValueError:
+                continue
+
+    return None
 
 
 def _strip_html(raw: str) -> str:

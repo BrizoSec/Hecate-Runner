@@ -383,16 +383,27 @@ def doctor() -> None:
         f"CTI queue dir writable: {settings.cti_queue_dir_resolved}",
         f"mkdir -p and chmod +w {settings.cti_queue_dir_resolved}",
     )
-    if settings.cti_provider == "otx":
+    if settings.cti_provider == "multi":
+        multi_names = settings.cti_multi_provider_names
+        check(
+            bool(multi_names) and "multi" not in multi_names,
+            f"SEC7669_CTI_MULTI_PROVIDERS valid ({', '.join(multi_names) or 'empty'})",
+            "Set SEC7669_CTI_MULTI_PROVIDERS to a comma-separated list from: file, otx, rss, misp.",
+        )
+    else:
+        multi_names = []
+    active_cti_providers = multi_names if settings.cti_provider == "multi" else [settings.cti_provider]
+
+    if "otx" in active_cti_providers:
         check(
             bool(settings.otx_api_key),
-            "OTX_API_KEY set (required for cti_provider=otx)",
+            "OTX_API_KEY set (required — cti_provider includes 'otx')",
             "Set OTX_API_KEY in .env — get a free-tier key at https://otx.alienvault.com",
         )
-    if settings.cti_provider == "misp":
+    if "misp" in active_cti_providers:
         check(
             bool(settings.misp_base_url) and bool(settings.misp_api_key),
-            "MISP_BASE_URL / MISP_API_KEY set (required for cti_provider=misp)",
+            "MISP_BASE_URL / MISP_API_KEY set (required — cti_provider includes 'misp')",
             "Set both in .env — use a dedicated automation key, not a personal user's key.",
         )
     # Checked unconditionally (not gated on cti_provider == "rss") because
@@ -414,7 +425,7 @@ def doctor() -> None:
     warn(
         bool(settings.slack_webhook_url),
         "SEC7669_SLACK_WEBHOOK_URL set (draft-created notifications)",
-        "Optional — without it, drafts land silently in hunts/production/ with no alert.",
+        "Optional — without it, drafts land silently in hunts/ with no alert.",
     )
     if settings.query_provider == "splunk":
         check(

@@ -43,7 +43,7 @@ def test_posts_to_webhook_when_configured(
     result = RunResult(
         outcome="draft_created",
         hunt_id="H-0042",
-        draft_path=Path("/workspace/hunts/production/2026/Q3/H-0042.md"),
+        draft_path=Path("/workspace/hunts/2026/Q3/H-0042.md"),
         research_id="R-0007",
     )
     notify_draft_created(settings, result)
@@ -81,6 +81,24 @@ def test_http_failure_is_swallowed_not_raised(
 
     def fake_post(url: str, json: dict, timeout: float):
         raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    result = RunResult(outcome="draft_created", hunt_id="H-0042", draft_path=Path("/tmp/H-0042.md"))
+    # Must not raise.
+    notify_draft_created(settings, result)
+
+
+def test_invalid_url_is_swallowed_not_raised(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test: a malformed SEC7669_SLACK_WEBHOOK_URL makes httpx.post
+    itself raise httpx.InvalidURL, which inherits directly from Exception --
+    NOT from httpx.HTTPError. The old `except httpx.HTTPError` didn't catch
+    it, violating this module's own stated contract ("every function here
+    catches its own errors ... instead of raising")."""
+    settings = settings.model_copy(update={"slack_webhook_url": "not-a-valid-url"})
+
+    def fake_post(url: str, json: dict, timeout: float):
+        raise httpx.InvalidURL("malformed webhook URL")
 
     monkeypatch.setattr(httpx, "post", fake_post)
 

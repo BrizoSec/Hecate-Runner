@@ -25,7 +25,7 @@ def test_derived_paths(settings: Settings, workspace: Path) -> None:
     assert settings.athf_bin_resolved == workspace / ".venv" / "bin" / "athf"
     assert settings.cti_queue_dir_resolved == workspace / "cti_queue"
     assert settings.cti_next_file == workspace / "cti_queue" / "next.txt"
-    assert settings.hunts_root == workspace / "hunts" / "production"
+    assert settings.hunts_root == workspace / "hunts"
     assert settings.state_file == workspace / ".orchestrator_state.json"
 
 

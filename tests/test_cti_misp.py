@@ -186,6 +186,22 @@ def test_picks_oldest_unrouted_candidate(tmp_path: Path) -> None:
     assert item.identifier == "uuid-old"
 
 
+def test_missing_timestamp_does_not_win_oldest_over_a_real_older_event(tmp_path: Path) -> None:
+    """Regression test: an event with a missing/unparseable timestamp used to
+    sort via `int(e.get("timestamp", 0) or 0)` -- defaulting to 0, i.e. Unix
+    epoch, "oldest possible" -- so it would always win "oldest wins" against
+    every event with a real, later timestamp, regardless of true age. Must
+    now sort as newest (lowest priority) so a real, verifiably-older event
+    wins instead."""
+    no_timestamp = _sample_event(uuid="uuid-no-ts", timestamp="")
+    really_older = _sample_event(uuid="uuid-old", timestamp=_epoch_days_ago(10))
+    provider = _make_provider(tmp_path, [no_timestamp, really_older])
+
+    item = provider.next_item()
+    assert item is not None
+    assert item.identifier == "uuid-old"
+
+
 def test_sends_auth_header_and_published_filter(tmp_path: Path) -> None:
     seen_requests: list[httpx.Request] = []
     provider = _make_provider(tmp_path, [_sample_event()], on_request=seen_requests.append)
@@ -239,7 +255,29 @@ def test_cursor_state_corrupt_file_resets(tmp_path: Path) -> None:
     path.write_text("{not valid json")
     cursor = MispCursorState.load(path)
     assert cursor.last_timestamp == ""
-    assert cursor.seen_ids_at_cursor == []
+
+
+def test_advance_ignores_a_stale_older_timestamp() -> None:
+    """Regression test: advance() used to unconditionally overwrite
+    last_timestamp with whatever it was called with (comparing as raw
+    strings, not numerically), no matter its value. A stale/late advance()
+    call used to regress the cursor backward, making already-routed events
+    look unrouted again and get re-drafted under a new hunt ID."""
+    cursor = MispCursorState(last_timestamp=_epoch_days_ago(1), seen_ids_at_cursor=["uuid-newer"])
+
+    cursor.advance(_epoch_days_ago(10), "uuid-older-stale")
+
+    assert cursor.last_timestamp == _epoch_days_ago(1)
+    assert cursor.seen_ids_at_cursor == ["uuid-newer"]
+
+
+def test_advance_still_moves_forward_normally() -> None:
+    cursor = MispCursorState(last_timestamp=_epoch_days_ago(10), seen_ids_at_cursor=["uuid-old"])
+
+    cursor.advance(_epoch_days_ago(1), "uuid-new")
+
+    assert cursor.last_timestamp == _epoch_days_ago(1)
+    assert cursor.seen_ids_at_cursor == ["uuid-new"]
 
 
 # --- HTTP error handling -------------------------------------------------------

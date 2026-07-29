@@ -27,6 +27,7 @@ from typing import Any
 
 import httpx
 
+from sec7669.atomic_write import atomic_write_text
 from sec7669.cti.base import CTIItem, CTIProvider
 
 log = logging.getLogger(__name__)
@@ -62,21 +63,33 @@ class OtxCursorState:
             return cls()
 
     def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        atomic_write_text(
+            path,
             json.dumps(
                 {
                     "last_modified": self.last_modified,
                     "seen_ids_at_cursor": self.seen_ids_at_cursor,
                 },
                 indent=2,
-            )
+            ),
         )
 
     def already_routed(self, pulse_modified: str, pulse_id: str) -> bool:
         return pulse_modified == self.last_modified and pulse_id in self.seen_ids_at_cursor
 
     def advance(self, pulse_modified: str, pulse_id: str) -> None:
+        # ISO8601 timestamps sort lexicographically the same as chronologically.
+        # A stale/late advance() call (e.g. from two overlapping polls) must
+        # not regress the cursor backward -- that would make already-routed
+        # pulses look unrouted again and get re-drafted under a new hunt ID.
+        if pulse_modified < self.last_modified:
+            log.warning(
+                "Ignoring OTX cursor advance to an older modified time (%s < %s); "
+                "likely a stale advance() from an overlapping poll.",
+                pulse_modified,
+                self.last_modified,
+            )
+            return
         if pulse_modified != self.last_modified:
             self.last_modified = pulse_modified
             self.seen_ids_at_cursor = [pulse_id]
@@ -178,8 +191,21 @@ class OtxProvider(CTIProvider):
         ]
         if not candidates:
             return None
-        candidates.sort(key=lambda p: p.get("modified", ""))
+        candidates.sort(key=_pulse_sort_key)
         return candidates[0]
+
+
+def _pulse_sort_key(pulse: dict[str, Any]) -> datetime:
+    """Sort key for "oldest wins" selection. A pulse with a missing or
+    unparseable ``modified`` value sorts as *newest* (datetime.max), not
+    oldest -- an unverifiable age has no business jumping ahead of pulses we
+    know for certain are older. (The previous raw-string sort,
+    `p.get("modified", "")`, defaulted a missing value to "" -- which sorts
+    lexicographically before any real ISO8601 date string, i.e. "oldest
+    possible" -- the same backwards-fallback-direction bug found and fixed
+    in the RSS provider's date sort and MISP's timestamp sort.)
+    """
+    return _parse_otx_timestamp(pulse.get("modified", "")) or datetime.max.replace(tzinfo=UTC)
 
 
 def _is_high_signal(pulse: dict[str, Any], cutoff: datetime) -> bool:

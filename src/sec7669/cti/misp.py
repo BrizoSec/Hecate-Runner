@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -35,6 +36,7 @@ from typing import Any
 
 import httpx
 
+from sec7669.atomic_write import atomic_write_text
 from sec7669.cti.base import CTIItem, CTIProvider
 
 log = logging.getLogger(__name__)
@@ -76,18 +78,36 @@ class MispCursorState:
             return cls()
 
     def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        atomic_write_text(
+            path,
             json.dumps(
                 {"last_timestamp": self.last_timestamp, "seen_ids_at_cursor": self.seen_ids_at_cursor},
                 indent=2,
-            )
+            ),
         )
 
     def already_routed(self, event_timestamp: str, event_uuid: str) -> bool:
         return event_timestamp == self.last_timestamp and event_uuid in self.seen_ids_at_cursor
 
     def advance(self, event_timestamp: str, event_uuid: str) -> None:
+        # MISP timestamps are Unix epoch seconds as strings -- compare
+        # numerically, not lexicographically (unlike OTX's fixed-width
+        # ISO8601 strings, these could differ in digit count). A stale/late
+        # advance() call (e.g. from two overlapping polls) must not regress
+        # the cursor backward -- that would make already-routed events look
+        # unrouted again and get re-drafted under a new hunt ID.
+        try:
+            is_older = int(event_timestamp) < int(self.last_timestamp or 0)
+        except ValueError:
+            is_older = False  # non-numeric timestamp -- let it through rather than guess
+        if is_older:
+            log.warning(
+                "Ignoring MISP cursor advance to an older timestamp (%s < %s); "
+                "likely a stale advance() from an overlapping poll.",
+                event_timestamp,
+                self.last_timestamp,
+            )
+            return
         if event_timestamp != self.last_timestamp:
             self.last_timestamp = event_timestamp
             self.seen_ids_at_cursor = [event_uuid]
@@ -191,8 +211,24 @@ class MispProvider(CTIProvider):
         ]
         if not candidates:
             return None
-        candidates.sort(key=lambda e: int(e.get("timestamp", 0) or 0))
+        candidates.sort(key=_event_sort_timestamp)
         return candidates[0]
+
+
+def _event_sort_timestamp(event: dict[str, Any]) -> int:
+    """Sort key for "oldest wins" selection. An event with a missing or
+    invalid ``timestamp`` sorts as *newest* (sys.maxsize), not oldest (0) --
+    an unverifiable age has no business jumping ahead of events we know for
+    certain are older. (The previous `int(e.get("timestamp", 0) or 0)`
+    defaulted a missing timestamp to 0 -- Unix epoch, "oldest possible" --
+    the same backwards-fallback-direction bug found and fixed in the RSS
+    provider's date sort.)
+    """
+    raw = event.get("timestamp")
+    try:
+        return int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return sys.maxsize
 
 
 def _is_high_signal(event: dict[str, Any], cutoff: datetime) -> bool:

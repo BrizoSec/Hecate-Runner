@@ -18,7 +18,7 @@ def workspace(tmp_path: Path) -> Path:
     """A fake ATHF workspace with the standard directory layout."""
     ws = tmp_path / "athf"
     (ws / ".venv" / "bin").mkdir(parents=True)
-    (ws / "hunts" / "production" / "2026" / "Q3").mkdir(parents=True)
+    (ws / "hunts" / "2026" / "Q3").mkdir(parents=True)
     (ws / "cti_queue" / "processed").mkdir(parents=True)
     (ws / "logs").mkdir()
     # Fake athf binary — an executable no-op
@@ -38,6 +38,7 @@ def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Setti
         "SEC7669_MAX_DRAFTS_PER_DAY",
         "SEC7669_LLM_TIMEOUT_SEC",
         "SEC7669_CTI_PROVIDER",
+        "SEC7669_CTI_MULTI_PROVIDERS",
         "SEC7669_LOG_LEVEL",
         "SEC7669_CTI_QUEUE_DIR",
         "OTX_API_KEY",

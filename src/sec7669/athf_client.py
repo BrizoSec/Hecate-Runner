@@ -47,6 +47,16 @@ class HypothesisResult:
         return not self.hypothesis.strip()
 
 
+@dataclass
+class TechniqueMetadata:
+    """Parsed output of ``athf attack lookup <id> --json``."""
+
+    technique_id: str = ""
+    tactics: list[str] = field(default_factory=list)
+    platforms: list[str] = field(default_factory=list)
+    found: bool = False
+
+
 class AthfError(RuntimeError):
     """Raised when the athf CLI fails or returns unexpected output."""
 
@@ -130,6 +140,40 @@ class AthfClient:
         parsed = self._parse_hypothesis_output(stdout)
         parsed.raw_output = stdout
         return parsed
+
+    def lookup_technique(self, technique_id: str, timeout_sec: int | None = None) -> TechniqueMetadata:
+        """Resolve a technique's real tactic(s)/platform(s) via ``athf attack lookup --json``.
+
+        Best-effort and never raises: STIX data may not be installed, the
+        technique ID may be unknown/malformed (e.g. a hypothesis-generator
+        placeholder), or the call may time out. Any of those just yields a
+        not-``found`` result so callers fall back to an explicit
+        "unclassified" placeholder instead of guessing — or, as before this
+        existed, hardcoding a tactic that has nothing to do with the actual
+        technique.
+        """
+        cmd = [str(self.athf_bin), "attack", "lookup", technique_id, "--json"]
+        try:
+            stdout = self._run(cmd, timeout_sec=timeout_sec)
+        except AthfError as exc:
+            log.warning("athf attack lookup %s failed: %s", technique_id, exc)
+            return TechniqueMetadata(technique_id=technique_id)
+
+        try:
+            data = json.loads(stdout.strip())
+        except json.JSONDecodeError:
+            log.warning("athf attack lookup %s produced non-JSON output", technique_id)
+            return TechniqueMetadata(technique_id=technique_id)
+
+        if "error" in data:
+            return TechniqueMetadata(technique_id=technique_id)
+
+        return TechniqueMetadata(
+            technique_id=data.get("id") or technique_id,
+            tactics=list(data.get("tactics", [])),
+            platforms=list(data.get("platforms", [])),
+            found=True,
+        )
 
     # --- Internal ----------------------------------------------------------
 

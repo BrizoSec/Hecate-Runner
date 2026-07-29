@@ -18,7 +18,7 @@ from pathlib import Path
 from sec7669.athf_client import AthfClient, AthfError
 from sec7669.config import Settings
 from sec7669.cti import CTIProvider, get_provider
-from sec7669.hunt_writer import DraftHuntRequest, next_hunt_id, write_draft
+from sec7669.hunt_writer import DraftHuntRequest, hunt_id_lock, next_hunt_id, write_draft
 from sec7669.notifications import notify_draft_created
 from sec7669.state import OrchestratorState
 
@@ -94,7 +94,7 @@ class Orchestrator:
             result = self._run_body(state, dry_run=dry_run)
             state.mark_run(success=result.ok)
             return result
-        except Exception as exc:  # noqa: BLE001 — top-level guard
+        except Exception as exc:  # top-level guard
             log.exception("Cycle failed unexpectedly: %s", exc)
             state.mark_run(success=False)
             return RunResult(outcome="error", detail=str(exc))
@@ -103,6 +103,27 @@ class Orchestrator:
             log.info("=== Orchestrator cycle complete ===")
 
     # --- Internal ----------------------------------------------------------
+
+    def _resolve_ttps(self, techniques: list[str]) -> tuple[list[str], list[str]]:
+        """Derive real tactics/platforms for a hypothesis's techniques.
+
+        Looks each technique up against live ATT&CK data instead of
+        hardcoding a fixed tactic/platform onto every draft regardless of
+        what the CTI actually described. Order-preserving de-dup across
+        techniques; a technique that fails to resolve (unknown ID, STIX
+        unavailable) just contributes nothing rather than raising.
+        """
+        tactics: list[str] = []
+        platforms: list[str] = []
+        for technique_id in techniques:
+            meta = self.athf.lookup_technique(technique_id, timeout_sec=self.settings.llm_timeout_sec)
+            for tactic in meta.tactics:
+                if tactic not in tactics:
+                    tactics.append(tactic)
+            for platform in meta.platforms:
+                if platform not in platforms:
+                    platforms.append(platform)
+        return tactics, platforms
 
     def _run_body(self, state: OrchestratorState, *, dry_run: bool) -> RunResult:
         item = self.cti.next_item()
@@ -176,17 +197,47 @@ class Orchestrator:
             state.total_drafts_ever -= 1
             return RunResult(outcome="empty_hypothesis")
 
-        hunt_id = next_hunt_id(self.settings.hunts_root)
-        req = DraftHuntRequest(
-            hunt_id=hunt_id,
-            threat_intel=item.content,
-            hypothesis=hypothesis,
-            generated_at=datetime.now(UTC),
-            research_id=research_id,
-        )
-        path = write_draft(req, self.settings.hunts_root)
+        tactics, platforms = self._resolve_ttps(hypothesis.techniques)
 
-        self.cti.acknowledge(item)
+        try:
+            with hunt_id_lock(self.settings.hunts_root):
+                hunt_id = next_hunt_id(self.settings.hunts_root)
+                req = DraftHuntRequest(
+                    hunt_id=hunt_id,
+                    threat_intel=item.content,
+                    hypothesis=hypothesis,
+                    generated_at=datetime.now(UTC),
+                    research_id=research_id,
+                    tactics=tactics,
+                    platforms=platforms,
+                )
+                path = write_draft(req, self.settings.hunts_root)
+        except OSError as exc:
+            log.error("Failed to allocate/write draft hunt file: %s", exc)
+            # Refund the quota — nothing was actually drafted, and the CTI
+            # item is still unacknowledged so it stays queued for retry.
+            state.drafts_today -= 1
+            state.total_drafts_ever -= 1
+            return RunResult(outcome="write_error", detail=str(exc))
+
+        # The draft file already exists on disk at this point. A failure from
+        # here on must NOT be treated as "the cycle failed" (that would
+        # incorrectly mark state.mark_run(success=False) despite real forward
+        # progress having happened) or refund the quota (a real draft WAS
+        # produced — that's legitimate usage). acknowledge() failing just
+        # means the CTI item's cursor didn't advance, so it may be picked up
+        # and redrafted under a new ID next cycle — worth a loud warning, not
+        # a cycle-level failure that also risks silently duplicating content.
+        try:
+            self.cti.acknowledge(item)
+        except Exception as exc:  # isolate from the top-level guard, see above
+            log.warning(
+                "Failed to acknowledge CTI item after successfully drafting %s (%s); "
+                "this item may be re-drafted under a new ID next cycle.",
+                hunt_id,
+                exc,
+            )
+
         log.info(
             "Draft %s created at %s (research=%s, drafts today: %d/%d)",
             hunt_id, path, research_id or "none", state.drafts_today, self.settings.max_drafts_per_day,

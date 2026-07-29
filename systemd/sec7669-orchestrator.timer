@@ -1,11 +1,11 @@
 [Unit]
-Description=Run sec7669 orchestrator every 6 hours
+Description=Run sec7669 orchestrator every hour
 Requires=sec7669-orchestrator.service
 
 [Timer]
-# Fire 2 minutes after boot, then every 6 hours thereafter.
+# Fire 2 minutes after boot, then every hour thereafter.
 OnBootSec=2min
-OnUnitActiveSec=6h
+OnUnitActiveSec=1h
 Persistent=true
 Unit=sec7669-orchestrator.service
 
