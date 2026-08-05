@@ -228,6 +228,7 @@ def _is_high_signal(pulse: dict[str, Any], cutoff: datetime) -> bool:
 def _pulse_to_cti_item(pulse: dict[str, Any]) -> CTIItem:
     modified = pulse.get("modified", "")
     received_at = _parse_otx_timestamp(modified) or datetime.now(UTC)
+    references = pulse.get("references") or []
     return CTIItem(
         content=_pulse_to_blurb(pulse),
         source="otx",
@@ -238,6 +239,8 @@ def _pulse_to_cti_item(pulse: dict[str, Any]) -> CTIItem:
             "pulse_modified": modified,
             "pulse_name": pulse.get("name", ""),
         },
+        title=str(pulse.get("name") or ""),
+        source_url=str(references[0]) if references else "",
     )
 
 

@@ -48,6 +48,18 @@ Expected Observables:
 Known False Positives:
   • System maintenance tasks
   • Administrative tool usage
+
+Actor:
+  Generic post-exploitation toolkit
+
+Behavior:
+  Direct syscalls to bypass userland EDR hooks during LSASS access
+
+Location:
+  Windows domain-joined endpoints
+
+Evidence:
+  EDR process telemetry - process.name, parent.process.name, access.mask
 """
 
 
@@ -60,6 +72,42 @@ def test_parse_full_output() -> None:
     assert len(result.observables) == 2
     assert result.false_positives == ["System maintenance tasks", "Administrative tool usage"]
     assert not result.is_empty
+    # No "Low Confidence Source:" section in this output -- defaults to True.
+    assert result.is_threat_report is True
+    assert result.low_confidence_reason == ""
+
+
+def test_parse_output_with_low_confidence_section() -> None:
+    text = (
+        "Hypothesis:\n"
+        "  Adversaries exploit delayed patch application.\n\n"
+        "Low Confidence Source:\n"
+        "  Source is a vendor compliance announcement; no adversary behavior is described.\n"
+    )
+    result = AthfClient._parse_hypothesis_output(text)
+    assert result.is_threat_report is False
+    assert "vendor compliance announcement" in result.low_confidence_reason
+
+
+def test_parse_full_output_includes_able_scoping() -> None:
+    result = AthfClient._parse_hypothesis_output(SAMPLE_OUTPUT)
+    assert result.actor == "Generic post-exploitation toolkit"
+    assert "Direct syscalls" in result.behavior
+    assert result.location == "Windows domain-joined endpoints"
+    assert "process.name" in result.evidence
+
+
+def test_parse_output_without_able_scoping_defaults_to_empty() -> None:
+    """Regression test: output from before the ABLE prompt change (or a
+    model that omits those sections) must not crash the parser -- it just
+    leaves actor/behavior/location/evidence empty, same as any other
+    section the CLI didn't emit."""
+    text = "Hypothesis:\n  A hypothesis with no ABLE section at all.\n"
+    result = AthfClient._parse_hypothesis_output(text)
+    assert result.actor == ""
+    assert result.behavior == ""
+    assert result.location == ""
+    assert result.evidence == ""
 
 
 def test_parse_empty_output() -> None:

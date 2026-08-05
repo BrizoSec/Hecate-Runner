@@ -40,6 +40,24 @@ class HypothesisResult:
     data_sources: list[str] = field(default_factory=list)
     observables: list[str] = field(default_factory=list)
     false_positives: list[str] = field(default_factory=list)
+    # ABLE scoping (see ATHF's templates/HUNT_LOCK.md). Empty when the CLI
+    # didn't emit a section for one -- the agent leaves these blank rather
+    # than invent specifics not grounded in the CTI it was given, and
+    # hunt_writer falls back to the same "[Review CTI and populate]"
+    # placeholder it always has for an empty one.
+    actor: str = ""
+    behavior: str = ""
+    location: str = ""
+    evidence: str = ""
+    # Self-assessed grounding: False means the agent judged the source CTI
+    # doesn't actually describe observed/reported adversary behavior (e.g.
+    # a vendor/product announcement) and produced a speculative hypothesis
+    # anyway rather than refusing outright. Defaults to True (assumed
+    # legitimate) -- absence of the "Low Confidence Source:" section in the
+    # CLI output (older CLI, or a model that didn't follow the instruction)
+    # must not retroactively flag every hunt as low-confidence.
+    is_threat_report: bool = True
+    low_confidence_reason: str = ""
     raw_output: str = ""
 
     @property
@@ -259,7 +277,15 @@ class AthfClient:
             "observables": result.observables,
             "false_positives": result.false_positives,
         }
-        prose_targets: dict[str, str] = {"hypothesis": "", "justification": ""}
+        prose_targets: dict[str, str] = {
+            "hypothesis": "",
+            "justification": "",
+            "actor": "",
+            "behavior": "",
+            "location": "",
+            "evidence": "",
+            "low_confidence_reason": "",
+        }
 
         section_headers = {
             "hypothesis:": "hypothesis",
@@ -268,6 +294,11 @@ class AthfClient:
             "data sources:": "data_sources",
             "expected observables:": "observables",
             "known false positives:": "false_positives",
+            "actor:": "actor",
+            "behavior:": "behavior",
+            "location:": "location",
+            "evidence:": "evidence",
+            "low confidence source:": "low_confidence_reason",
         }
 
         for raw_line in text.splitlines():
@@ -290,4 +321,15 @@ class AthfClient:
 
         result.hypothesis = prose_targets["hypothesis"]
         result.justification = prose_targets["justification"]
+        result.actor = prose_targets["actor"]
+        result.behavior = prose_targets["behavior"]
+        result.location = prose_targets["location"]
+        result.evidence = prose_targets["evidence"]
+        # The CLI only prints a "Low Confidence Source:" section at all when
+        # is_threat_report is False (see _display_hypothesis_generator_result)
+        # -- its mere presence with non-empty content is the signal, same as
+        # how absence must leave HypothesisResult's True default untouched.
+        if prose_targets["low_confidence_reason"]:
+            result.is_threat_report = False
+            result.low_confidence_reason = prose_targets["low_confidence_reason"]
         return result

@@ -124,6 +124,8 @@ def test_next_item_returns_entry(tmp_path: Path) -> None:
     assert item.identifier == "https://feed-a.example.com/post-1"
     assert "Sample Post" in item.content
     assert item.metadata["feed_url"] == FEED_A
+    assert item.title == "Sample Post"
+    assert item.source_url == "https://feed-a.example.com/post-1"
 
 
 def test_filters_out_stale_entries(tmp_path: Path) -> None:

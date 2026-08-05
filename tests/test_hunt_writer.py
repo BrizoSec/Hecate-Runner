@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
 from datetime import UTC, datetime
@@ -10,6 +11,8 @@ from pathlib import Path
 from sec7669.athf_client import HypothesisResult
 from sec7669.hunt_writer import (
     DraftHuntRequest,
+    _draft_tags,
+    _short_title,
     draft_hunt_path,
     hunt_id_lock,
     next_hunt_id,
@@ -202,6 +205,172 @@ def test_render_draft_handles_empty_hypothesis() -> None:
     assert "H-0001" in md
     assert "TXXXX" in md  # placeholder technique
     assert "[TBD]" in md
+
+
+def test_short_title_leaves_short_hypothesis_untouched() -> None:
+    assert _short_title("Adversaries dump LSASS memory via comsvcs.dll.") == "Adversaries dump LSASS memory via comsvcs.dll."
+
+
+def test_short_title_truncates_on_word_boundary_with_ellipsis() -> None:
+    # Regression test: the old `hyp.hypothesis[:80]` hard-cut sliced
+    # mid-word with no ellipsis, so a reader saw what looked like a
+    # complete (but nonsensical) title -- e.g. "...on high-valu" -- with no
+    # indication anything had been cut off.
+    hypothesis = (
+        "Adversaries use JADEPUFFER ransomware to disrupt AI infrastructures "
+        "on high-value cloud tenants via supply chain compromise"
+    )
+    title = _short_title(hypothesis)
+    assert len(title) <= 104  # 100-char cap + "..."
+    assert title.endswith("...")
+    assert not title[:-3].endswith(" ")
+    # No word straddles the cut: every prefix word of the truncated title
+    # must actually appear as a whole word in the source hypothesis.
+    for word in title[:-3].split():
+        assert word in hypothesis.split()
+
+
+def test_short_title_defaults_when_hypothesis_empty() -> None:
+    assert _short_title("") == "Untitled draft"
+
+
+def test_render_draft_includes_source_url_when_present(
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    req = DraftHuntRequest(
+        hunt_id="H-0999",
+        threat_intel="test intel",
+        hypothesis=sample_hypothesis,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+        source_url="https://thedfirreport.com/2026/06/29/example",
+    )
+    md = render_draft(req)
+    assert "https://thedfirreport.com/2026/06/29/example" in md
+    assert "CTI Sources & References:** [Review CTI and populate]" not in md
+
+
+def test_render_draft_falls_back_to_placeholder_without_source_url(
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    req = DraftHuntRequest(
+        hunt_id="H-0999",
+        threat_intel="test intel",
+        hypothesis=sample_hypothesis,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert "CTI Sources & References:** [Review CTI and populate]" in md
+
+
+def test_render_draft_uses_able_scoping_when_present(
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    hyp = dataclasses.replace(
+        sample_hypothesis,
+        actor="Generic post-exploitation toolkit",
+        behavior="Direct syscalls to bypass userland EDR hooks",
+        location="Windows domain-joined endpoints",
+        evidence="EDR process telemetry - process.name, access.mask",
+    )
+    req = DraftHuntRequest(
+        hunt_id="H-0999",
+        threat_intel="test intel",
+        hypothesis=hyp,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+        source_url="https://example.com/report",  # isolates this test to ABLE, not CTI Sources
+    )
+    md = render_draft(req)
+    assert "Generic post-exploitation toolkit" in md
+    assert "Direct syscalls to bypass userland EDR hooks" in md
+    assert "Windows domain-joined endpoints" in md
+    assert "EDR process telemetry - process.name, access.mask" in md
+    assert "[Review CTI and populate]" not in md
+
+
+def test_render_draft_falls_back_to_placeholder_for_empty_able_fields(
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    """sample_hypothesis leaves actor/behavior/location/evidence at their
+    default empty string -- each must fall back to the honest placeholder,
+    not render as a blank table cell. That's 4 ABLE fields plus "CTI
+    Sources & References" (also unset here, no source_url) -- 5 total."""
+    req = DraftHuntRequest(
+        hunt_id="H-0999",
+        threat_intel="test intel",
+        hypothesis=sample_hypothesis,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert md.count("[Review CTI and populate]") == 5
+
+
+def test_render_draft_escapes_pipe_in_able_field() -> None:
+    """A `|` in an ABLE field would otherwise break the markdown table's
+    column layout."""
+    hyp = HypothesisResult(
+        hypothesis="test",
+        actor="APT1 | APT2 (uncertain attribution)",
+    )
+    req = DraftHuntRequest(
+        hunt_id="H-0999",
+        threat_intel="test intel",
+        hypothesis=hyp,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert "APT1 \\| APT2 (uncertain attribution)" in md
+
+
+def test_draft_tags_appends_low_confidence_tag_when_not_threat_report() -> None:
+    assert _draft_tags(is_threat_report=False) == [
+        "draft",
+        "auto-generated",
+        "requires-human-review",
+        "low-confidence-source",
+    ]
+
+
+def test_draft_tags_omits_low_confidence_tag_when_threat_report() -> None:
+    assert _draft_tags(is_threat_report=True) == ["draft", "auto-generated", "requires-human-review"]
+
+
+def test_render_draft_shows_low_confidence_banner_and_tag(
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    """Regression test: found via a live end-to-end run where a CrowdStrike
+    compliance/marketing blog post (no adversary behavior described) still
+    produced a confident-sounding hypothesis and "Adversary Tradecraft"-
+    shaped narrative with nothing flagging it as speculative."""
+    hyp = dataclasses.replace(
+        sample_hypothesis,
+        is_threat_report=False,
+        low_confidence_reason="Source is a vendor compliance announcement; no adversary behavior is described.",
+    )
+    req = DraftHuntRequest(
+        hunt_id="H-0999",
+        threat_intel="test intel",
+        hypothesis=hyp,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert "LOW-CONFIDENCE SOURCE" in md
+    assert "Source is a vendor compliance announcement; no adversary behavior is described." in md
+    assert '"low-confidence-source"' in md
+
+
+def test_render_draft_omits_low_confidence_banner_when_threat_report(
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    """sample_hypothesis defaults is_threat_report to True -- no banner, no tag."""
+    req = DraftHuntRequest(
+        hunt_id="H-0999",
+        threat_intel="test intel",
+        hypothesis=sample_hypothesis,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert "LOW-CONFIDENCE SOURCE" not in md
+    assert "low-confidence-source" not in md
 
 
 def test_write_draft_creates_file(

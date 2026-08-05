@@ -30,18 +30,49 @@ _TECHNIQUE_RE = re.compile(r"\bT\d{4}(?:\.\d{3})?\b")
 # `athf research new --topic` expects a short label, not a raw CTI paragraph.
 _TOPIC_MAX_LEN = 100
 
+# A technique whose ATT&CK platform list is this broad (of the ~10 platforms
+# ATT&CK currently defines) doesn't meaningfully scope a hunt -- e.g. T1078
+# "Valid Accounts" and T1098 "Account Manipulation" both list all 10. Left
+# in the union unconditionally, one such technique in a hypothesis's
+# technique list (alongside genuinely narrow ones, e.g. a Windows-only
+# technique) was enough to make `platform` list every ATT&CK platform verbatim
+# regardless of what the CTI actually described -- 37% of one drafting batch.
+# See `_resolve_ttps`.
+_NON_SCOPING_PLATFORM_THRESHOLD = 8
 
-def derive_research_topic(cti_content: str) -> tuple[str, str | None]:
+# ATT&CK's own STIX data uses the literal platform value "PRE" for
+# Reconnaissance/Resource-Development techniques (e.g. T1598 "Phishing for
+# Information") that happen before the adversary has a foothold on any
+# actual system -- there's no OS/environment to name yet. Surfaced verbatim,
+# a hunt file's `platform: ["PRE"]` reads as a parsing bug or an unknown
+# abbreviation, not what it actually means, to a human who has to scope a
+# query against it. Translated at the same point _resolve_ttps already
+# builds the platform list, not hardcoded as a special case in the template.
+_PLATFORM_LABELS = {"PRE": "Pre-Compromise (reconnaissance/targeting -- not endpoint/OS-specific)"}
+
+
+def derive_research_topic(cti_content: str, title: str | None = None) -> tuple[str, str | None]:
     """Best-effort (topic, technique) pair from a raw CTI blob.
 
     No NLP here on purpose — this only has to be good enough to seed the
     research agent's web searches; the research + hypothesis steps do the
     actual analysis.
+
+    ``title`` should be the provider's clean, single-field title (e.g.
+    RSS entry title, OTX pulse name, MISP event info) when the caller has
+    one. Preferred over flattening/truncating ``cti_content`` -- that blob
+    is "RSS: <title>\\nSource: <feed>\\nTags: ...\\nSummary: ...\\nLink:
+    ...", and truncating *that whole string* at a fixed char count landed
+    mid-"Source:"/"Summary:" label whenever the title alone was long,
+    producing both a garbled `topic` field and a research doc contaminated
+    with docs about "Source" website features whose name got the title
+    pulled from the title alone. Falls back to the old flatten+truncate
+    behavior only when no clean title is available.
     """
     technique_match = _TECHNIQUE_RE.search(cti_content)
     technique = technique_match.group(0) if technique_match else None
 
-    topic = " ".join(cti_content.split()).strip()
+    topic = (title or " ".join(cti_content.split())).strip()
     if len(topic) > _TOPIC_MAX_LEN:
         truncated = topic[:_TOPIC_MAX_LEN]
         # Prefer cutting on a word boundary so we don't hand the agent a
@@ -112,6 +143,17 @@ class Orchestrator:
         what the CTI actually described. Order-preserving de-dup across
         techniques; a technique that fails to resolve (unknown ID, STIX
         unavailable) just contributes nothing rather than raising.
+
+        Platforms from a near-universal technique (see
+        `_NON_SCOPING_PLATFORM_THRESHOLD`) are excluded from the union: they
+        carry no scoping signal and, unioned in, silently swamp genuinely
+        narrow techniques also present on the same hypothesis. Tactics
+        aren't filtered the same way -- a technique's tactic (e.g.
+        "persistence") stays meaningful and low-cardinality even when its
+        platform list is broad. If every resolved technique happens to be
+        broad, `platforms` comes back empty and hunt_writer's `["Unknown"]`
+        fallback kicks in -- an honest gap signal rather than a fabricated
+        full-platform list.
         """
         tactics: list[str] = []
         platforms: list[str] = []
@@ -120,7 +162,10 @@ class Orchestrator:
             for tactic in meta.tactics:
                 if tactic not in tactics:
                     tactics.append(tactic)
+            if len(meta.platforms) >= _NON_SCOPING_PLATFORM_THRESHOLD:
+                continue
             for platform in meta.platforms:
+                platform = _PLATFORM_LABELS.get(platform, platform)
                 if platform not in platforms:
                     platforms.append(platform)
         return tactics, platforms
@@ -151,7 +196,7 @@ class Orchestrator:
 
         research_id: str | None = None
         if self.settings.research_enabled:
-            topic, technique = derive_research_topic(item.content)
+            topic, technique = derive_research_topic(item.content, title=item.title or None)
             try:
                 research_result = self.athf.research_new(
                     topic=topic,
@@ -210,6 +255,7 @@ class Orchestrator:
                     research_id=research_id,
                     tactics=tactics,
                     platforms=platforms,
+                    source_url=item.source_url,
                 )
                 path = write_draft(req, self.settings.hunts_root)
         except OSError as exc:

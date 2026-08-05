@@ -16,7 +16,13 @@ import httpx
 import pytest
 
 from sec7669.cti.base import CTIItem
-from sec7669.cti.misp import MispCursorState, MispError, MispProvider, _event_to_blurb
+from sec7669.cti.misp import (
+    MispCursorState,
+    MispError,
+    MispProvider,
+    _event_to_blurb,
+    _event_to_cti_item,
+)
 
 
 def _epoch_days_ago(days: int) -> str:
@@ -94,6 +100,17 @@ def _make_provider(
 
 
 # --- Construction --------------------------------------------------------------
+
+
+def test_event_to_cti_item_extracts_clean_title_and_source_url() -> None:
+    item = _event_to_cti_item("https://misp.example.com", _sample_event())
+    assert item.title == "OSINT - LSASS memory dumping observed"
+    assert item.source_url == "https://misp.example.com/events/view/750"
+
+
+def test_event_to_cti_item_source_url_empty_without_event_id() -> None:
+    item = _event_to_cti_item("https://misp.example.com", _sample_event(id=""))
+    assert item.source_url == ""
 
 
 def test_requires_base_url(tmp_path: Path) -> None:
@@ -213,13 +230,57 @@ def test_sends_auth_header_and_published_filter(tmp_path: Path) -> None:
 
     body = jsonlib.loads(seen_requests[0].content)
     assert body["published"] == 1
-    assert "timestamp" not in body  # first-ever poll, no cursor yet
+    # First-ever poll, no cursor yet -- still floored at max_event_age_days
+    # (see test_first_poll_floors_query_at_max_event_age_days), not omitted.
+    assert "timestamp" in body
 
-    cursor = MispCursorState(last_timestamp="1751241600")
+    recent_cursor_timestamp = _epoch_days_ago(5)  # well within the 30-day default cutoff
+    cursor = MispCursorState(last_timestamp=recent_cursor_timestamp)
     cursor.save(provider.cursor_file)
     provider.next_item()
     body2 = jsonlib.loads(seen_requests[1].content)
-    assert body2["timestamp"] == "1751241600"
+    assert body2["timestamp"] == recent_cursor_timestamp
+
+
+def test_first_poll_floors_query_at_max_event_age_days(tmp_path: Path) -> None:
+    """Regression: with no cursor yet, the query used to omit the
+    `timestamp` filter entirely. Combined with `order: timestamp ASC` and a
+    small page_limit, an instance with any backlog of already-stale events
+    (default bootstrap sample data, or a feed enabled for the first time
+    after months of being off) starved every poll indefinitely -- the oldest
+    page was entirely events _is_high_signal would reject as stale anyway,
+    and genuinely fresh candidates sorted after that whole backlog were
+    never reached. The query must now floor at max_event_age_days even on a
+    cursor-less first poll."""
+    seen_requests: list[httpx.Request] = []
+    provider = _make_provider(tmp_path, [_sample_event()], on_request=seen_requests.append, max_event_age_days=30)
+    provider.next_item()
+
+    import json as jsonlib
+
+    body = jsonlib.loads(seen_requests[0].content)
+    expected_floor = int((datetime.now(UTC) - timedelta(days=30)).timestamp())
+    assert abs(int(body["timestamp"]) - expected_floor) < 5  # allow a few seconds of test execution drift
+
+
+def test_stale_cursor_does_not_starve_the_query_behind_a_backlog(tmp_path: Path) -> None:
+    """A cursor timestamp older than max_event_age_days (e.g. left over from
+    before a feed was disabled for months) must not be used verbatim --
+    that's exactly the starvation scenario the floor exists to prevent."""
+    seen_requests: list[httpx.Request] = []
+    provider = _make_provider(tmp_path, [_sample_event()], on_request=seen_requests.append, max_event_age_days=30)
+    stale_cursor_timestamp = _epoch_days_ago(400)
+    cursor = MispCursorState(last_timestamp=stale_cursor_timestamp)
+    cursor.save(provider.cursor_file)
+
+    provider.next_item()
+
+    import json as jsonlib
+
+    body = jsonlib.loads(seen_requests[0].content)
+    assert body["timestamp"] != stale_cursor_timestamp
+    expected_floor = int((datetime.now(UTC) - timedelta(days=30)).timestamp())
+    assert abs(int(body["timestamp"]) - expected_floor) < 5
 
 
 # --- acknowledge / cursor persistence -----------------------------------------

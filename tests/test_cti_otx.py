@@ -10,7 +10,13 @@ import httpx
 import pytest
 
 from sec7669.cti.base import CTIItem
-from sec7669.cti.otx import OtxCursorState, OtxError, OtxProvider, _pulse_to_blurb
+from sec7669.cti.otx import (
+    OtxCursorState,
+    OtxError,
+    OtxProvider,
+    _pulse_to_blurb,
+    _pulse_to_cti_item,
+)
 
 
 def _make_provider(
@@ -174,6 +180,22 @@ def test_acknowledged_pulse_is_not_returned_again(
 def test_acknowledge_missing_metadata_does_not_raise(tmp_path: Path) -> None:
     provider = _make_provider(tmp_path, [])
     provider.acknowledge(CTIItem(content="stray item"))  # no-op, no crash
+
+
+def test_pulse_to_cti_item_extracts_clean_title_and_source_url(
+    sample_otx_pulse: dict[str, Any],
+) -> None:
+    item = _pulse_to_cti_item(sample_otx_pulse)
+    assert item.title == "APT41 credential access campaign"
+    assert item.source_url == "https://example.com/report"
+
+
+def test_pulse_to_cti_item_source_url_empty_without_references(
+    sample_otx_pulse: dict[str, Any],
+) -> None:
+    sample_otx_pulse["references"] = []
+    item = _pulse_to_cti_item(sample_otx_pulse)
+    assert item.source_url == ""
 
 
 def test_cursor_state_corrupt_file_resets(tmp_path: Path) -> None:

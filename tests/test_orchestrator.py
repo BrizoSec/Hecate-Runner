@@ -327,6 +327,119 @@ def test_derive_research_topic_truncates_long_content() -> None:
     assert not topic.endswith(" ")
 
 
+def test_derive_research_topic_prefers_clean_title_over_flattened_content() -> None:
+    # Regression test: flattening+truncating the whole multi-field RSS blurb
+    # (title + "Source: <feed>" + "Tags: ..." + "Summary: ...") at a fixed
+    # char count routinely cut mid-label ("...Deliver Akira Source:") and,
+    # worse, could hand the web-search agent a topic still carrying words
+    # like "Bing Search" from the headline as if they were the subject.
+    content = (
+        "RSS: From Bing Search to Ransomware: Bumblebee and AdaptixC2 Deliver Akira\n"
+        "Source: thedfirreport.com\n"
+        "Tags: akira, ransomware\n"
+        "Summary: Key Takeaways this case was first reported to customers...\n"
+        "Link: https://thedfirreport.com/2026/06/29/from-bing-search-to-ransomware"
+    )
+    topic, _ = derive_research_topic(content, title="Bumblebee and AdaptixC2 Deliver Akira")
+    assert topic == "Bumblebee and AdaptixC2 Deliver Akira"
+    assert "Source:" not in topic
+    assert "Bing Search" not in topic
+
+
+def test_derive_research_topic_falls_back_to_content_without_a_title() -> None:
+    topic, _ = derive_research_topic("RSS: some headline\nSource: example.com", title=None)
+    assert topic.startswith("RSS: some headline")
+
+
+def test_derive_research_topic_truncates_long_title_on_word_boundary() -> None:
+    long_title = "word " * 60  # 300 chars, well past the 100-char cap
+    topic, _ = derive_research_topic("irrelevant content body", title=long_title)
+    assert len(topic) <= 100
+    assert not topic.endswith(" ")
+
+
+def test_resolve_ttps_excludes_near_universal_platforms_from_union(
+    settings: Settings,
+    mock_athf: MagicMock,
+    file_queue_with_cti: FileQueueProvider,
+) -> None:
+    # T1078 "Valid Accounts"-shaped technique: touches all ~10 ATT&CK
+    # platforms and, unioned in unconditionally, swamps a genuinely narrow
+    # technique (T1021.002, Windows-only) also on the same hypothesis --
+    # the exact shape that made 37% of one drafting batch list every
+    # ATT&CK platform verbatim regardless of what the CTI described.
+    broad = TechniqueMetadata(
+        technique_id="T1078",
+        tactics=["persistence", "privilege-escalation", "initial-access"],
+        platforms=[
+            "Containers", "ESXi", "IaaS", "Identity Provider", "Linux",
+            "macOS", "Network Devices", "Office Suite", "SaaS", "Windows",
+        ],
+        found=True,
+    )
+    narrow = TechniqueMetadata(
+        technique_id="T1021.002",
+        tactics=["lateral-movement"],
+        platforms=["Windows"],
+        found=True,
+    )
+    mock_athf.lookup_technique.side_effect = lambda technique_id, timeout_sec: (
+        broad if technique_id == "T1078" else narrow
+    )
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+
+    tactics, platforms = orch._resolve_ttps(["T1021.002", "T1078"])
+
+    assert platforms == ["Windows"]
+    assert set(tactics) == {"lateral-movement", "persistence", "privilege-escalation", "initial-access"}
+
+
+def test_resolve_ttps_translates_pre_platform_to_a_readable_label(
+    settings: Settings,
+    mock_athf: MagicMock,
+    file_queue_with_cti: FileQueueProvider,
+) -> None:
+    """Regression test: found via a live end-to-end run against T1598
+    "Phishing for Information" -- ATT&CK's own STIX data lists its platform
+    as the literal string "PRE" (pre-compromise: there's no OS/environment
+    yet), and it was surfacing in hunt files verbatim as `platform: ["PRE"]`
+    with nothing explaining what that meant to a human reviewer."""
+    pre_compromise = TechniqueMetadata(
+        technique_id="T1598",
+        tactics=["reconnaissance"],
+        platforms=["PRE"],
+        found=True,
+    )
+    mock_athf.lookup_technique.return_value = pre_compromise
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+
+    _, platforms = orch._resolve_ttps(["T1598"])
+
+    assert platforms == ["Pre-Compromise (reconnaissance/targeting -- not endpoint/OS-specific)"]
+
+
+def test_resolve_ttps_falls_back_to_empty_platforms_when_all_techniques_are_broad(
+    settings: Settings,
+    mock_athf: MagicMock,
+    file_queue_with_cti: FileQueueProvider,
+) -> None:
+    # hunt_writer's `platforms or ["Unknown"]` fallback turns an empty list
+    # into an honest gap signal -- preferable to fabricating a full-platform
+    # list when nothing scoping was actually resolved.
+    broad = TechniqueMetadata(
+        technique_id="T1078",
+        tactics=["persistence"],
+        platforms=["Windows", "Linux", "macOS", "Containers", "ESXi", "IaaS", "SaaS", "Office Suite"],
+        found=True,
+    )
+    mock_athf.lookup_technique.return_value = broad
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+
+    _, platforms = orch._resolve_ttps(["T1078"])
+
+    assert platforms == []
+
+
 def test_notify_called_on_draft_created(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,

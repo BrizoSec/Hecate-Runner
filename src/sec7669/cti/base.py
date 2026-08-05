@@ -23,6 +23,18 @@ class CTIItem:
     received_at: datetime | None = None
     identifier: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Clean, single-field title/link, kept separate from `content` (which is
+    # a multi-line blurb assembled for the LLM prompt: title + source +
+    # tags + summary + link). Deriving a research topic or a "CTI Sources &
+    # References" line by truncating that whole blob is what produced
+    # mangled topics ("...Deliver Akira Source:") and search queries
+    # contaminated by scaffolding words ("Source:", "Summary:") or, worse,
+    # by literal terms from the headline itself (e.g. a title containing
+    # "Bing Search" as a phrase, not a topic, sending the web-search agent
+    # off after Bing product docs). Providers that have a real title/link
+    # populate these directly instead of making callers parse `content`.
+    title: str = ""
+    source_url: str = ""
 
 
 class CTIProvider(ABC):

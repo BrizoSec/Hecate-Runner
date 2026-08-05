@@ -260,6 +260,8 @@ def _entry_to_cti_item(feed_url: str, entry: dict[str, Any]) -> CTIItem:
             "entry_title": entry.get("title", ""),
             "entry_link": entry.get("link", ""),
         },
+        title=str(entry.get("title") or ""),
+        source_url=str(entry.get("link") or ""),
     )
 
 

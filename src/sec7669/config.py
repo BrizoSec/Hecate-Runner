@@ -43,10 +43,20 @@ class Settings(BaseSettings):
         alias="SEC7669_MAX_DRAFTS_PER_DAY",
     )
     llm_timeout_sec: int = Field(
-        default=600,
+        default=1500,
         ge=30,
         le=3600,
         alias="SEC7669_LLM_TIMEOUT_SEC",
+        description=(
+            "Per-subprocess-call timeout for each `athf` invocation (research, "
+            "hypothesis-generator, technique lookup). Must comfortably exceed "
+            "research_depth's own ceiling (advanced: ~15-20 min) or `athf "
+            "research new` gets killed mid-run and the cycle refunds its quota "
+            "instead of producing a draft. 1500s (25 min) leaves headroom above "
+            "advanced depth's stated ceiling; the systemd unit's own "
+            "TimeoutStartSec must be raised to match (see systemd/"
+            "sec7669-orchestrator.service) since that's an outer, harder cap."
+        ),
     )
     cti_provider: Literal["file", "otx", "rss", "misp", "multi"] = Field(
         default="file",
@@ -92,12 +102,16 @@ class Settings(BaseSettings):
         ),
     )
     research_depth: Literal["basic", "advanced"] = Field(
-        default="basic",
+        default="advanced",
         alias="SEC7669_RESEARCH_DEPTH",
         description=(
-            "basic (~5 min) or advanced (~15-20 min). Keep to basic for an "
-            "unattended timer-driven loop unless the LLM timeout and cycle "
-            "cadence are both raised to accommodate advanced depth."
+            "basic (~5 min) or advanced (~15-20 min, full 5-skill methodology "
+            "-- ATHF's own documented default). advanced is the default here "
+            "too, on the condition that llm_timeout_sec (this file) and the "
+            "systemd unit's TimeoutStartSec (systemd/sec7669-orchestrator."
+            "service) are both raised to comfortably exceed it -- both have "
+            "been. Drop to basic only for time-sensitive/urgent drafting, or "
+            "if either of those two ceilings is ever lowered back down."
         ),
     )
 

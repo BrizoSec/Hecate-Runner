@@ -18,7 +18,11 @@ EnvironmentFile=/home/chemch/sec7669/.env
 # If uv isn't on PATH for the service user, use the absolute path from `which uv`.
 ExecStart=/home/chemch/.local/bin/uv run sec7669 run
 
-TimeoutStartSec=900
+# research_depth now defaults to "advanced" (~15-20 min for `athf research
+# new` alone, see config.py's research_depth/llm_timeout_sec). 900s (15 min)
+# was tight enough to kill an advanced run mid-flight; 1800s (30 min) leaves
+# headroom above that ceiling plus the hypothesis-generator call after it.
+TimeoutStartSec=1800
 StandardOutput=append:/home/chemch/agentic-threat-hunting-framework/logs/orchestrator.log
 StandardError=append:/home/chemch/agentic-threat-hunting-framework/logs/orchestrator.log
 

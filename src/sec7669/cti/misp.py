@@ -152,7 +152,7 @@ class MispProvider(CTIProvider):
 
     def next_item(self) -> CTIItem | None:
         cursor = MispCursorState.load(self.cursor_file)
-        events = self._fetch_events_since(cursor.last_timestamp or None)
+        events = self._fetch_events_since(self._effective_since_timestamp(cursor.last_timestamp))
         candidate = self._pick_oldest_unrouted(events, cursor)
         if candidate is None:
             log.debug("No new high-signal MISP events since %s", cursor.last_timestamp or "(beginning)")
@@ -170,6 +170,27 @@ class MispProvider(CTIProvider):
         cursor.save(self.cursor_file)
 
     # --- Internal --------------------------------------------------------------
+
+    def _effective_since_timestamp(self, cursor_timestamp: str) -> str:
+        """Floor the query's lower bound at ``max_event_age_days`` even on a
+        fresh (empty) cursor.
+
+        Without this, a MISP instance with any backlog of already-stale
+        events (e.g. default bootstrap sample data, or feeds fetched for
+        the first time after months of being disabled) starves the poll:
+        ``order: timestamp ASC`` + a small ``page_limit`` means the oldest
+        page is filled entirely with events ``_is_high_signal`` will reject
+        as stale anyway, and genuinely fresh candidates -- sorted after
+        that entire backlog -- are never reached. Applying the same
+        freshness cutoff server-side guarantees the fetched page can
+        actually contain a routable candidate.
+        """
+        cutoff_epoch = int((datetime.now(UTC) - timedelta(days=self.max_event_age_days)).timestamp())
+        try:
+            cursor_epoch = int(cursor_timestamp) if cursor_timestamp else 0
+        except ValueError:
+            cursor_epoch = 0
+        return str(max(cursor_epoch, cutoff_epoch))
 
     def _fetch_events_since(self, timestamp_since: str | None) -> list[dict[str, Any]]:
         url = f"{self.base_url}{EVENTS_RESTSEARCH_PATH}"
@@ -301,6 +322,7 @@ def _extract_techniques(event: dict[str, Any]) -> list[str]:
 def _event_to_cti_item(base_url: str, event: dict[str, Any]) -> CTIItem:
     timestamp = str(event.get("timestamp", ""))
     received_at = _event_datetime(event) or datetime.now(UTC)
+    event_id = str(event.get("id", ""))
     return CTIItem(
         content=_event_to_blurb(base_url, event),
         source="misp",
@@ -308,10 +330,12 @@ def _event_to_cti_item(base_url: str, event: dict[str, Any]) -> CTIItem:
         identifier=str(event.get("uuid", "")),
         metadata={
             "event_uuid": str(event.get("uuid", "")),
-            "event_id": str(event.get("id", "")),
+            "event_id": event_id,
             "event_timestamp": timestamp,
             "event_info": event.get("info", ""),
         },
+        title=str(event.get("info") or ""),
+        source_url=f"{base_url}/events/view/{event_id}" if event_id else "",
     )
 
 
