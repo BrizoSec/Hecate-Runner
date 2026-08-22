@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -73,14 +74,15 @@ def otx_settings(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> Setting
 
 @pytest.fixture
 def sample_otx_pulse() -> dict[str, Any]:
+    recent = (datetime.now(UTC) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S.%f")
     return {
         "id": "pulse-1",
         "name": "APT41 credential access campaign",
         "adversary": "APT41",
         "tags": ["apt41", "china"],
         "description": "Observed dumping LSASS via comsvcs.dll on compromised hosts.",
-        "created": "2026-07-01T00:00:00.000000",
-        "modified": "2026-07-01T00:00:00.000000",
+        "created": recent,
+        "modified": recent,
         "TLP": "white",
         "public": 1,
         "attack_ids": [{"id": "T1003.001", "name": "LSASS Memory"}],

@@ -15,7 +15,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ATHF_WORKSPACE", "/tmp/athf")
 
     s = Settings(_env_file=None)  # type: ignore[call-arg]
-    assert s.athf_workspace == Path("/tmp/athf")
+    assert s.athf_workspace == Path("/tmp/athf").resolve()
     assert s.max_drafts_per_day == 4
     assert s.cti_provider == "file"
     assert s.log_level == "INFO"
