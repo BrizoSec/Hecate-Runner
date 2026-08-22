@@ -1,6 +1,6 @@
 [Unit]
 Description=Poll AlienVault OTX for new pulses every hour
-Requires=sec7669-otx-poller.service
+Requires=hecate-runner-otx-poller.service
 
 [Timer]
 # Fire 5 minutes after boot, then hourly. Kept independent of the
@@ -9,7 +9,7 @@ Requires=sec7669-otx-poller.service
 OnBootSec=5min
 OnUnitActiveSec=1h
 Persistent=true
-Unit=sec7669-otx-poller.service
+Unit=hecate-runner-otx-poller.service
 
 [Install]
 WantedBy=timers.target

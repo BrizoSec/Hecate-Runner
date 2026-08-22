@@ -1,17 +1,17 @@
 """Typer-based CLI entry point.
 
 Commands:
-    sec7669 run           Execute one orchestrator cycle
-    sec7669 status        Print state, quota, config summary
-    sec7669 config        Dump effective config (redacts secrets)
-    sec7669 doctor        Sanity-check the deployment
-    sec7669 otx-poll      Route one high-signal OTX pulse into the CTI queue
-    sec7669 rss-poll      Route one high-signal RSS/Atom entry into the CTI queue
-    sec7669 misp-poll     Route one high-signal MISP event into the CTI queue
-    sec7669 propose       Stage a bounded query for a hunt, pending approval
-    sec7669 pending       List queries awaiting approval
-    sec7669 approve       Execute a previously proposed, guardrail-passed query
-    sec7669 reject        Discard a proposed query without executing it
+    hecate-runner run           Execute one orchestrator cycle
+    hecate-runner status        Print state, quota, config summary
+    hecate-runner config        Dump effective config (redacts secrets)
+    hecate-runner doctor        Sanity-check the deployment
+    hecate-runner otx-poll      Route one high-signal OTX pulse into the CTI queue
+    hecate-runner rss-poll      Route one high-signal RSS/Atom entry into the CTI queue
+    hecate-runner misp-poll     Route one high-signal MISP event into the CTI queue
+    hecate-runner propose       Stage a bounded query for a hunt, pending approval
+    hecate-runner pending       List queries awaiting approval
+    hecate-runner approve       Execute a previously proposed, guardrail-passed query
+    hecate-runner reject        Discard a proposed query without executing it
 """
 
 from __future__ import annotations
@@ -28,18 +28,18 @@ from dotenv import dotenv_values
 from rich.console import Console
 from rich.table import Table
 
-from sec7669 import __version__
-from sec7669.config import Settings
-from sec7669.misp_poller import run_misp_poll
-from sec7669.orchestrator import build_default_orchestrator
-from sec7669.otx_poller import run_otx_poll
-from sec7669.query_execution import ProposedQuery, get_provider, validate_guardrails
-from sec7669.query_store import PendingQueryStore
-from sec7669.rss_poller import run_rss_poll
-from sec7669.state import OrchestratorState
+from hecate_runner import __version__
+from hecate_runner.config import Settings
+from hecate_runner.misp_poller import run_misp_poll
+from hecate_runner.orchestrator import build_default_orchestrator
+from hecate_runner.otx_poller import run_otx_poll
+from hecate_runner.query_execution import ProposedQuery, get_provider, validate_guardrails
+from hecate_runner.query_store import PendingQueryStore
+from hecate_runner.rss_poller import run_rss_poll
+from hecate_runner.state import OrchestratorState
 
 app = typer.Typer(
-    name="sec7669",
+    name="hecate-runner",
     help="Autonomous hunt draft orchestrator for ATHF.",
     no_args_is_help=True,
     add_completion=False,
@@ -163,7 +163,7 @@ def propose(
     """Stage a bounded query for a hunt. Rejected outright if it violates guardrails.
 
     This does not execute anything — it only stages a proposal for
-    `sec7669 approve` to run later. Nothing here writes queries for you;
+    `hecate-runner approve` to run later. Nothing here writes queries for you;
     you (or, in the future, a separately-evaluated agent) provide the query
     text.
     """
@@ -192,7 +192,7 @@ def propose(
     path = store.save(proposed)
     console.print(f"[green]✓[/green] Proposed query staged for {hunt_id} at {path}")
     console.print(f"  Data source: {data_source}  |  Time range: {time_range_days}d  |  Limit: {limit}")
-    console.print(f"\nRun [bold]sec7669 approve {hunt_id}[/bold] to execute, or [bold]sec7669 reject {hunt_id}[/bold] to discard.")
+    console.print(f"\nRun [bold]hecate-runner approve {hunt_id}[/bold] to execute, or [bold]hecate-runner reject {hunt_id}[/bold] to discard.")
 
 
 @app.command()
@@ -227,7 +227,7 @@ def approve(
 
     Re-validates guardrails before executing — defense in depth in case the
     staged file was hand-edited or the configured ceilings changed since
-    `propose` ran. This is the one command in sec7669 that can touch a real
+    `propose` ran. This is the one command in hecate-runner that can touch a real
     system when SEC7669_QUERY_PROVIDER is set to a real backend; it's the
     deliberate human checkpoint the rest of the pipeline is built around.
     """
@@ -237,7 +237,7 @@ def approve(
     proposed = store.load(hunt_id)
 
     if proposed is None:
-        console.print(f"[red]No pending query for {hunt_id}.[/red] Run `sec7669 pending` to see what's staged.")
+        console.print(f"[red]No pending query for {hunt_id}.[/red] Run `hecate-runner pending` to see what's staged.")
         raise typer.Exit(code=1)
 
     violations = validate_guardrails(
@@ -249,7 +249,7 @@ def approve(
         console.print(f"[red]Refusing to execute — {len(violations)} guardrail violation(s) on re-check:[/red]")
         for v in violations:
             console.print(f"  [red]✗[/red] {v}")
-        console.print("[dim]Left staged — fix and re-propose, or `sec7669 reject` to discard.[/dim]")
+        console.print("[dim]Left staged — fix and re-propose, or `hecate-runner reject` to discard.[/dim]")
         raise typer.Exit(code=1)
 
     console.print(f"[bold]Hunt:[/bold] {proposed.hunt_id}")
@@ -276,7 +276,7 @@ def approve(
     if result.ok:
         store.remove(hunt_id)
     else:
-        console.print("[dim]Left staged since execution failed — retry with `sec7669 approve` once fixed.[/dim]")
+        console.print("[dim]Left staged since execution failed — retry with `hecate-runner approve` once fixed.[/dim]")
 
     raise typer.Exit(code=0 if result.ok else 1)
 
@@ -305,7 +305,7 @@ def status() -> None:
     settings = Settings()  # type: ignore[call-arg]
     state = OrchestratorState.load(settings.state_file)
 
-    table = Table(title="sec7669 status", show_header=False)
+    table = Table(title="hecate-runner status", show_header=False)
     table.add_column("key", style="cyan")
     table.add_column("value")
 
@@ -432,11 +432,11 @@ def doctor() -> None:
             _env_key_available(settings, "SPLUNK_HOST") and _env_key_available(settings, "SPLUNK_TOKEN"),
             "SPLUNK_HOST / SPLUNK_TOKEN set (required for SEC7669_QUERY_PROVIDER=splunk)",
             "Set both in the ATHF workspace .env — see `athf splunk test` to verify connectivity "
-            "before running `sec7669 approve` against it.",
+            "before running `hecate-runner approve` against it.",
         )
     else:
         console.print(
-            f"[dim]i Query provider is '{settings.query_provider}' — `sec7669 approve` cannot touch a real "
+            f"[dim]i Query provider is '{settings.query_provider}' — `hecate-runner approve` cannot touch a real "
             "system yet. Set SEC7669_QUERY_PROVIDER=splunk once real access exists.[/dim]"
         )
 
@@ -453,8 +453,8 @@ def _env_key_available(settings: Settings, key_name: str) -> bool:
     """Check both places an ATHF-subprocess-only env var could actually be set.
 
     ``athf``'s own CLI calls ``load_dotenv()`` from its cwd (the ATHF
-    workspace) independently of whatever env sec7669 was started with — so
-    a key being absent from sec7669's own process env doesn't mean the athf
+    workspace) independently of whatever env hecate-runner was started with — so
+    a key being absent from hecate-runner's own process env doesn't mean the athf
     subprocess won't see it; it may already be set in the workspace's own
     .env file.
     """

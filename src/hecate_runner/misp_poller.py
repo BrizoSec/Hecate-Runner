@@ -17,8 +17,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from sec7669.config import Settings
-from sec7669.cti.misp import MispError, MispProvider
+from hecate_runner.config import Settings
+from hecate_runner.cti.misp import MispError, MispProvider
 
 log = logging.getLogger(__name__)
 

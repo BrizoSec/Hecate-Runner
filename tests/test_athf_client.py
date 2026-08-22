@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from sec7669.athf_client import AthfClient, AthfError, TechniqueMetadata
+from hecate_runner.athf_client import AthfClient, AthfError, TechniqueMetadata
 
 # Real `athf research new --output json` prints a human-readable progress
 # banner to stdout *before* the JSON payload, even in JSON mode — the parser

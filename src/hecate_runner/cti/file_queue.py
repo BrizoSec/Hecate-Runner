@@ -14,7 +14,7 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sec7669.cti.base import CTIItem, CTIProvider
+from hecate_runner.cti.base import CTIItem, CTIProvider
 
 log = logging.getLogger(__name__)
 

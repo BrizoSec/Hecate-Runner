@@ -15,8 +15,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from sec7669.config import Settings
-from sec7669.cti.otx import OtxError, OtxProvider
+from hecate_runner.config import Settings
+from hecate_runner.cti.otx import OtxError, OtxProvider
 
 log = logging.getLogger(__name__)
 

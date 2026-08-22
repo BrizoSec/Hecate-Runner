@@ -1,5 +1,5 @@
 [project]
-name = "sec7669"
+name = "hecate-runner"
 version = "0.1.0"
 description = "Autonomous hunt draft orchestrator for the Nebulock Agentic Threat Hunting Framework (ATHF)"
 readme = "README.md"
@@ -40,19 +40,19 @@ dev = [
 ]
 
 [project.scripts]
-sec7669 = "sec7669.cli:app"
+hecate-runner = "hecate_runner.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/BrizoSec/sec7669"
-Repository = "https://github.com/BrizoSec/sec7669"
-Issues = "https://github.com/BrizoSec/sec7669/issues"
+Homepage = "https://github.com/Nebulock-Inc/hecate-runner"
+Repository = "https://github.com/Nebulock-Inc/hecate-runner"
+Issues = "https://github.com/Nebulock-Inc/hecate-runner/issues"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sec7669"]
+packages = ["src/hecate_runner"]
 
 # --- uv ------------------------------------------------------------------
 [tool.uv]
@@ -98,7 +98,7 @@ no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_return_any = true
-files = ["src/sec7669"]
+files = ["src/hecate_runner"]
 
 [[tool.mypy.overrides]]
 module = "tests.*"
@@ -117,14 +117,14 @@ addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
-    "--cov=sec7669",
+    "--cov=hecate_runner",
     "--cov-report=term-missing",
     "--cov-report=xml",
 ]
 
 [tool.coverage.run]
 branch = true
-source = ["src/sec7669"]
+source = ["src/hecate_runner"]
 
 [tool.coverage.report]
 exclude_lines = [

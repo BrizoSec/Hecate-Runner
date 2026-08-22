@@ -1,4 +1,4 @@
-"""Tests for standalone helper functions in sec7669.cli.
+"""Tests for standalone helper functions in hecate-runner.cli.
 
 Full command coverage for cli.py (Typer app) isn't attempted here — this only
 covers the pure-function helpers that have real branching logic worth
@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from sec7669.cli import _tavily_key_available
-from sec7669.config import Settings
+from hecate_runner.cli import _tavily_key_available
+from hecate_runner.config import Settings
 
 
 def test_tavily_key_from_process_env(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:

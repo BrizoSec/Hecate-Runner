@@ -7,10 +7,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sec7669.athf_client import AthfClient, AthfError, HypothesisResult, ResearchResult, TechniqueMetadata
-from sec7669.config import Settings
-from sec7669.cti import FileQueueProvider
-from sec7669.orchestrator import Orchestrator, derive_research_topic
+from hecate_runner.athf_client import AthfClient, AthfError, HypothesisResult, ResearchResult, TechniqueMetadata
+from hecate_runner.config import Settings
+from hecate_runner.cti import FileQueueProvider
+from hecate_runner.orchestrator import Orchestrator, derive_research_topic
 
 
 @pytest.fixture
@@ -106,7 +106,7 @@ def test_quota_enforcement(
     workspace: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SEC7669_MAX_DRAFTS_PER_DAY", "1")
+    monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "1")
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     orch = Orchestrator(
@@ -157,7 +157,7 @@ def test_write_failure_refunds_quota_and_leaves_cti_queued(
     at all -- a disk/permission error there used to propagate to the
     top-level catch-all, permanently burning a quota slot with nothing
     produced and no refund."""
-    import sec7669.orchestrator as orchestrator_module
+    import hecate_runner.orchestrator as orchestrator_module
 
     def _boom(*args: object, **kwargs: object) -> None:
         raise OSError("simulated disk failure")
@@ -236,7 +236,7 @@ def test_research_disabled_skips_research_call(
     mock_athf: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SEC7669_RESEARCH_ENABLED", "false")
+    monkeypatch.setenv("HECATE_RUNNER_RESEARCH_ENABLED", "false")
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
@@ -270,7 +270,7 @@ def test_research_failure_aborts_cycle(
     # Quota refunded and CTI left in queue for retry, same as any other failure.
     assert (workspace / "cti_queue" / "next.txt").exists()
 
-    from sec7669.state import OrchestratorState
+    from hecate_runner.state import OrchestratorState
     state = OrchestratorState.load(settings.state_file)
     assert state.drafts_today == 0
 
@@ -522,7 +522,7 @@ def test_state_persists_across_runs(
     )
     orch.run_once()
 
-    from sec7669.state import OrchestratorState
+    from hecate_runner.state import OrchestratorState
     state = OrchestratorState.load(settings.state_file)
     assert state.drafts_today == 1
     assert state.total_drafts_ever == 1

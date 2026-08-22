@@ -7,10 +7,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sec7669 import rss_poller
-from sec7669.config import Settings
-from sec7669.cti.base import CTIItem
-from sec7669.cti.rss import RssError, RssProvider
+from hecate_runner import rss_poller
+from hecate_runner.config import Settings
+from hecate_runner.cti.base import CTIItem
+from hecate_runner.cti.rss import RssError, RssProvider
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def mock_rss_provider(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 
 def test_no_feed_urls_returns_error(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SEC7669_RSS_FEED_URLS", "")
+    monkeypatch.setenv("HECATE_RUNNER_RSS_FEED_URLS", "")
     empty_feed_settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     result = rss_poller.run_rss_poll(empty_feed_settings)

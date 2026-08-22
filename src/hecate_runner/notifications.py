@@ -11,10 +11,10 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from sec7669.config import Settings
+from hecate_runner.config import Settings
 
 if TYPE_CHECKING:
-    from sec7669.orchestrator import RunResult
+    from hecate_runner.orchestrator import RunResult
 
 log = logging.getLogger(__name__)
 

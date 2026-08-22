@@ -15,8 +15,8 @@ from typing import Any
 import httpx
 import pytest
 
-from sec7669.cti.base import CTIItem
-from sec7669.cti.misp import (
+from hecate_runner.cti.base import CTIItem
+from hecate_runner.cti.misp import (
     MispCursorState,
     MispError,
     MispProvider,

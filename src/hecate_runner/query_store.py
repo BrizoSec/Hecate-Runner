@@ -11,8 +11,8 @@ import json
 import logging
 from pathlib import Path
 
-from sec7669.atomic_write import atomic_write_text
-from sec7669.query_execution import ProposedQuery
+from hecate_runner.atomic_write import atomic_write_text
+from hecate_runner.query_execution import ProposedQuery
 
 log = logging.getLogger(__name__)
 

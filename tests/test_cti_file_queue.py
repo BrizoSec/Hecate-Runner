@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from sec7669.config import Settings
-from sec7669.cti import FileQueueProvider, MispProvider, get_provider
-from sec7669.cti.base import CTIItem
+from hecate_runner.config import Settings
+from hecate_runner.cti import FileQueueProvider, MispProvider, get_provider
+from hecate_runner.cti.base import CTIItem
 
 
 def test_returns_none_when_empty(tmp_path: Path) -> None:

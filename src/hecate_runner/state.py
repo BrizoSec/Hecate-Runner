@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sec7669.atomic_write import atomic_write_text
+from hecate_runner.atomic_write import atomic_write_text
 
 log = logging.getLogger(__name__)
 

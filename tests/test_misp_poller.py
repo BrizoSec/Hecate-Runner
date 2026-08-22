@@ -7,10 +7,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sec7669 import misp_poller
-from sec7669.config import Settings
-from sec7669.cti.base import CTIItem
-from sec7669.cti.misp import MispError, MispProvider
+from hecate_runner import misp_poller
+from hecate_runner.config import Settings
+from hecate_runner.cti.base import CTIItem
+from hecate_runner.cti.misp import MispError, MispProvider
 
 
 @pytest.fixture

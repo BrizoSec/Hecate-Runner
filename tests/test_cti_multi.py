@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from sec7669.config import Settings
-from sec7669.cti import MultiProvider, get_provider
-from sec7669.cti.base import CTIItem, CTIProvider
-from sec7669.cti.multi import MultiCursorState, MultiProviderError
+from hecate_runner.config import Settings
+from hecate_runner.cti import MultiProvider, get_provider
+from hecate_runner.cti.base import CTIItem, CTIProvider
+from hecate_runner.cti.multi import MultiCursorState, MultiProviderError
 
 
 class _FakeProvider(CTIProvider):
@@ -152,8 +152,8 @@ def test_corrupt_cursor_file_resets(tmp_path: Path) -> None:
 
 
 def test_factory_builds_multi_provider(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SEC7669_CTI_PROVIDER", "multi")
-    monkeypatch.setenv("SEC7669_CTI_MULTI_PROVIDERS", "rss,file")
+    monkeypatch.setenv("HECATE_RUNNER_CTI_PROVIDER", "multi")
+    monkeypatch.setenv("HECATE_RUNNER_CTI_MULTI_PROVIDERS", "rss,file")
     multi_settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     provider = get_provider("multi", settings=multi_settings)
@@ -162,14 +162,14 @@ def test_factory_builds_multi_provider(settings: Settings, monkeypatch: pytest.M
 
 
 def test_factory_rejects_empty_provider_list(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SEC7669_CTI_MULTI_PROVIDERS", "")
+    monkeypatch.setenv("HECATE_RUNNER_CTI_MULTI_PROVIDERS", "")
     empty_settings = Settings(_env_file=None)  # type: ignore[call-arg]
     with pytest.raises(ValueError, match="at least one provider"):
         get_provider("multi", settings=empty_settings)
 
 
 def test_factory_rejects_self_reference(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SEC7669_CTI_MULTI_PROVIDERS", "rss,multi")
+    monkeypatch.setenv("HECATE_RUNNER_CTI_MULTI_PROVIDERS", "rss,multi")
     settings_with_self = Settings(_env_file=None)  # type: ignore[call-arg]
     with pytest.raises(ValueError, match="cannot include 'multi'"):
         get_provider("multi", settings=settings_with_self)

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sec7669.query_execution import ProposedQuery
-from sec7669.query_store import PendingQueryStore
+from hecate_runner.query_execution import ProposedQuery
+from hecate_runner.query_store import PendingQueryStore
 
 
 def _query(hunt_id: str = "H-0001") -> ProposedQuery:

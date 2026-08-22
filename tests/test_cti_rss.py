@@ -10,8 +10,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from sec7669.cti.base import CTIItem
-from sec7669.cti.rss import (
+from hecate_runner.cti.base import CTIItem
+from hecate_runner.cti.rss import (
     RssCursorState,
     RssError,
     RssProvider,

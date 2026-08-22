@@ -1,6 +1,6 @@
 [Unit]
-Description=sec7669 - RSS/Atom CTI poller
-Documentation=https://github.com/BrizoSec/sec7669
+Description=hecate-runner - RSS/Atom CTI poller
+Documentation=https://github.com/Nebulock-Inc/hecate-runner
 After=network-online.target
 Wants=network-online.target
 
@@ -8,14 +8,14 @@ Wants=network-online.target
 Type=oneshot
 User=chemch
 Group=chemch
-WorkingDirectory=/home/chemch/sec7669
+WorkingDirectory=/home/chemch/hecate-runner
 
 # Read env from the .env file inside the repo. Keep secrets out of the unit.
-EnvironmentFile=/home/chemch/sec7669/.env
+EnvironmentFile=/home/chemch/hecate-runner/.env
 
 # Run via uv so we always execute inside the project venv.
 # If uv isn't on PATH for the service user, use the absolute path from `which uv`.
-ExecStart=/home/chemch/.local/bin/uv run sec7669 rss-poll
+ExecStart=/home/chemch/.local/bin/uv run hecate-runner rss-poll
 
 TimeoutStartSec=120
 StandardOutput=append:/home/chemch/agentic-threat-hunting-framework/logs/orchestrator.log
@@ -26,7 +26,7 @@ StandardError=append:/home/chemch/agentic-threat-hunting-framework/logs/orchestr
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/home/chemch/agentic-threat-hunting-framework /home/chemch/sec7669
+ReadWritePaths=/home/chemch/agentic-threat-hunting-framework /home/chemch/hecate-runner
 
 [Install]
 WantedBy=multi-user.target

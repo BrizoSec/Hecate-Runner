@@ -1,4 +1,4 @@
-"""Tests for sec7669.config.Settings."""
+"""Tests for hecate-runner.config.Settings."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from sec7669.config import Settings
+from hecate_runner.config import Settings
 
 
 def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -38,7 +38,7 @@ def test_env_for_athf(settings: Settings) -> None:
 
 def test_max_drafts_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ATHF_WORKSPACE", "/tmp/athf")
-    monkeypatch.setenv("SEC7669_MAX_DRAFTS_PER_DAY", "0")
+    monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "0")
     with pytest.raises(Exception):
         Settings(_env_file=None)  # type: ignore[call-arg]
 
@@ -52,7 +52,7 @@ def test_workspace_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_redacted_dict_masks_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ATHF_WORKSPACE", "/tmp/athf")
     monkeypatch.setenv("OTX_API_KEY", "super-secret-otx-key")
-    monkeypatch.setenv("SEC7669_SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/super/secret/path")
+    monkeypatch.setenv("HECATE_RUNNER_SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/super/secret/path")
     s = Settings(_env_file=None)  # type: ignore[call-arg]
 
     dumped = s.redacted_dict()

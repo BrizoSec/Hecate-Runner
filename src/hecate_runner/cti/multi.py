@@ -23,8 +23,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from sec7669.atomic_write import atomic_write_text
-from sec7669.cti.base import CTIItem, CTIProvider
+from hecate_runner.atomic_write import atomic_write_text
+from hecate_runner.cti.base import CTIItem, CTIProvider
 
 log = logging.getLogger(__name__)
 

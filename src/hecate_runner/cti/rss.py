@@ -42,12 +42,12 @@ from typing import Any
 import feedparser
 import httpx
 
-from sec7669.atomic_write import atomic_write_text
-from sec7669.cti.base import CTIItem, CTIProvider
+from hecate_runner.atomic_write import atomic_write_text
+from hecate_runner.cti.base import CTIItem, CTIProvider
 
 log = logging.getLogger(__name__)
 
-REQUEST_USER_AGENT = "sec7669-cti-poller/1.0 (+https://github.com/BrizoSec/sec7669)"
+REQUEST_USER_AGENT = "hecate-runner-cti-poller/1.0 (+https://github.com/BrizoSec/hecate-runner)"
 
 # Same pattern used in orchestrator.derive_research_topic — kept separate
 # rather than imported to avoid a cti/ -> orchestrator dependency cycle.

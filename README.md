@@ -1,19 +1,19 @@
-# sec7669
+# hecate-runner
 
 Autonomous hunt draft orchestrator for the [Nebulock Agentic Threat Hunting Framework (ATHF)](https://github.com/Nebulock-Inc/agentic-threat-hunting-framework).
 
-`sec7669` sits on top of ATHF and turns it into a persistent, 24/7 hunting loop:
+`hecate-runner` sits on top of ATHF and turns it into a persistent, 24/7 hunting loop:
 
 1. Pulls fresh CTI from a configured source (file queue, AlienVault OTX, RSS/Atom feeds, or MISP)
 2. Calls the ATHF `hypothesis-generator` agent (which uses a local Ollama-served LLM)
 3. Writes structured draft hunt records into your ATHF workspace
 4. Never auto-executes queries — a human proposes a bounded query and separately approves running it (see [Query execution](#query-execution-propose-dont-run) below); nothing runs unattended
 
-Runs as a systemd timer on a hunting host, or manually via `sec7669 run`.
+Runs as a systemd timer on a hunting host, or manually via `hecate-runner run`.
 
 ## Design principles
 
-- **Read-context, not hard dependency on ATHF.** `sec7669` shells out to the `athf` CLI; it does not import ATHF as a library. ATHF and `sec7669` version independently.
+- **Read-context, not hard dependency on ATHF.** `hecate-runner` shells out to the `athf` CLI; it does not import ATHF as a library. ATHF and `hecate-runner` version independently.
 - **Human-in-the-loop by default.** Every generated hunt is `status: planning` with a "review required" banner. Nothing auto-executes.
 - **Guardrails first.** Daily draft quotas, hard timeouts on LLM calls, structured logs, per-run state persistence.
 - **Testable in isolation.** No network, no LLM, no ATHF required to run unit tests locally.
@@ -25,7 +25,7 @@ Runs as a systemd timer on a hunting host, or manually via `sec7669 run`.
                                 |
                                 v
 +------------------+     +--------------+     +----------------------+     +----------------+
-| systemd timer    | --> | sec7669 run  | --> | athf research new    | --> | Ollama (local) |
+| systemd timer    | --> | hecate-runner run  | --> | athf research new    | --> | Ollama (local) |
 | every 6h + boot  |     | (this repo)  |     | (5-skill, web-search  |     | qwen2.5:14b    |
 +------------------+     +--------------+     | grounded via Tavily)  |     +----------------+
                                 |              +----------------------+
@@ -47,18 +47,18 @@ Research grounding runs before hypothesis generation on every cycle by default (
 
 ## Query execution: propose, don't run
 
-A draft hunt's CHECK section still says "sec7669 DOES NOT auto-generate queries" — that hasn't changed, and won't until query *authoring* has its own eval-backed accuracy check the way hypothesis generation now does. What's new is a bounded bridge for the query a *human* writes, so running it doesn't mean dropping to a raw SIEM CLI:
+A draft hunt's CHECK section still says "hecate-runner DOES NOT auto-generate queries" — that hasn't changed, and won't until query *authoring* has its own eval-backed accuracy check the way hypothesis generation now does. What's new is a bounded bridge for the query a *human* writes, so running it doesn't mean dropping to a raw SIEM CLI:
 
 ```
-sec7669 propose H-0016 --query '...' --data-source splunk \
+hecate-runner propose H-0016 --query '...' --data-source splunk \
   --time-range-days 7 --limit 100 --justification '...'
     |
     v   guardrails checked (time range, result limit, non-empty) -- reject outright if violated
 .pending_queries/H-0016.json
     |
-    v   sec7669 pending          (see what's staged)
-    v   sec7669 approve H-0016   (re-checks guardrails, prompts to confirm, then executes)
-    v   sec7669 reject H-0016    (discard without running)
+    v   hecate-runner pending          (see what's staged)
+    v   hecate-runner approve H-0016   (re-checks guardrails, prompts to confirm, then executes)
+    v   hecate-runner reject H-0016    (discard without running)
     |
     v
 QueryProvider.execute()  -->  mock (default) | splunk (shells out to `athf splunk search`)
@@ -66,14 +66,14 @@ QueryProvider.execute()  -->  mock (default) | splunk (shells out to `athf splun
 
 Guardrails (`SEC7669_MAX_QUERY_TIME_RANGE_DAYS`, default 7; `SEC7669_MAX_QUERY_LIMIT`, default 1000) mirror ATHF's own `AGENTS.md` Query Guardrails section, and are re-checked at `approve` time, not just at `propose` time — if the staged file was hand-edited or the ceilings changed in between, `approve` refuses rather than trusting the earlier check.
 
-**`SEC7669_QUERY_PROVIDER=mock` is the default and, as of this writing, the only backend that's actually been run.** There is no live Splunk instance in this environment to validate `SplunkQueryProvider` against yet — it shells out to `athf splunk search` (same subprocess pattern as `AthfClient`) and is unit-tested against a fake `athf` binary, but nothing here has touched a real SIEM. Treat it as ready-to-wire, not proven, until it has. Switching from mock to a real backend is meant to be a config change (`SEC7669_QUERY_PROVIDER=splunk` + `SPLUNK_HOST`/`SPLUNK_TOKEN` in the ATHF workspace `.env`), not new code — `sec7669 doctor` checks for both when the provider is set to `splunk`.
+**`SEC7669_QUERY_PROVIDER=mock` is the default and, as of this writing, the only backend that's actually been run.** There is no live Splunk instance in this environment to validate `SplunkQueryProvider` against yet — it shells out to `athf splunk search` (same subprocess pattern as `AthfClient`) and is unit-tested against a fake `athf` binary, but nothing here has touched a real SIEM. Treat it as ready-to-wire, not proven, until it has. Switching from mock to a real backend is meant to be a config change (`SEC7669_QUERY_PROVIDER=splunk` + `SPLUNK_HOST`/`SPLUNK_TOKEN` in the ATHF workspace `.env`), not new code — `hecate-runner doctor` checks for both when the provider is set to `splunk`.
 
 ## Quickstart (local dev)
 
 ```bash
 # Clone
-git clone https://github.com/BrizoSec/sec7669.git
-cd sec7669
+git clone https://github.com/BrizoSec/hecate-runner.git
+cd hecate-runner
 
 # uv installs Python + venv + deps in one shot
 uv sync --dev
@@ -86,10 +86,10 @@ cp .env.example .env
 uv run pytest
 
 # Preview an orchestrator cycle (uses your local ATHF workspace)
-uv run sec7669 run --dry-run
+uv run hecate-runner run --dry-run
 
 # Real run (invokes athf hypothesis-generator + writes a draft hunt)
-uv run sec7669 run
+uv run hecate-runner run
 ```
 
 ## Deploy to k3s-core
@@ -100,8 +100,8 @@ git push origin main
 
 # On k3s-core
 cd ~
-git clone https://github.com/BrizoSec/sec7669.git
-cd sec7669
+git clone https://github.com/BrizoSec/hecate-runner.git
+cd hecate-runner
 
 # Install with uv (recommended) or pip
 uv sync
@@ -115,26 +115,26 @@ sudo ./scripts/install-systemd.sh
 
 # Prime a CTI blurb and force a run
 echo "APT actor X observed using T1053.005 scheduled tasks" > $ATHF_WORKSPACE/cti_queue/next.txt
-sudo systemctl start sec7669-orchestrator.service
+sudo systemctl start hecate-runner-orchestrator.service
 
 # Enable persistent scheduling
-sudo systemctl enable --now sec7669-orchestrator.timer
-sudo systemctl list-timers sec7669-orchestrator.timer
+sudo systemctl enable --now hecate-runner-orchestrator.timer
+sudo systemctl list-timers hecate-runner-orchestrator.timer
 ```
 
 ### Optional: AlienVault OTX CTI provider
 
-Instead of (or alongside) hand-dropping CTI into `cti_queue/next.txt`, `sec7669` can pull it from [AlienVault OTX](https://otx.alienvault.com) pulses you're subscribed to.
+Instead of (or alongside) hand-dropping CTI into `cti_queue/next.txt`, `hecate-runner` can pull it from [AlienVault OTX](https://otx.alienvault.com) pulses you're subscribed to.
 
 ```bash
 # Get a free-tier API key at https://otx.alienvault.com/settings, then:
 echo 'OTX_API_KEY=your-key-here' >> .env
 
 # One-off: route the next high-signal pulse into the CTI queue
-uv run sec7669 otx-poll
+uv run hecate-runner otx-poll
 
 # Persistent: poll hourly, independent of the orchestrator's 6h cycle
-sudo systemctl enable --now sec7669-otx-poller.timer
+sudo systemctl enable --now hecate-runner-otx-poller.timer
 ```
 
 The poller filters for high-signal pulses (TLP white/green, has a MITRE ATT&CK mapping, not older than `SEC7669_OTX_MAX_PULSE_AGE_DAYS`) and routes the oldest unrouted one into `cti_queue/next.txt`, so the existing orchestrator picks it up on its normal schedule — OTX polling frequency and hypothesis-generation frequency stay decoupled. A cursor file (`.otx_cursor_state.json` in the ATHF workspace) tracks the last pulse routed so nothing is re-ingested.
@@ -151,10 +151,10 @@ Unlike OTX, this needs no signup or credential — it polls a configured list of
 # SEC7669_RSS_FEED_URLS=https://a.example.com/feed/,https://b.example.com/feed/
 
 # One-off: route the oldest unrouted entry across all configured feeds
-uv run sec7669 rss-poll
+uv run hecate-runner rss-poll
 
 # Persistent: poll hourly, independent of the orchestrator's 6h cycle
-sudo systemctl enable --now sec7669-rss-poller.timer
+sudo systemctl enable --now hecate-runner-rss-poller.timer
 ```
 
 Unlike OTX's crowdsourced pulse firehose (filtered by TLP + ATT&CK mapping), the "high signal" filter here is mostly the curation itself — every URL in the list is a feed you picked, not an open subscription. Entries are only filtered by age (`SEC7669_RSS_MAX_ENTRY_AGE_DAYS`, default 30) and dedup (`.rss_cursor_state.json`, one cursor per feed URL). A MITRE technique ID is still extracted from the title/summary when present and included as metadata, but its absence doesn't exclude an entry.
@@ -174,10 +174,10 @@ Same dual-mode support as OTX: `SEC7669_CTI_PROVIDER=rss` pulls directly from th
 # SEC7669_MISP_VERIFY_SSL=false   # only for self-signed dev/test instances
 
 # One-off: route the oldest unrouted published event
-uv run sec7669 misp-poll
+uv run hecate-runner misp-poll
 
 # Persistent: poll hourly, independent of the orchestrator's 6h cycle
-sudo systemctl enable --now sec7669-misp-poller.timer
+sudo systemctl enable --now hecate-runner-misp-poller.timer
 ```
 
 Polls `POST /events/restSearch`, filtered to `published` events, incrementally synced via a `timestamp`-based cursor (`.misp_cursor_state.json`) the same way OTX's `modified_since` works. TLP is tag-based in MISP (`tlp:white`/`tlp:red`/etc.) rather than a dedicated field like OTX has — an event with an explicit `tlp:red` or `tlp:amber` tag is excluded, but an event with **no** TLP tag at all defaults to safe/included, matching how `OtxProvider` treats a missing TLP field. Like RSS (and unlike OTX), an event doesn't need a MITRE Galaxy/technique mapping to be considered high signal — a curated MISP instance is itself the filter. When a Galaxy cluster *is* attached, technique IDs are read from `GalaxyCluster.meta.external_id` (confirmed against MISP's own bundled ATT&CK galaxy library), with a regex fallback across tag names in case a given MISP/galaxy version omits that field.
@@ -201,12 +201,12 @@ Key ones:
 | `SEC7669_RESEARCH_ENABLED` | Run `athf research new` (web-grounded) before hypothesis generation | `true` |
 | `SEC7669_RESEARCH_DEPTH` | `basic` (~5 min) or `advanced` (~15-20 min) research depth | `basic` |
 | `SEC7669_CTI_PROVIDER` | Which CTI source to use (`file`, `otx`, `rss`, or `misp`) | `file` |
-| `OTX_API_KEY` | AlienVault OTX API key — required for `cti_provider=otx` and `sec7669 otx-poll` | — |
+| `OTX_API_KEY` | AlienVault OTX API key — required for `cti_provider=otx` and `hecate-runner otx-poll` | — |
 | `SEC7669_RSS_FEED_URLS` | Comma-separated RSS/Atom feed URLs — no API key needed | 4 verified defaults, see `.env.example` |
 | `SEC7669_RSS_MAX_ENTRY_AGE_DAYS` | Ignore RSS entries older than this | `30` |
-| `MISP_BASE_URL` / `MISP_API_KEY` | MISP instance + dedicated automation Auth key — required for `cti_provider=misp` and `sec7669 misp-poll` | — |
+| `MISP_BASE_URL` / `MISP_API_KEY` | MISP instance + dedicated automation Auth key — required for `cti_provider=misp` and `hecate-runner misp-poll` | — |
 | `SEC7669_MISP_VERIFY_SSL` | Set false only for self-signed dev/test MISP instances | `true` |
-| `SEC7669_QUERY_PROVIDER` | Backend for `sec7669 approve` (`mock` or `splunk`) — see [Query execution](#query-execution-propose-dont-run) | `mock` |
+| `SEC7669_QUERY_PROVIDER` | Backend for `hecate-runner approve` (`mock` or `splunk`) — see [Query execution](#query-execution-propose-dont-run) | `mock` |
 | `SEC7669_MAX_QUERY_TIME_RANGE_DAYS` | Hard ceiling on a proposed query's time range | `7` |
 | `SEC7669_MAX_QUERY_LIMIT` | Hard ceiling on a proposed query's result limit | `1000` |
 | `SEC7669_SLACK_WEBHOOK_URL` | Slack incoming webhook — posts on every draft creation, no-op if unset | — |
@@ -232,7 +232,7 @@ Open the folder in VS Code. Recommended extensions live in `.vscode/extensions.j
 - [x] Phase 6a: web-search grounding via TAVILY (`athf research new` wired into the orchestrator, mandatory when enabled — a research failure aborts the cycle rather than falling back to ungrounded) + model swap to qwen2.5:14b
 - [x] Phase 6b: eval harness (`athf eval` — known-answer fixtures replacing manual spot checks; found ungrounded generation scores ~30% on MITRE technique recall, which is why research grounding is mandatory-when-enabled rather than a soft fallback)
 - [x] Phase 6c: ATT&CK STIX grounding in research prompts (`athf attack lookup` fed into HuntResearcherAgent's tradecraft/telemetry/synthesis skills instead of asking the model to recall technique metadata — closed cold-recall's ~30% accuracy to 100% on the same model, per `athf eval --grounded`)
-- [~] Phase 7a: propose/approve query execution bridge (`sec7669 propose` / `pending` / `approve` / `reject`) — guardrail enforcement and the approval flow are built and tested; the `splunk` backend is unvalidated against a real instance since none exists in this environment yet. `mock` remains the default until it does. Query *authoring* is still human-only — no LLM drafts or approves a query.
+- [~] Phase 7a: propose/approve query execution bridge (`hecate-runner propose` / `pending` / `approve` / `reject`) — guardrail enforcement and the approval flow are built and tested; the `splunk` backend is unvalidated against a real instance since none exists in this environment yet. `mock` remains the default until it does. Query *authoring* is still human-only — no LLM drafts or approves a query.
 - [ ] Phase 7b: Level 3 execution — MCP connector for CrowdStrike (or whichever EDR/SIEM materializes first) so Observe queries can eventually be proposed automatically, still gated by the approval step above
 
 ## License

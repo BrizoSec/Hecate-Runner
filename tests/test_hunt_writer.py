@@ -8,8 +8,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sec7669.athf_client import HypothesisResult
-from sec7669.hunt_writer import (
+from hecate_runner.athf_client import HypothesisResult
+from hecate_runner.hunt_writer import (
     DraftHuntRequest,
     _draft_tags,
     _short_title,
@@ -47,7 +47,7 @@ def test_next_hunt_id_ignores_non_matches(tmp_path: Path) -> None:
 
 def test_hunt_id_lock_serializes_concurrent_allocation(tmp_path: Path) -> None:
     """Regression test: without hunt_id_lock, two overlapping writers (a
-    manual `sec7669 run` overlapping the hourly timer, or two cycles
+    manual `hecate-runner run` overlapping the hourly timer, or two cycles
     overlapping because one ran long) could both call next_hunt_id() before
     either had written its file, both compute the SAME H-00NN, and the
     second write would silently clobber the first draft's content with no
@@ -108,7 +108,7 @@ def test_render_draft_includes_hypothesis(sample_hypothesis: HypothesisResult) -
     assert "T1003.001" in md
     assert sample_hypothesis.hypothesis in md
     assert "APT actor X" in md
-    assert "sec7669 DOES NOT auto-generate queries" in md
+    assert "hecate-runner DOES NOT auto-generate queries" in md
 
 
 def test_render_draft_includes_research_link_when_present(

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from sec7669.atomic_write import atomic_write_text
+from hecate_runner.atomic_write import atomic_write_text
 
 
 def test_writes_content(tmp_path: Path) -> None:

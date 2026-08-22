@@ -13,7 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime configuration for the sec7669 orchestrator."""
+    """Runtime configuration for the hecate-runner orchestrator."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -40,13 +40,13 @@ class Settings(BaseSettings):
         default=4,
         ge=1,
         le=100,
-        alias="SEC7669_MAX_DRAFTS_PER_DAY",
+        alias="HECATE_RUNNER_MAX_DRAFTS_PER_DAY",
     )
     llm_timeout_sec: int = Field(
         default=1500,
         ge=30,
         le=3600,
-        alias="SEC7669_LLM_TIMEOUT_SEC",
+        alias="HECATE_RUNNER_LLM_TIMEOUT_SEC",
         description=(
             "Per-subprocess-call timeout for each `athf` invocation (research, "
             "hypothesis-generator, technique lookup). Must comfortably exceed "
@@ -55,23 +55,23 @@ class Settings(BaseSettings):
             "instead of producing a draft. 1500s (25 min) leaves headroom above "
             "advanced depth's stated ceiling; the systemd unit's own "
             "TimeoutStartSec must be raised to match (see systemd/"
-            "sec7669-orchestrator.service) since that's an outer, harder cap."
+            "hecate-runner-orchestrator.service) since that's an outer, harder cap."
         ),
     )
     cti_provider: Literal["file", "otx", "rss", "misp", "multi"] = Field(
         default="file",
-        alias="SEC7669_CTI_PROVIDER",
+        alias="HECATE_RUNNER_CTI_PROVIDER",
         description=(
             "Which CTI source to use. 'multi' fans out across the sources "
-            "listed in SEC7669_CTI_MULTI_PROVIDERS."
+            "listed in HECATE_RUNNER_CTI_MULTI_PROVIDERS."
         ),
     )
     cti_multi_providers_raw: str = Field(
         default="rss,otx,misp",
-        alias="SEC7669_CTI_MULTI_PROVIDERS",
+        alias="HECATE_RUNNER_CTI_MULTI_PROVIDERS",
         description=(
             "Comma-separated sub-provider names to combine when "
-            "SEC7669_CTI_PROVIDER=multi (from: file, otx, rss, misp — not "
+            "HECATE_RUNNER_CTI_PROVIDER=multi (from: file, otx, rss, misp — not "
             "'multi' itself). Listed order only matters for the very first "
             "cycle; after that, which source gets first pick round-robins "
             "automatically so one high-volume source can't crowd out the others."
@@ -79,18 +79,18 @@ class Settings(BaseSettings):
     )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO",
-        alias="SEC7669_LOG_LEVEL",
+        alias="HECATE_RUNNER_LOG_LEVEL",
     )
     cti_queue_dir: Path | None = Field(
         default=None,
-        alias="SEC7669_CTI_QUEUE_DIR",
+        alias="HECATE_RUNNER_CTI_QUEUE_DIR",
         description="CTI queue directory. Defaults to <workspace>/cti_queue.",
     )
 
     # --- Research grounding (Phase 6) ---------------------------------------
     research_enabled: bool = Field(
         default=True,
-        alias="SEC7669_RESEARCH_ENABLED",
+        alias="HECATE_RUNNER_RESEARCH_ENABLED",
         description=(
             "Run `athf research new` (web-grounded 5-skill research) before "
             "hypothesis generation. When enabled, a research failure aborts "
@@ -103,12 +103,12 @@ class Settings(BaseSettings):
     )
     research_depth: Literal["basic", "advanced"] = Field(
         default="advanced",
-        alias="SEC7669_RESEARCH_DEPTH",
+        alias="HECATE_RUNNER_RESEARCH_DEPTH",
         description=(
             "basic (~5 min) or advanced (~15-20 min, full 5-skill methodology "
             "-- ATHF's own documented default). advanced is the default here "
             "too, on the condition that llm_timeout_sec (this file) and the "
-            "systemd unit's TimeoutStartSec (systemd/sec7669-orchestrator."
+            "systemd unit's TimeoutStartSec (systemd/hecate-runner-orchestrator."
             "service) are both raised to comfortably exceed it -- both have "
             "been. Drop to basic only for time-sensitive/urgent drafting, or "
             "if either of those two ceilings is ever lowered back down."
@@ -119,31 +119,31 @@ class Settings(BaseSettings):
     otx_api_key: str | None = Field(
         default=None,
         alias="OTX_API_KEY",
-        description="AlienVault OTX API key. Required for cti_provider=otx and `sec7669 otx-poll`.",
+        description="AlienVault OTX API key. Required for cti_provider=otx and `hecate-runner otx-poll`.",
     )
     otx_base_url: str = Field(
         default="https://otx.alienvault.com",
-        alias="SEC7669_OTX_BASE_URL",
+        alias="HECATE_RUNNER_OTX_BASE_URL",
     )
     otx_page_limit: int = Field(
         default=20,
         ge=1,
         le=50,
-        alias="SEC7669_OTX_PAGE_LIMIT",
+        alias="HECATE_RUNNER_OTX_PAGE_LIMIT",
         description="Pulses fetched per OTX API call.",
     )
     otx_max_pulse_age_days: int = Field(
         default=30,
         ge=1,
         le=365,
-        alias="SEC7669_OTX_MAX_PULSE_AGE_DAYS",
+        alias="HECATE_RUNNER_OTX_MAX_PULSE_AGE_DAYS",
         description="Ignore pulses created before this many days ago.",
     )
     otx_request_timeout_sec: float = Field(
         default=30.0,
         ge=5.0,
         le=120.0,
-        alias="SEC7669_OTX_REQUEST_TIMEOUT_SEC",
+        alias="HECATE_RUNNER_OTX_REQUEST_TIMEOUT_SEC",
     )
 
     # --- RSS CTI provider --------------------------------------------------
@@ -154,7 +154,7 @@ class Settings(BaseSettings):
             "https://unit42.paloaltonetworks.com/feed/,"
             "https://www.microsoft.com/en-us/security/blog/feed/"
         ),
-        alias="SEC7669_RSS_FEED_URLS",
+        alias="HECATE_RUNNER_RSS_FEED_URLS",
         description=(
             "Comma-separated RSS/Atom feed URLs. Defaults to four verified, "
             "reputable security research blogs (The DFIR Report, Talos, Unit42, "
@@ -167,14 +167,14 @@ class Settings(BaseSettings):
         default=30,
         ge=1,
         le=365,
-        alias="SEC7669_RSS_MAX_ENTRY_AGE_DAYS",
+        alias="HECATE_RUNNER_RSS_MAX_ENTRY_AGE_DAYS",
         description="Ignore entries published before this many days ago.",
     )
     rss_request_timeout_sec: float = Field(
         default=30.0,
         ge=5.0,
         le=120.0,
-        alias="SEC7669_RSS_REQUEST_TIMEOUT_SEC",
+        alias="HECATE_RUNNER_RSS_REQUEST_TIMEOUT_SEC",
     )
 
     # --- MISP CTI provider ---------------------------------------------------
@@ -187,47 +187,47 @@ class Settings(BaseSettings):
         default=None,
         alias="MISP_API_KEY",
         description=(
-            "MISP Auth key. Required for cti_provider=misp and `sec7669 misp-poll`. "
+            "MISP Auth key. Required for cti_provider=misp and `hecate-runner misp-poll`. "
             "Use a dedicated automation key, not a personal user's key."
         ),
     )
     misp_verify_ssl: bool = Field(
         default=True,
-        alias="SEC7669_MISP_VERIFY_SSL",
+        alias="HECATE_RUNNER_MISP_VERIFY_SSL",
         description="Set to false only for self-signed dev/test instances (e.g. a local misp-docker deployment).",
     )
     misp_max_event_age_days: int = Field(
         default=30,
         ge=1,
         le=365,
-        alias="SEC7669_MISP_MAX_EVENT_AGE_DAYS",
+        alias="HECATE_RUNNER_MISP_MAX_EVENT_AGE_DAYS",
         description="Ignore events published before this many days ago.",
     )
     misp_page_limit: int = Field(
         default=20,
         ge=1,
         le=100,
-        alias="SEC7669_MISP_PAGE_LIMIT",
+        alias="HECATE_RUNNER_MISP_PAGE_LIMIT",
         description="Events fetched per restSearch call.",
     )
     misp_request_timeout_sec: float = Field(
         default=30.0,
         ge=5.0,
         le=120.0,
-        alias="SEC7669_MISP_REQUEST_TIMEOUT_SEC",
+        alias="HECATE_RUNNER_MISP_REQUEST_TIMEOUT_SEC",
     )
 
     # --- Notifications --------------------------------------------------------
     slack_webhook_url: str | None = Field(
         default=None,
-        alias="SEC7669_SLACK_WEBHOOK_URL",
+        alias="HECATE_RUNNER_SLACK_WEBHOOK_URL",
         description=(
             "Slack incoming webhook URL. When set, posts a message whenever "
             "the orchestrator creates a draft hunt. Unset = no-op, not an error."
         ),
     )
 
-    # Field names whose values must never appear in `sec7669 config` output —
+    # Field names whose values must never appear in `hecate-runner config` output —
     # anyone holding the raw webhook URL can post into the channel, same as
     # an API key.
     _SENSITIVE_FIELDS: ClassVar[set[str]] = {"otx_api_key", "slack_webhook_url", "misp_api_key"}
@@ -235,9 +235,9 @@ class Settings(BaseSettings):
     # --- Query execution ("propose, don't run") --------------------------------
     query_provider: Literal["mock", "splunk"] = Field(
         default="mock",
-        alias="SEC7669_QUERY_PROVIDER",
+        alias="HECATE_RUNNER_QUERY_PROVIDER",
         description=(
-            "Backend for `sec7669 approve`. 'mock' touches nothing real — the "
+            "Backend for `hecate-runner approve`. 'mock' touches nothing real — the "
             "default until real data-source access is configured. 'splunk' "
             "shells out to `athf splunk search` (requires SPLUNK_HOST/SPLUNK_TOKEN "
             "in the ATHF workspace)."
@@ -247,14 +247,14 @@ class Settings(BaseSettings):
         default=7,
         ge=1,
         le=30,
-        alias="SEC7669_MAX_QUERY_TIME_RANGE_DAYS",
+        alias="HECATE_RUNNER_MAX_QUERY_TIME_RANGE_DAYS",
         description="Hard ceiling on a proposed query's time range. Matches AGENTS.md's Query Guardrails.",
     )
     max_query_limit: int = Field(
         default=1000,
         ge=1,
         le=10000,
-        alias="SEC7669_MAX_QUERY_LIMIT",
+        alias="HECATE_RUNNER_MAX_QUERY_LIMIT",
         description="Hard ceiling on a proposed query's result limit. Matches AGENTS.md's Query Guardrails.",
     )
 
@@ -298,7 +298,7 @@ class Settings(BaseSettings):
 
     @property
     def rss_feed_urls(self) -> list[str]:
-        """Parsed, whitespace-trimmed feed URL list from SEC7669_RSS_FEED_URLS."""
+        """Parsed, whitespace-trimmed feed URL list from HECATE_RUNNER_RSS_FEED_URLS."""
         return [url.strip() for url in self.rss_feed_urls_raw.split(",") if url.strip()]
 
     @property
@@ -307,7 +307,7 @@ class Settings(BaseSettings):
 
     @property
     def cti_multi_provider_names(self) -> list[str]:
-        """Parsed, whitespace-trimmed sub-provider list from SEC7669_CTI_MULTI_PROVIDERS."""
+        """Parsed, whitespace-trimmed sub-provider list from HECATE_RUNNER_CTI_MULTI_PROVIDERS."""
         return [name.strip() for name in self.cti_multi_providers_raw.split(",") if name.strip()]
 
     @property

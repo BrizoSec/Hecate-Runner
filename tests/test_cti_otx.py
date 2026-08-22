@@ -9,8 +9,8 @@ from typing import Any
 import httpx
 import pytest
 
-from sec7669.cti.base import CTIItem
-from sec7669.cti.otx import (
+from hecate_runner.cti.base import CTIItem
+from hecate_runner.cti.otx import (
     OtxCursorState,
     OtxError,
     OtxProvider,

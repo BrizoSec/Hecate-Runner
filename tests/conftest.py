@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from sec7669.athf_client import AthfClient, HypothesisResult, ResearchResult
-from sec7669.config import Settings
-from sec7669.cti import FileQueueProvider
+from hecate_runner.athf_client import AthfClient, HypothesisResult, ResearchResult
+from hecate_runner.config import Settings
+from hecate_runner.cti import FileQueueProvider
 
 
 @pytest.fixture
@@ -36,31 +36,31 @@ def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Setti
     for var in [
         "ATHF_WORKSPACE",
         "ATHF_BIN",
-        "SEC7669_MAX_DRAFTS_PER_DAY",
-        "SEC7669_LLM_TIMEOUT_SEC",
-        "SEC7669_CTI_PROVIDER",
-        "SEC7669_CTI_MULTI_PROVIDERS",
-        "SEC7669_LOG_LEVEL",
-        "SEC7669_CTI_QUEUE_DIR",
+        "HECATE_RUNNER_MAX_DRAFTS_PER_DAY",
+        "HECATE_RUNNER_LLM_TIMEOUT_SEC",
+        "HECATE_RUNNER_CTI_PROVIDER",
+        "HECATE_RUNNER_CTI_MULTI_PROVIDERS",
+        "HECATE_RUNNER_LOG_LEVEL",
+        "HECATE_RUNNER_CTI_QUEUE_DIR",
         "OTX_API_KEY",
-        "SEC7669_OTX_BASE_URL",
-        "SEC7669_OTX_PAGE_LIMIT",
-        "SEC7669_OTX_MAX_PULSE_AGE_DAYS",
-        "SEC7669_OTX_REQUEST_TIMEOUT_SEC",
-        "SEC7669_RSS_FEED_URLS",
-        "SEC7669_RSS_MAX_ENTRY_AGE_DAYS",
-        "SEC7669_RSS_REQUEST_TIMEOUT_SEC",
+        "HECATE_RUNNER_OTX_BASE_URL",
+        "HECATE_RUNNER_OTX_PAGE_LIMIT",
+        "HECATE_RUNNER_OTX_MAX_PULSE_AGE_DAYS",
+        "HECATE_RUNNER_OTX_REQUEST_TIMEOUT_SEC",
+        "HECATE_RUNNER_RSS_FEED_URLS",
+        "HECATE_RUNNER_RSS_MAX_ENTRY_AGE_DAYS",
+        "HECATE_RUNNER_RSS_REQUEST_TIMEOUT_SEC",
         "MISP_BASE_URL",
         "MISP_API_KEY",
-        "SEC7669_MISP_VERIFY_SSL",
-        "SEC7669_MISP_MAX_EVENT_AGE_DAYS",
-        "SEC7669_MISP_PAGE_LIMIT",
-        "SEC7669_MISP_REQUEST_TIMEOUT_SEC",
+        "HECATE_RUNNER_MISP_VERIFY_SSL",
+        "HECATE_RUNNER_MISP_MAX_EVENT_AGE_DAYS",
+        "HECATE_RUNNER_MISP_PAGE_LIMIT",
+        "HECATE_RUNNER_MISP_REQUEST_TIMEOUT_SEC",
     ]:
         monkeypatch.delenv(var, raising=False)
 
     monkeypatch.setenv("ATHF_WORKSPACE", str(workspace))
-    monkeypatch.setenv("SEC7669_MAX_DRAFTS_PER_DAY", "4")
+    monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "4")
 
     yield Settings(_env_file=None)  # type: ignore[call-arg]
 

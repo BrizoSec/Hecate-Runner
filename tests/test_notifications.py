@@ -7,9 +7,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from sec7669.config import Settings
-from sec7669.notifications import notify_draft_created
-from sec7669.orchestrator import RunResult
+from hecate_runner.config import Settings
+from hecate_runner.notifications import notify_draft_created
+from hecate_runner.orchestrator import RunResult
 
 
 def test_noop_when_webhook_not_configured(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,7 +90,7 @@ def test_http_failure_is_swallowed_not_raised(
 
 
 def test_invalid_url_is_swallowed_not_raised(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Regression test: a malformed SEC7669_SLACK_WEBHOOK_URL makes httpx.post
+    """Regression test: a malformed HECATE_RUNNER_SLACK_WEBHOOK_URL makes httpx.post
     itself raise httpx.InvalidURL, which inherits directly from Exception --
     NOT from httpx.HTTPError. The old `except httpx.HTTPError` didn't catch
     it, violating this module's own stated contract ("every function here

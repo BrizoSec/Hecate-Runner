@@ -7,10 +7,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sec7669 import otx_poller
-from sec7669.config import Settings
-from sec7669.cti.base import CTIItem
-from sec7669.cti.otx import OtxError, OtxProvider
+from hecate_runner import otx_poller
+from hecate_runner.config import Settings
+from hecate_runner.cti.base import CTIItem
+from hecate_runner.cti.otx import OtxError, OtxProvider
 
 
 @pytest.fixture

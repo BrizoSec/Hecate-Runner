@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sec7669.cli import app
-from sec7669.query_store import PendingQueryStore
+from hecate_runner.cli import app
+from hecate_runner.query_store import PendingQueryStore
 
 runner = CliRunner()
 
@@ -22,10 +22,10 @@ runner = CliRunner()
 @pytest.fixture
 def cli_env(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the CLI's own Settings() at the fake workspace, like `settings` does."""
-    for var in ["ATHF_WORKSPACE", "SEC7669_QUERY_PROVIDER", "SEC7669_MAX_DRAFTS_PER_DAY"]:
+    for var in ["ATHF_WORKSPACE", "HECATE_RUNNER_QUERY_PROVIDER", "HECATE_RUNNER_MAX_DRAFTS_PER_DAY"]:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("ATHF_WORKSPACE", str(workspace))
-    monkeypatch.setenv("SEC7669_MAX_DRAFTS_PER_DAY", "4")
+    monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "4")
     return workspace
 
 
@@ -79,7 +79,7 @@ def test_propose_rejects_unbounded_query(cli_env: Path) -> None:
 
 def test_pending_shows_staged_queries(cli_env: Path) -> None:
     store = PendingQueryStore(cli_env / ".pending_queries")
-    from sec7669.query_execution import ProposedQuery
+    from hecate_runner.query_execution import ProposedQuery
 
     store.save(
         ProposedQuery(
@@ -174,7 +174,7 @@ def test_approve_rechecks_guardrails_against_current_config(
     )
 
     # Tighten the ceiling after proposing but before approving.
-    monkeypatch.setenv("SEC7669_MAX_QUERY_TIME_RANGE_DAYS", "1")
+    monkeypatch.setenv("HECATE_RUNNER_MAX_QUERY_TIME_RANGE_DAYS", "1")
 
     result = runner.invoke(app, ["approve", "H-0006", "--yes"])
     assert result.exit_code == 1

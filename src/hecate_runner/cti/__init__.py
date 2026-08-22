@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from sec7669.config import Settings
-from sec7669.cti.base import CTIItem, CTIProvider
-from sec7669.cti.file_queue import FileQueueProvider
-from sec7669.cti.misp import MispProvider
-from sec7669.cti.multi import MultiProvider
-from sec7669.cti.otx import OtxProvider
-from sec7669.cti.rss import RssProvider
+from hecate_runner.config import Settings
+from hecate_runner.cti.base import CTIItem, CTIProvider
+from hecate_runner.cti.file_queue import FileQueueProvider
+from hecate_runner.cti.misp import MispProvider
+from hecate_runner.cti.multi import MultiProvider
+from hecate_runner.cti.otx import OtxProvider
+from hecate_runner.cti.rss import RssProvider
 
 __all__ = [
     "CTIItem",

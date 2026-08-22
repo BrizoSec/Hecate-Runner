@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from sec7669.query_execution import (
+from hecate_runner.query_execution import (
     MockQueryProvider,
     ProposedQuery,
     SplunkQueryProvider,

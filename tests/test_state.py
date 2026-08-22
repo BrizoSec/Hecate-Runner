@@ -1,11 +1,11 @@
-"""Tests for sec7669.state.OrchestratorState."""
+"""Tests for hecate-runner.state.OrchestratorState."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sec7669.state import OrchestratorState
+from hecate_runner.state import OrchestratorState
 
 
 def test_load_missing_file(tmp_path: Path) -> None:

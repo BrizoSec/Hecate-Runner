@@ -15,12 +15,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sec7669.athf_client import AthfClient, AthfError
-from sec7669.config import Settings
-from sec7669.cti import CTIProvider, get_provider
-from sec7669.hunt_writer import DraftHuntRequest, hunt_id_lock, next_hunt_id, write_draft
-from sec7669.notifications import notify_draft_created
-from sec7669.state import OrchestratorState
+from hecate_runner.athf_client import AthfClient, AthfError
+from hecate_runner.config import Settings
+from hecate_runner.cti import CTIProvider, get_provider
+from hecate_runner.hunt_writer import DraftHuntRequest, hunt_id_lock, next_hunt_id, write_draft
+from hecate_runner.notifications import notify_draft_created
+from hecate_runner.state import OrchestratorState
 
 log = logging.getLogger(__name__)
 
