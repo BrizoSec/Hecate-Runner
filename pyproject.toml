@@ -1,7 +1,7 @@
 [project]
 name = "hecate-runner"
 version = "0.1.0"
-description = "Autonomous hunt draft orchestrator for the Nebulock Agentic Threat Hunting Framework (ATHF)"
+description = "Autonomous Hecate Threat Hunter Runner"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
