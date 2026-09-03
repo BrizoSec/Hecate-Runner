@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,7 @@ class ResearchResult:
 
     research_id: str = ""
     recommended_hypothesis: str = ""
+    related_hunts: list[str] = field(default_factory=list)
     raw_output: str = ""
 
     @property
@@ -215,9 +217,16 @@ class AthfClient:
             log.warning("Failed to parse athf research new JSON output: %s", exc)
             return ResearchResult()
 
+        related_hunts = []
+        for source in data.get("related_work", {}).get("sources", []):
+            match = re.match(r"hunts/(H-\d+)\.md$", source.get("url", ""))
+            if match:
+                related_hunts.append(match.group(1))
+
         return ResearchResult(
             research_id=data.get("research_id", "") or "",
             recommended_hypothesis=data.get("recommended_hypothesis", "") or "",
+            related_hunts=related_hunts,
         )
 
     def _run(self, cmd: list[str], *, timeout_sec: int | None = None) -> str:

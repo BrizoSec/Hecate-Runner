@@ -195,6 +195,7 @@ class Orchestrator:
             return RunResult(outcome="dry_run", detail=item.content[:100])
 
         research_id: str | None = None
+        related_hunts: list[str] = []
         if self.settings.research_enabled:
             topic, technique = derive_research_topic(item.content, title=item.title or None)
             try:
@@ -221,6 +222,7 @@ class Orchestrator:
                 return RunResult(outcome="research_empty")
 
             research_id = research_result.research_id
+            related_hunts = research_result.related_hunts
             log.info("Research %s grounds this cycle's hypothesis", research_id)
 
         try:
@@ -256,6 +258,7 @@ class Orchestrator:
                     tactics=tactics,
                     platforms=platforms,
                     source_url=item.source_url,
+                    related_hunts=related_hunts,
                 )
                 path = write_draft(req, self.settings.hunts_root)
         except OSError as exc:

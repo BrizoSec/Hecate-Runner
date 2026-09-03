@@ -141,6 +141,34 @@ def test_render_draft_omits_research_link_when_absent(
     assert "research grounding unavailable" in md
 
 
+def test_render_draft_includes_related_hunts_when_present(
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    req = DraftHuntRequest(
+        hunt_id="H-0999",
+        threat_intel="APT actor X observed dumping LSASS.",
+        hypothesis=sample_hypothesis,
+        generated_at=datetime(2026, 7, 4, 22, 0, tzinfo=UTC),
+        research_id="R-0004",
+        related_hunts=["H-0602", "H-0578"],
+    )
+    md = render_draft(req)
+    assert 'related_hunts: ["H-0602", "H-0578"]' in md
+
+
+def test_render_draft_related_hunts_defaults_to_empty_list(
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    req = DraftHuntRequest(
+        hunt_id="H-0999",
+        threat_intel="APT actor X observed dumping LSASS.",
+        hypothesis=sample_hypothesis,
+        generated_at=datetime(2026, 7, 4, 22, 0, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert "related_hunts: []" in md
+
+
 def test_render_draft_uses_resolved_tactics_and_platforms(
     sample_hypothesis: HypothesisResult,
 ) -> None:

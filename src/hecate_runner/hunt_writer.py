@@ -31,6 +31,7 @@ class DraftHuntRequest:
     tactics: list[str] = field(default_factory=list)
     platforms: list[str] = field(default_factory=list)
     source_url: str = ""
+    related_hunts: list[str] = field(default_factory=list)
 
 
 @contextmanager
@@ -159,7 +160,7 @@ def render_draft(req: DraftHuntRequest) -> str:
         f"techniques: {json.dumps(techniques)}\n"
         f"data_sources: {json.dumps(data_sources)}\n"
         + (f"spawned_from: {req.research_id}\n" if req.research_id else "")
-        + "related_hunts: []\n"
+        + f"related_hunts: {json.dumps(req.related_hunts)}\n"
         "findings_count: 0\n"
         "true_positives: 0\n"
         "false_positives: 0\n"

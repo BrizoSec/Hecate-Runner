@@ -80,6 +80,33 @@ def test_happy_path_creates_draft(
     assert mock_athf.hypothesis_generator.call_args.kwargs["research_id"] == "R-0001"
 
 
+def test_related_hunts_from_research_flow_into_draft(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_athf: MagicMock,
+    sample_research_result: ResearchResult,
+) -> None:
+    # A research step that found related past hunts (see
+    # HuntResearcherAgent._skill_4_related_work in athf) must actually land
+    # in the draft's related_hunts frontmatter, not the hardcoded [] this
+    # regression-tests against.
+    mock_athf.research_new.return_value = ResearchResult(
+        research_id=sample_research_result.research_id,
+        recommended_hypothesis=sample_research_result.recommended_hypothesis,
+        related_hunts=["H-0602", "H-0578"],
+    )
+    orch = Orchestrator(
+        settings=settings,
+        athf=mock_athf,
+        cti_provider=file_queue_with_cti,
+    )
+    result = orch.run_once()
+
+    assert result.outcome == "draft_created"
+    content = result.draft_path.read_text()
+    assert 'related_hunts: ["H-0602", "H-0578"]' in content
+
+
 def test_dry_run_does_not_call_athf(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,

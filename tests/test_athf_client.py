@@ -183,12 +183,37 @@ def test_parse_research_output_skips_progress_banner() -> None:
     assert result.research_id == "R-0004"
     assert "scheduled tasks" in result.recommended_hypothesis
     assert not result.is_empty
+    assert result.related_hunts == []
+
+
+def test_parse_research_output_extracts_related_hunts() -> None:
+    # related_work.sources is keyed "hunts/H-XXXX.md" (see
+    # HuntResearcherAgent._skill_4_related_work in athf) -- confirm the IDs
+    # get pulled back out, and that a source with an unexpected url shape
+    # (no hunt ID match) is skipped rather than raising.
+    output = """
+{
+  "research_id": "R-0004",
+  "related_work": {
+    "summary": "Found 2 related hunts",
+    "key_findings": ["H-0602: ... (similarity: 0.31)"],
+    "sources": [
+      {"title": "H-0602: ...", "url": "hunts/H-0602.md", "snippet": "..."},
+      {"title": "H-0578: ...", "url": "hunts/H-0578.md", "snippet": "..."},
+      {"title": "not a hunt", "url": "research/R-0001.md", "snippet": "..."}
+    ]
+  }
+}
+"""
+    result = AthfClient._parse_research_output(output)
+    assert result.related_hunts == ["H-0602", "H-0578"]
 
 
 def test_parse_research_output_empty() -> None:
     result = AthfClient._parse_research_output("")
     assert result.is_empty
     assert result.research_id == ""
+    assert result.related_hunts == []
 
 
 def test_parse_research_output_malformed_json_is_non_fatal() -> None:
