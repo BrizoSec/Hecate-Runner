@@ -47,10 +47,30 @@ app = typer.Typer(
 console = Console()
 
 
+def _stdout_already_targets(path: Path) -> bool:
+    """True if sys.stdout is already writing to the same file as `path`.
+
+    Under systemd, StandardOutput=append:<path> makes stdout point at the
+    log file before our process even starts -- adding a separate
+    logging.FileHandler(path) on top of a StreamHandler(sys.stdout) then
+    doubles every line, since both end up writing to the same file. This
+    check is redirection-mechanism-agnostic (systemd, shell `>>`, anything)
+    rather than sniffing for systemd specifically, so it degrades safely:
+    interactive runs (stdout is a terminal/pipe, not this file) are
+    unaffected and still get both handlers as before.
+    """
+    try:
+        stdout_stat = os.fstat(sys.stdout.fileno())
+        target_stat = path.stat()
+    except OSError:
+        return False
+    return (stdout_stat.st_dev, stdout_stat.st_ino) == (target_stat.st_dev, target_stat.st_ino)
+
+
 def _configure_logging(settings: Settings, *, to_stdout: bool = True) -> None:
     settings.log_dir.mkdir(parents=True, exist_ok=True)
     handlers: list[logging.Handler] = [logging.FileHandler(settings.log_file)]
-    if to_stdout:
+    if to_stdout and not _stdout_already_targets(settings.log_file):
         handlers.append(logging.StreamHandler(sys.stdout))
     logging.basicConfig(
         level=settings.log_level,

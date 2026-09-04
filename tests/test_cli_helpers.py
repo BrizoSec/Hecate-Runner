@@ -7,11 +7,12 @@ protecting.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 
-from hecate_runner.cli import _tavily_key_available
+from hecate_runner.cli import _stdout_already_targets, _tavily_key_available
 from hecate_runner.config import Settings
 
 
@@ -42,3 +43,48 @@ def test_workspace_env_file_present_but_no_tavily_key(
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     (workspace / ".env").write_text("ATHF_LLM_PROVIDER=ollama\n")
     assert _tavily_key_available(settings) is False
+
+
+# Under systemd, StandardOutput=append:<same log file> makes stdout point at
+# the log file before the process even starts. _configure_logging used to
+# unconditionally add both a FileHandler(log_file) and a
+# StreamHandler(sys.stdout) -- when stdout is already that same file, both
+# handlers write to it and every real production log line appears twice.
+# Observed directly in logs/orchestrator.log under the actual systemd unit.
+def test_stdout_targets_same_file_as_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log_file = tmp_path / "orchestrator.log"
+    with open(log_file, "a") as f:
+        monkeypatch.setattr(sys, "stdout", f)
+        assert _stdout_already_targets(log_file) is True
+
+
+def test_stdout_targets_different_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log_file = tmp_path / "orchestrator.log"
+    log_file.write_text("")
+    other_file = tmp_path / "something-else.log"
+    with open(other_file, "a") as f:
+        monkeypatch.setattr(sys, "stdout", f)
+        assert _stdout_already_targets(log_file) is False
+
+
+def test_stdout_target_check_missing_log_file_is_false_not_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log_file = tmp_path / "does-not-exist.log"
+    scratch = tmp_path / "scratch"
+    with open(scratch, "a") as f:
+        monkeypatch.setattr(sys, "stdout", f)
+        assert _stdout_already_targets(log_file) is False
+
+
+def test_stdout_target_check_non_file_stdout_is_false_not_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Interactive/pytest-captured stdout often has no real fileno() at all
+    # (e.g. io.StringIO) -- must degrade to False, not raise.
+    import io
+
+    log_file = tmp_path / "orchestrator.log"
+    log_file.write_text("")
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    assert _stdout_already_targets(log_file) is False

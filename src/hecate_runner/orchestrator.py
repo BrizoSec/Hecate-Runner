@@ -68,6 +68,28 @@ def derive_research_topic(cti_content: str, title: str | None = None) -> tuple[s
     with docs about "Source" website features whose name got the title
     pulled from the title alone. Falls back to the old flatten+truncate
     behavior only when no clean title is available.
+
+    Known accepted limitation: for a title from a recurring series (e.g. a
+    vendor's weekly "This Week in Cybersecurity"-style digest, republished
+    under a near-identical title every week), the bare title alone doesn't
+    disambiguate *which* edition the CTI item actually is -- the resulting
+    ``topic`` can cause the research skills' web search (see
+    search_system_internals/search_adversary_tradecraft in athf's
+    web_search.py) to ground against a *different* edition of the same
+    series than the one this CTI item is actually about, since none of
+    ``cti_content``'s more specific/disambiguating text (a summary
+    mentioning the edition's actual stories) reaches the search query --
+    only this function's ``topic`` return value does. Observed case: CTI
+    title "The Good, the Bad and the Ugly in Cybersecurity - Week 32
+    (2026)" (real content: a Snowflake breach plea, "Mythos 5", and
+    ChainDrop's npm worm) produced a research doc grounded on a different
+    week's edition entirely (CISO Assistant, "khunt", "The Com" takedown).
+    Left unfixed for now: the actual hunt hypothesis stayed accurate in
+    every observed case regardless, because hypothesis-generator weighs
+    the raw CTI text over the research doc's synthesis when they diverge
+    -- only the research doc itself (not the hunt) ends up describing the
+    wrong content. Revisit if a bad research grounding ever does end up
+    steering a hunt wrong, not just looking wrong on its own.
     """
     technique_match = _TECHNIQUE_RE.search(cti_content)
     technique = technique_match.group(0) if technique_match else None
