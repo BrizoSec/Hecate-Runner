@@ -246,7 +246,10 @@ def test_render_draft_handles_empty_hypothesis() -> None:
 
 
 def test_short_title_leaves_short_hypothesis_untouched() -> None:
-    assert _short_title("Adversaries dump LSASS memory via comsvcs.dll.") == "Adversaries dump LSASS memory via comsvcs.dll."
+    assert (
+        _short_title("Adversaries dump LSASS memory via comsvcs.dll.")
+        == "Adversaries dump LSASS memory via comsvcs.dll."
+    )
 
 
 def test_short_title_truncates_on_word_boundary_with_ellipsis() -> None:
@@ -369,7 +372,11 @@ def test_draft_tags_appends_low_confidence_tag_when_not_threat_report() -> None:
 
 
 def test_draft_tags_omits_low_confidence_tag_when_threat_report() -> None:
-    assert _draft_tags(is_threat_report=True) == ["draft", "auto-generated", "requires-human-review"]
+    assert _draft_tags(is_threat_report=True) == [
+        "draft",
+        "auto-generated",
+        "requires-human-review",
+    ]
 
 
 def test_render_draft_shows_low_confidence_banner_and_tag(

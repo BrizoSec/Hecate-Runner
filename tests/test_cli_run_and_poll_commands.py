@@ -59,7 +59,9 @@ class TestRunCommand:
         assert "R-0001" in result.stdout
 
     def test_no_cti_exits_zero(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        fake_orch = type("FakeOrch", (), {"run_once": lambda self, dry_run=False: RunResult(outcome="no_cti")})()
+        fake_orch = type(
+            "FakeOrch", (), {"run_once": lambda self, dry_run=False: RunResult(outcome="no_cti")}
+        )()
         monkeypatch.setattr(cli, "build_default_orchestrator", lambda settings: fake_orch)
 
         result = runner.invoke(app, ["run"])
@@ -71,7 +73,11 @@ class TestRunCommand:
         fake_orch = type(
             "FakeOrch",
             (),
-            {"run_once": lambda self, dry_run=False: RunResult(outcome="athf_error", detail="boom")},
+            {
+                "run_once": lambda self, dry_run=False: RunResult(
+                    outcome="athf_error", detail="boom"
+                )
+            },
         )()
         monkeypatch.setattr(cli, "build_default_orchestrator", lambda settings: fake_orch)
 
@@ -80,7 +86,9 @@ class TestRunCommand:
         assert result.exit_code == 1
         assert "boom" in result.stdout
 
-    def test_dry_run_flag_is_passed_through(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_dry_run_flag_is_passed_through(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         captured: dict[str, bool] = {}
 
         fake_orch = type(
@@ -103,7 +111,9 @@ class TestRunCommand:
 class TestOtxPollCommand:
     def test_routed_pulse_exits_zero(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            cli, "run_otx_poll", lambda settings: OtxPollResult(routed=1, routed_pulse_ids=["pulse-1"])
+            cli,
+            "run_otx_poll",
+            lambda settings: OtxPollResult(routed=1, routed_pulse_ids=["pulse-1"]),
         )
 
         result = runner.invoke(app, ["otx-poll"])
@@ -112,7 +122,9 @@ class TestOtxPollCommand:
         assert "pulse-1" in result.stdout
 
     def test_queue_occupied_shown(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(cli, "run_otx_poll", lambda settings: OtxPollResult(skipped_queue_occupied=True))
+        monkeypatch.setattr(
+            cli, "run_otx_poll", lambda settings: OtxPollResult(skipped_queue_occupied=True)
+        )
 
         result = runner.invoke(app, ["otx-poll"])
 
@@ -120,7 +132,9 @@ class TestOtxPollCommand:
         assert "queue slot occupied" in result.stdout.lower()
 
     def test_error_exits_nonzero(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(cli, "run_otx_poll", lambda settings: OtxPollResult(error="OTX_API_KEY is not set"))
+        monkeypatch.setattr(
+            cli, "run_otx_poll", lambda settings: OtxPollResult(error="OTX_API_KEY is not set")
+        )
 
         result = runner.invoke(app, ["otx-poll"])
 
@@ -131,7 +145,9 @@ class TestOtxPollCommand:
 class TestRssPollCommand:
     def test_routed_entry_exits_zero(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            cli, "run_rss_poll", lambda settings: RssPollResult(routed=1, routed_entry_ids=["entry-1"])
+            cli,
+            "run_rss_poll",
+            lambda settings: RssPollResult(routed=1, routed_entry_ids=["entry-1"]),
         )
 
         result = runner.invoke(app, ["rss-poll"])
@@ -140,7 +156,9 @@ class TestRssPollCommand:
         assert "entry-1" in result.stdout
 
     def test_error_exits_nonzero(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(cli, "run_rss_poll", lambda settings: RssPollResult(error="no feeds configured"))
+        monkeypatch.setattr(
+            cli, "run_rss_poll", lambda settings: RssPollResult(error="no feeds configured")
+        )
 
         result = runner.invoke(app, ["rss-poll"])
 
@@ -151,7 +169,9 @@ class TestRssPollCommand:
 class TestMispPollCommand:
     def test_routed_event_exits_zero(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            cli, "run_misp_poll", lambda settings: MispPollResult(routed=1, routed_event_uuids=["evt-1"])
+            cli,
+            "run_misp_poll",
+            lambda settings: MispPollResult(routed=1, routed_event_uuids=["evt-1"]),
         )
 
         result = runner.invoke(app, ["misp-poll"])
@@ -160,7 +180,9 @@ class TestMispPollCommand:
         assert "evt-1" in result.stdout
 
     def test_queue_occupied_shown(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(cli, "run_misp_poll", lambda settings: MispPollResult(skipped_queue_occupied=True))
+        monkeypatch.setattr(
+            cli, "run_misp_poll", lambda settings: MispPollResult(skipped_queue_occupied=True)
+        )
 
         result = runner.invoke(app, ["misp-poll"])
 
@@ -168,7 +190,9 @@ class TestMispPollCommand:
         assert "queue slot occupied" in result.stdout.lower()
 
     def test_error_exits_nonzero(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(cli, "run_misp_poll", lambda settings: MispPollResult(error="MISP_BASE_URL is not set"))
+        monkeypatch.setattr(
+            cli, "run_misp_poll", lambda settings: MispPollResult(error="MISP_BASE_URL is not set")
+        )
 
         result = runner.invoke(app, ["misp-poll"])
 

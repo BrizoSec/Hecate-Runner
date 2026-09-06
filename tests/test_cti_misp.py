@@ -120,7 +120,9 @@ def test_requires_base_url(tmp_path: Path) -> None:
 
 def test_requires_api_key(tmp_path: Path) -> None:
     with pytest.raises(MispError, match="MISP_API_KEY"):
-        MispProvider(base_url="https://misp.example.com", api_key="", cursor_file=tmp_path / "cursor.json")
+        MispProvider(
+            base_url="https://misp.example.com", api_key="", cursor_file=tmp_path / "cursor.json"
+        )
 
 
 # --- next_item / filtering ----------------------------------------------------
@@ -188,7 +190,9 @@ def test_filters_out_unnamed_events(tmp_path: Path) -> None:
 
 
 def test_filters_out_stale_events(tmp_path: Path) -> None:
-    event = _sample_event(date="2020-01-01", timestamp=_epoch_days_ago(3650))  # ~10 years back — always stale
+    event = _sample_event(
+        date="2020-01-01", timestamp=_epoch_days_ago(3650)
+    )  # ~10 years back — always stale
     provider = _make_provider(tmp_path, [event], max_event_age_days=30)
     assert provider.next_item() is None
 
@@ -253,14 +257,18 @@ def test_first_poll_floors_query_at_max_event_age_days(tmp_path: Path) -> None:
     never reached. The query must now floor at max_event_age_days even on a
     cursor-less first poll."""
     seen_requests: list[httpx.Request] = []
-    provider = _make_provider(tmp_path, [_sample_event()], on_request=seen_requests.append, max_event_age_days=30)
+    provider = _make_provider(
+        tmp_path, [_sample_event()], on_request=seen_requests.append, max_event_age_days=30
+    )
     provider.next_item()
 
     import json as jsonlib
 
     body = jsonlib.loads(seen_requests[0].content)
     expected_floor = int((datetime.now(UTC) - timedelta(days=30)).timestamp())
-    assert abs(int(body["timestamp"]) - expected_floor) < 5  # allow a few seconds of test execution drift
+    assert (
+        abs(int(body["timestamp"]) - expected_floor) < 5
+    )  # allow a few seconds of test execution drift
 
 
 def test_stale_cursor_does_not_starve_the_query_behind_a_backlog(tmp_path: Path) -> None:
@@ -268,7 +276,9 @@ def test_stale_cursor_does_not_starve_the_query_behind_a_backlog(tmp_path: Path)
     before a feed was disabled for months) must not be used verbatim --
     that's exactly the starvation scenario the floor exists to prevent."""
     seen_requests: list[httpx.Request] = []
-    provider = _make_provider(tmp_path, [_sample_event()], on_request=seen_requests.append, max_event_age_days=30)
+    provider = _make_provider(
+        tmp_path, [_sample_event()], on_request=seen_requests.append, max_event_age_days=30
+    )
     stale_cursor_timestamp = _epoch_days_ago(400)
     cursor = MispCursorState(last_timestamp=stale_cursor_timestamp)
     cursor.save(provider.cursor_file)
@@ -362,7 +372,10 @@ def test_transport_error_raises_misp_error(tmp_path: Path) -> None:
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     provider = MispProvider(
-        base_url="https://misp.example.com", api_key="test-key", cursor_file=tmp_path / "cursor.json", client=client
+        base_url="https://misp.example.com",
+        api_key="test-key",
+        cursor_file=tmp_path / "cursor.json",
+        client=client,
     )
     with pytest.raises(MispError, match="MISP request failed"):
         provider.next_item()
@@ -372,15 +385,24 @@ def test_transport_error_raises_misp_error(tmp_path: Path) -> None:
 
 
 def test_close_closes_owned_client(tmp_path: Path) -> None:
-    provider = MispProvider(base_url="https://misp.example.com", api_key="test-key", cursor_file=tmp_path / "cursor.json")
+    provider = MispProvider(
+        base_url="https://misp.example.com",
+        api_key="test-key",
+        cursor_file=tmp_path / "cursor.json",
+    )
     provider.close()
     assert provider._client.is_closed
 
 
 def test_close_does_not_close_injected_client(tmp_path: Path) -> None:
-    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"response": []})))
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"response": []}))
+    )
     provider = MispProvider(
-        base_url="https://misp.example.com", api_key="test-key", cursor_file=tmp_path / "cursor.json", client=client
+        base_url="https://misp.example.com",
+        api_key="test-key",
+        cursor_file=tmp_path / "cursor.json",
+        client=client,
     )
     provider.close()
     assert not client.is_closed
@@ -406,7 +428,7 @@ def test_blurb_excludes_tlp_and_galaxy_tags_from_tags_line() -> None:
     event = _sample_event(
         Tag=[
             {"name": "tlp:white"},
-            {"name": "misp-galaxy:mitre-attack-pattern=\"LSASS Memory - T1003.001\""},
+            {"name": 'misp-galaxy:mitre-attack-pattern="LSASS Memory - T1003.001"'},
             {"name": "ransomware"},
         ]
     )

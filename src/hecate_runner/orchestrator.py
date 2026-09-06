@@ -212,7 +212,9 @@ class Orchestrator:
         tactics: list[str] = []
         platforms: list[str] = []
         for technique_id in techniques:
-            meta = self.athf.lookup_technique(technique_id, timeout_sec=self.settings.llm_timeout_sec)
+            meta = self.athf.lookup_technique(
+                technique_id, timeout_sec=self.settings.llm_timeout_sec
+            )
             for tactic in meta.tactics:
                 if tactic not in tactics:
                     tactics.append(tactic)
@@ -276,13 +278,18 @@ class Orchestrator:
                 # answer fixtures (see `athf eval`) — a research failure is
                 # refused rather than silently falling back to that. Refund
                 # the quota; the CTI stays in the queue for the next cycle.
-                log.error("athf research new failed (%s); refusing to generate an ungrounded hypothesis", exc)
+                log.error(
+                    "athf research new failed (%s); refusing to generate an ungrounded hypothesis",
+                    exc,
+                )
                 state.drafts_today -= 1
                 state.total_drafts_ever -= 1
                 return RunResult(outcome="research_error", detail=str(exc))
 
             if research_result.is_empty:
-                log.error("athf research new produced no research_id; refusing to generate an ungrounded hypothesis")
+                log.error(
+                    "athf research new produced no research_id; refusing to generate an ungrounded hypothesis"
+                )
                 state.drafts_today -= 1
                 state.total_drafts_ever -= 1
                 return RunResult(outcome="research_empty")
@@ -378,7 +385,11 @@ class Orchestrator:
 
         log.info(
             "Draft %s created at %s (research=%s, drafts today: %d/%d)",
-            hunt_id, path, research_id or "none", state.drafts_today, self.settings.max_drafts_per_day,
+            hunt_id,
+            path,
+            research_id or "none",
+            state.drafts_today,
+            self.settings.max_drafts_per_day,
         )
 
         result = RunResult(
@@ -394,7 +405,9 @@ class Orchestrator:
         try:
             self.notify(result)
         except Exception as exc:  # notifications are best-effort, never fatal
-            log.warning("Draft-created notification failed (%s); draft %s was still created", exc, hunt_id)
+            log.warning(
+                "Draft-created notification failed (%s); draft %s was still created", exc, hunt_id
+            )
 
         return result
 

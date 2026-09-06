@@ -196,7 +196,9 @@ class AthfClient:
         parsed.raw_output = stdout
         return parsed
 
-    def lookup_technique(self, technique_id: str, timeout_sec: int | None = None) -> TechniqueMetadata:
+    def lookup_technique(
+        self, technique_id: str, timeout_sec: int | None = None
+    ) -> TechniqueMetadata:
         """Resolve a technique's real tactic(s)/platform(s) via ``athf attack lookup --json``.
 
         Best-effort and never raises: STIX data may not be installed, the
@@ -293,9 +295,7 @@ class AthfClient:
                 result.returncode,
                 result.stderr[:500],
             )
-            raise AthfError(
-                f"athf exit {result.returncode}: {result.stderr.strip()[:500]}"
-            )
+            raise AthfError(f"athf exit {result.returncode}: {result.stderr.strip()[:500]}")
 
         return result.stdout
 

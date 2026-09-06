@@ -84,7 +84,9 @@ class TestConfigCommand:
 
 
 class TestDoctorCommand:
-    def test_all_checks_pass_with_healthy_file_provider(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_all_checks_pass_with_healthy_file_provider(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("HECATE_RUNNER_CTI_PROVIDER", "file")
 
         result = runner.invoke(app, ["doctor"])
@@ -101,7 +103,9 @@ class TestDoctorCommand:
         assert result.exit_code == 1
         assert "problem(s) found" in result.stdout
 
-    def test_otx_provider_without_key_fails(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_otx_provider_without_key_fails(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("HECATE_RUNNER_CTI_PROVIDER", "otx")
 
         result = runner.invoke(app, ["doctor"])
@@ -109,7 +113,9 @@ class TestDoctorCommand:
         assert result.exit_code == 1
         assert "OTX_API_KEY" in result.stdout
 
-    def test_otx_provider_with_key_passes_that_check(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_otx_provider_with_key_passes_that_check(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("HECATE_RUNNER_CTI_PROVIDER", "otx")
         monkeypatch.setenv("OTX_API_KEY", "test-key")
 
@@ -117,7 +123,9 @@ class TestDoctorCommand:
 
         assert result.exit_code == 0
 
-    def test_misp_provider_without_creds_fails(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_misp_provider_without_creds_fails(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("HECATE_RUNNER_CTI_PROVIDER", "misp")
 
         result = runner.invoke(app, ["doctor"])
@@ -125,7 +133,9 @@ class TestDoctorCommand:
         assert result.exit_code == 1
         assert "MISP_BASE_URL" in result.stdout
 
-    def test_multi_provider_with_invalid_list_fails(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_multi_provider_with_invalid_list_fails(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("HECATE_RUNNER_CTI_PROVIDER", "multi")
         monkeypatch.setenv("HECATE_RUNNER_CTI_MULTI_PROVIDERS", "")
 
@@ -144,7 +154,9 @@ class TestDoctorCommand:
         assert result.exit_code == 1  # otx sub-provider still missing its key
         assert "OTX_API_KEY" in result.stdout
 
-    def test_missing_rss_feeds_fails(self, workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_missing_rss_feeds_fails(
+        self, workspace: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("ATHF_WORKSPACE", str(workspace))
         monkeypatch.setenv("HECATE_RUNNER_RSS_FEED_URLS", "")
 
@@ -174,7 +186,9 @@ class TestDoctorCommand:
 
         assert "cannot touch a real" in result.stdout
 
-    def test_splunk_query_provider_without_creds_fails(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_splunk_query_provider_without_creds_fails(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("HECATE_RUNNER_QUERY_PROVIDER", "splunk")
 
         result = runner.invoke(app, ["doctor"])

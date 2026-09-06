@@ -26,7 +26,9 @@ def _misp_settings(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> Setti
     return Settings(_env_file=None)  # type: ignore[call-arg]
 
 
-def test_missing_base_url_returns_error(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_base_url_returns_error(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("MISP_API_KEY", "test-key")
     misp_settings = Settings(_env_file=None)  # type: ignore[call-arg]
     result = misp_poller.run_misp_poll(misp_settings)
@@ -43,7 +45,10 @@ def test_missing_api_key_returns_error(settings: Settings, monkeypatch: pytest.M
 
 
 def test_queue_slot_occupied_skips(
-    settings: Settings, workspace: Path, monkeypatch: pytest.MonkeyPatch, mock_misp_provider: MagicMock
+    settings: Settings,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_misp_provider: MagicMock,
 ) -> None:
     misp_settings = _misp_settings(settings, monkeypatch)
     (workspace / "cti_queue" / "next.txt").write_text("existing intel")
@@ -54,7 +59,10 @@ def test_queue_slot_occupied_skips(
 
 
 def test_no_new_events(
-    settings: Settings, workspace: Path, monkeypatch: pytest.MonkeyPatch, mock_misp_provider: MagicMock
+    settings: Settings,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_misp_provider: MagicMock,
 ) -> None:
     misp_settings = _misp_settings(settings, monkeypatch)
     mock_misp_provider.return_value.next_item.return_value = None
@@ -65,14 +73,21 @@ def test_no_new_events(
 
 
 def test_routes_event_into_queue(
-    settings: Settings, workspace: Path, monkeypatch: pytest.MonkeyPatch, mock_misp_provider: MagicMock
+    settings: Settings,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_misp_provider: MagicMock,
 ) -> None:
     misp_settings = _misp_settings(settings, monkeypatch)
     item = CTIItem(
         content="MISP Event: test",
         source="misp",
         identifier="event-uuid-1",
-        metadata={"event_uuid": "event-uuid-1", "event_timestamp": "1234567890", "event_info": "test"},
+        metadata={
+            "event_uuid": "event-uuid-1",
+            "event_timestamp": "1234567890",
+            "event_info": "test",
+        },
     )
     mock_misp_provider.return_value.next_item.return_value = item
 
@@ -87,7 +102,10 @@ def test_routes_event_into_queue(
 
 
 def test_misp_error_is_captured(
-    settings: Settings, workspace: Path, monkeypatch: pytest.MonkeyPatch, mock_misp_provider: MagicMock
+    settings: Settings,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_misp_provider: MagicMock,
 ) -> None:
     misp_settings = _misp_settings(settings, monkeypatch)
     mock_misp_provider.return_value.next_item.side_effect = MispError("boom")

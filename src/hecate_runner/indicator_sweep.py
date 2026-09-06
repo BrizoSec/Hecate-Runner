@@ -45,11 +45,26 @@ _TELEMETRY_BY_TYPE: dict[str, tuple[str, str]] = {
     "ipv4": ("Network flow / firewall logs", "Connection to a listed IPv4 address"),
     "ipv6": ("Network flow / firewall logs", "Connection to a listed IPv6 address"),
     "md5": ("Endpoint/EDR file and process telemetry", "Execution of a file matching a listed MD5"),
-    "sha1": ("Endpoint/EDR file and process telemetry", "Execution of a file matching a listed SHA1"),
-    "sha256": ("Endpoint/EDR file and process telemetry", "Execution of a file matching a listed SHA256"),
-    "filehash-md5": ("Endpoint/EDR file and process telemetry", "Execution of a file matching a listed MD5"),
-    "filehash-sha1": ("Endpoint/EDR file and process telemetry", "Execution of a file matching a listed SHA1"),
-    "filehash-sha256": ("Endpoint/EDR file and process telemetry", "Execution of a file matching a listed SHA256"),
+    "sha1": (
+        "Endpoint/EDR file and process telemetry",
+        "Execution of a file matching a listed SHA1",
+    ),
+    "sha256": (
+        "Endpoint/EDR file and process telemetry",
+        "Execution of a file matching a listed SHA256",
+    ),
+    "filehash-md5": (
+        "Endpoint/EDR file and process telemetry",
+        "Execution of a file matching a listed MD5",
+    ),
+    "filehash-sha1": (
+        "Endpoint/EDR file and process telemetry",
+        "Execution of a file matching a listed SHA1",
+    ),
+    "filehash-sha256": (
+        "Endpoint/EDR file and process telemetry",
+        "Execution of a file matching a listed SHA256",
+    ),
     "email": ("Mail gateway logs", "Mail from or to a listed address"),
     "email-src": ("Mail gateway logs", "Mail from a listed sender address"),
 }
@@ -108,7 +123,9 @@ def build_indicator_sweep(cti_content: str, title: str | None = None) -> Hypothe
             # An unmapped type is still worth stating -- the reviewer can see
             # what came in and route it -- but it contributes no invented
             # telemetry source.
-            observables.append(f"Presence of a listed {type_name} indicator ({inventory[type_name]} in feed)")
+            observables.append(
+                f"Presence of a listed {type_name} indicator ({inventory[type_name]} in feed)"
+            )
             continue
         source_name, observable = mapped
         if source_name not in telemetry:
@@ -119,9 +136,7 @@ def build_indicator_sweep(cti_content: str, title: str | None = None) -> Hypothe
     counts = ", ".join(f"{type_name} ({inventory[type_name]})" for type_name in sorted(inventory))
 
     return HypothesisResult(
-        hypothesis=(
-            f"Indicators published in {source} appear in environment telemetry."
-        ),
+        hypothesis=(f"Indicators published in {source} appear in environment telemetry."),
         justification=(
             f"{source} published {total} indicator(s) ({counts}). This draft is an "
             "indicator sweep: it tests only whether those indicators appear in our "

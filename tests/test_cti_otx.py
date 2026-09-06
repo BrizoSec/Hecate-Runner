@@ -71,9 +71,7 @@ def test_next_item_returns_high_signal_pulse(
     assert item.metadata["pulse_id"] == "pulse-1"
 
 
-def test_filters_out_non_white_green_tlp(
-    tmp_path: Path, sample_otx_pulse: dict[str, Any]
-) -> None:
+def test_filters_out_non_white_green_tlp(tmp_path: Path, sample_otx_pulse: dict[str, Any]) -> None:
     sample_otx_pulse["TLP"] = "red"
     provider = _make_provider(tmp_path, [sample_otx_pulse])
     assert provider.next_item() is None
@@ -100,9 +98,7 @@ def test_filters_out_unnamed_pulses(tmp_path: Path, sample_otx_pulse: dict[str, 
     assert provider.next_item() is None
 
 
-def test_picks_oldest_unrouted_candidate(
-    tmp_path: Path, sample_otx_pulse: dict[str, Any]
-) -> None:
+def test_picks_oldest_unrouted_candidate(tmp_path: Path, sample_otx_pulse: dict[str, Any]) -> None:
     older = dict(sample_otx_pulse, id="pulse-old", modified="2026-06-01T00:00:00.000000")
     newer = dict(sample_otx_pulse, id="pulse-new", modified="2026-07-01T00:00:00.000000")
     provider = _make_provider(tmp_path, [newer, older])
@@ -134,9 +130,7 @@ def test_sends_api_key_header_and_modified_since(
     tmp_path: Path, sample_otx_pulse: dict[str, Any]
 ) -> None:
     seen_requests: list[httpx.Request] = []
-    provider = _make_provider(
-        tmp_path, [sample_otx_pulse], on_request=seen_requests.append
-    )
+    provider = _make_provider(tmp_path, [sample_otx_pulse], on_request=seen_requests.append)
     provider.next_item()
     assert len(seen_requests) == 1
     assert seen_requests[0].headers["x-otx-api-key"] == "test-key"
@@ -213,7 +207,9 @@ def test_advance_ignores_a_stale_older_modified_time() -> None:
     an older pulse after a newer one already advanced the cursor) used to
     regress the cursor backward, making already-routed pulses look unrouted
     again and get re-drafted under a new hunt ID."""
-    cursor = OtxCursorState(last_modified="2026-06-01T00:00:00.000000", seen_ids_at_cursor=["pulse-newer"])
+    cursor = OtxCursorState(
+        last_modified="2026-06-01T00:00:00.000000", seen_ids_at_cursor=["pulse-newer"]
+    )
 
     cursor.advance("2026-05-01T00:00:00.000000", "pulse-older-stale")
 
@@ -222,7 +218,9 @@ def test_advance_ignores_a_stale_older_modified_time() -> None:
 
 
 def test_advance_still_moves_forward_normally() -> None:
-    cursor = OtxCursorState(last_modified="2026-06-01T00:00:00.000000", seen_ids_at_cursor=["pulse-old"])
+    cursor = OtxCursorState(
+        last_modified="2026-06-01T00:00:00.000000", seen_ids_at_cursor=["pulse-old"]
+    )
 
     cursor.advance("2026-07-01T00:00:00.000000", "pulse-new")
 
@@ -273,7 +271,9 @@ def test_close_closes_owned_client(tmp_path: Path) -> None:
 
 
 def test_close_does_not_close_injected_client(tmp_path: Path) -> None:
-    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"results": []})))
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"results": []}))
+    )
     provider = OtxProvider(api_key="test-key", cursor_file=tmp_path / "cursor.json", client=client)
     provider.close()
     assert not client.is_closed

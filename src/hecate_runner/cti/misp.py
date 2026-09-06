@@ -81,7 +81,10 @@ class MispCursorState:
         atomic_write_text(
             path,
             json.dumps(
-                {"last_timestamp": self.last_timestamp, "seen_ids_at_cursor": self.seen_ids_at_cursor},
+                {
+                    "last_timestamp": self.last_timestamp,
+                    "seen_ids_at_cursor": self.seen_ids_at_cursor,
+                },
                 indent=2,
             ),
         )
@@ -155,7 +158,9 @@ class MispProvider(CTIProvider):
         events = self._fetch_events_since(self._effective_since_timestamp(cursor.last_timestamp))
         candidate = self._pick_oldest_unrouted(events, cursor)
         if candidate is None:
-            log.debug("No new high-signal MISP events since %s", cursor.last_timestamp or "(beginning)")
+            log.debug(
+                "No new high-signal MISP events since %s", cursor.last_timestamp or "(beginning)"
+            )
             return None
         return _event_to_cti_item(self.base_url, candidate)
 
@@ -185,7 +190,9 @@ class MispProvider(CTIProvider):
         freshness cutoff server-side guarantees the fetched page can
         actually contain a routable candidate.
         """
-        cutoff_epoch = int((datetime.now(UTC) - timedelta(days=self.max_event_age_days)).timestamp())
+        cutoff_epoch = int(
+            (datetime.now(UTC) - timedelta(days=self.max_event_age_days)).timestamp()
+        )
         try:
             cursor_epoch = int(cursor_timestamp) if cursor_timestamp else 0
         except ValueError:
@@ -228,7 +235,9 @@ class MispProvider(CTIProvider):
         cutoff = datetime.now(UTC) - timedelta(days=self.max_event_age_days)
         candidates = [e for e in events if _is_high_signal(e, cutoff)]
         candidates = [
-            e for e in candidates if not cursor.already_routed(str(e.get("timestamp", "")), str(e.get("uuid", "")))
+            e
+            for e in candidates
+            if not cursor.already_routed(str(e.get("timestamp", "")), str(e.get("uuid", "")))
         ]
         if not candidates:
             return None

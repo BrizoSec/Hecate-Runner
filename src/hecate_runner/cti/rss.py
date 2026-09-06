@@ -80,7 +80,9 @@ class RssCursorState:
             seen_ids = data.get("seen_ids")
             if seen_ids is None:
                 # Back-compat with the old single-last-seen-ID format.
-                seen_ids = {feed: [entry_id] for feed, entry_id in data.get("last_seen_id", {}).items()}
+                seen_ids = {
+                    feed: [entry_id] for feed, entry_id in data.get("last_seen_id", {}).items()
+                }
             return cls(seen_ids={feed: list(ids) for feed, ids in seen_ids.items()})
         except (json.JSONDecodeError, TypeError) as exc:
             log.warning("RSS cursor file %s corrupt (%s); resetting", path, exc)
@@ -121,7 +123,9 @@ class RssProvider(CTIProvider):
         self.max_entry_age_days = max_entry_age_days
         self.request_timeout_sec = request_timeout_sec
         self._client = client or httpx.Client(
-            timeout=request_timeout_sec, headers={"User-Agent": REQUEST_USER_AGENT}, follow_redirects=True
+            timeout=request_timeout_sec,
+            headers={"User-Agent": REQUEST_USER_AGENT},
+            follow_redirects=True,
         )
         self._owns_client = client is None
 
@@ -165,7 +169,9 @@ class RssProvider(CTIProvider):
         # oldest-possible -- which let entries with unparseable dates, e.g.
         # a feed emitting a non-RFC822 format, win "oldest" against every
         # other feed indefinitely, regardless of their actual age.)
-        candidates.sort(key=lambda pair: _entry_published(pair[1]) or datetime.max.replace(tzinfo=UTC))
+        candidates.sort(
+            key=lambda pair: _entry_published(pair[1]) or datetime.max.replace(tzinfo=UTC)
+        )
         feed_url, entry = candidates[0]
         return _entry_to_cti_item(feed_url, entry)
 

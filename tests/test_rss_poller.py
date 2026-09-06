@@ -40,9 +40,7 @@ def test_queue_slot_occupied_skips(
     mock_rss_provider.assert_not_called()
 
 
-def test_no_new_entries(
-    settings: Settings, workspace: Path, mock_rss_provider: MagicMock
-) -> None:
+def test_no_new_entries(settings: Settings, workspace: Path, mock_rss_provider: MagicMock) -> None:
     mock_rss_provider.return_value.next_item.return_value = None
     result = rss_poller.run_rss_poll(settings)
     assert result.routed == 0

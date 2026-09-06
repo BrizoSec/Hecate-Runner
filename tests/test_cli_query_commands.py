@@ -22,7 +22,11 @@ runner = CliRunner()
 @pytest.fixture
 def cli_env(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the CLI's own Settings() at the fake workspace, like `settings` does."""
-    for var in ["ATHF_WORKSPACE", "HECATE_RUNNER_QUERY_PROVIDER", "HECATE_RUNNER_MAX_DRAFTS_PER_DAY"]:
+    for var in [
+        "ATHF_WORKSPACE",
+        "HECATE_RUNNER_QUERY_PROVIDER",
+        "HECATE_RUNNER_MAX_DRAFTS_PER_DAY",
+    ]:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("ATHF_WORKSPACE", str(workspace))
     monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "4")
@@ -83,7 +87,11 @@ def test_pending_shows_staged_queries(cli_env: Path) -> None:
 
     store.save(
         ProposedQuery(
-            hunt_id="H-0003", data_source="splunk", query_text="index=main", time_range_days=7, limit=100
+            hunt_id="H-0003",
+            data_source="splunk",
+            query_text="index=main",
+            time_range_days=7,
+            limit=100,
         )
     )
 

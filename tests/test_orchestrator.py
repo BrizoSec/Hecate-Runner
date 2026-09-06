@@ -398,6 +398,7 @@ def test_research_failure_aborts_cycle(
     assert (workspace / "cti_queue" / "next.txt").exists()
 
     from hecate_runner.state import OrchestratorState
+
     state = OrchestratorState.load(settings.state_file)
     assert state.drafts_today == 0
 
@@ -410,7 +411,9 @@ def test_research_failure_does_not_notify(
     mock_athf.research_new.side_effect = AthfError("ollama timed out")
     notify = MagicMock()
 
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti, notify=notify)
+    orch = Orchestrator(
+        settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti, notify=notify
+    )
     orch.run_once()
 
     notify.assert_not_called()
@@ -535,8 +538,16 @@ def test_resolve_ttps_excludes_near_universal_platforms_from_union(
         technique_id="T1078",
         tactics=["persistence", "privilege-escalation", "initial-access"],
         platforms=[
-            "Containers", "ESXi", "IaaS", "Identity Provider", "Linux",
-            "macOS", "Network Devices", "Office Suite", "SaaS", "Windows",
+            "Containers",
+            "ESXi",
+            "IaaS",
+            "Identity Provider",
+            "Linux",
+            "macOS",
+            "Network Devices",
+            "Office Suite",
+            "SaaS",
+            "Windows",
         ],
         found=True,
     )
@@ -554,7 +565,12 @@ def test_resolve_ttps_excludes_near_universal_platforms_from_union(
     tactics, platforms = orch._resolve_ttps(["T1021.002", "T1078"])
 
     assert platforms == ["Windows"]
-    assert set(tactics) == {"lateral-movement", "persistence", "privilege-escalation", "initial-access"}
+    assert set(tactics) == {
+        "lateral-movement",
+        "persistence",
+        "privilege-escalation",
+        "initial-access",
+    }
 
 
 def test_resolve_ttps_translates_pre_platform_to_a_readable_label(
@@ -592,7 +608,16 @@ def test_resolve_ttps_falls_back_to_empty_platforms_when_all_techniques_are_broa
     broad = TechniqueMetadata(
         technique_id="T1078",
         tactics=["persistence"],
-        platforms=["Windows", "Linux", "macOS", "Containers", "ESXi", "IaaS", "SaaS", "Office Suite"],
+        platforms=[
+            "Windows",
+            "Linux",
+            "macOS",
+            "Containers",
+            "ESXi",
+            "IaaS",
+            "SaaS",
+            "Office Suite",
+        ],
         found=True,
     )
     mock_athf.lookup_technique.return_value = broad
@@ -609,7 +634,9 @@ def test_notify_called_on_draft_created(
     mock_athf: MagicMock,
 ) -> None:
     notify = MagicMock()
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti, notify=notify)
+    orch = Orchestrator(
+        settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti, notify=notify
+    )
     result = orch.run_once()
 
     notify.assert_called_once()
@@ -638,7 +665,9 @@ def test_notify_not_called_on_dry_run(
     mock_athf: MagicMock,
 ) -> None:
     notify = MagicMock()
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti, notify=notify)
+    orch = Orchestrator(
+        settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti, notify=notify
+    )
     orch.run_once(dry_run=True)
 
     notify.assert_not_called()
@@ -686,6 +715,7 @@ def test_state_persists_across_runs(
     orch.run_once()
 
     from hecate_runner.state import OrchestratorState
+
     state = OrchestratorState.load(settings.state_file)
     assert state.drafts_today == 1
     assert state.total_drafts_ever == 1

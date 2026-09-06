@@ -36,7 +36,9 @@ def test_no_leftover_temp_files(tmp_path: Path) -> None:
     assert remaining == [path]
 
 
-def test_failure_during_rename_leaves_original_file_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failure_during_rename_leaves_original_file_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """If the final atomic rename fails, the destination file must be
     exactly as it was before -- never truncated or partially overwritten,
     which is the entire point of writing to a temp file first and only

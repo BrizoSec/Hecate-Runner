@@ -91,7 +91,7 @@ def run(
     ] = False,
 ) -> None:
     """Execute one orchestrator cycle."""
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
     _configure_logging(settings)
 
     orch = build_default_orchestrator(settings)
@@ -114,7 +114,7 @@ def run(
 @app.command(name="otx-poll")
 def otx_poll() -> None:
     """Route the next high-signal OTX pulse into the CTI queue, if any."""
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
     _configure_logging(settings)
 
     result = run_otx_poll(settings)
@@ -134,7 +134,7 @@ def otx_poll() -> None:
 @app.command(name="rss-poll")
 def rss_poll() -> None:
     """Route the next high-signal RSS/Atom entry into the CTI queue, if any."""
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
     _configure_logging(settings)
 
     result = run_rss_poll(settings)
@@ -154,7 +154,7 @@ def rss_poll() -> None:
 @app.command(name="misp-poll")
 def misp_poll() -> None:
     """Route the next high-signal MISP event into the CTI queue, if any."""
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
     _configure_logging(settings)
 
     result = run_misp_poll(settings)
@@ -176,9 +176,13 @@ def propose(
     hunt_id: Annotated[str, typer.Argument(help="Hunt this query is for, e.g. H-0016")],
     query: Annotated[str, typer.Option("--query", help="The query text (e.g. SPL)")],
     data_source: Annotated[str, typer.Option("--data-source", help="e.g. splunk")],
-    time_range_days: Annotated[int, typer.Option("--time-range-days", help="Bounded lookback window")],
+    time_range_days: Annotated[
+        int, typer.Option("--time-range-days", help="Bounded lookback window")
+    ],
     limit: Annotated[int, typer.Option("--limit", help="Max results")],
-    justification: Annotated[str, typer.Option("--justification", help="Why this query, why these bounds")] = "",
+    justification: Annotated[
+        str, typer.Option("--justification", help="Why this query, why these bounds")
+    ] = "",
 ) -> None:
     """Stage a bounded query for a hunt. Rejected outright if it violates guardrails.
 
@@ -187,7 +191,7 @@ def propose(
     you (or, in the future, a separately-evaluated agent) provide the query
     text.
     """
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
     proposed = ProposedQuery(
         hunt_id=hunt_id,
         data_source=data_source,
@@ -211,14 +215,18 @@ def propose(
     store = PendingQueryStore(settings.pending_queries_dir)
     path = store.save(proposed)
     console.print(f"[green]✓[/green] Proposed query staged for {hunt_id} at {path}")
-    console.print(f"  Data source: {data_source}  |  Time range: {time_range_days}d  |  Limit: {limit}")
-    console.print(f"\nRun [bold]hecate-runner approve {hunt_id}[/bold] to execute, or [bold]hecate-runner reject {hunt_id}[/bold] to discard.")
+    console.print(
+        f"  Data source: {data_source}  |  Time range: {time_range_days}d  |  Limit: {limit}"
+    )
+    console.print(
+        f"\nRun [bold]hecate-runner approve {hunt_id}[/bold] to execute, or [bold]hecate-runner reject {hunt_id}[/bold] to discard."
+    )
 
 
 @app.command()
 def pending() -> None:
     """List queries awaiting approval."""
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
     store = PendingQueryStore(settings.pending_queries_dir)
     queries = store.list_all()
 
@@ -234,7 +242,14 @@ def pending() -> None:
     table.add_column("Proposed at")
     table.add_column("Query", overflow="fold")
     for q in queries:
-        table.add_row(q.hunt_id, q.data_source, f"{q.time_range_days}d", str(q.limit), q.proposed_at, q.query_text)
+        table.add_row(
+            q.hunt_id,
+            q.data_source,
+            f"{q.time_range_days}d",
+            str(q.limit),
+            q.proposed_at,
+            q.query_text,
+        )
     console.print(table)
 
 
@@ -251,13 +266,15 @@ def approve(
     system when SEC7669_QUERY_PROVIDER is set to a real backend; it's the
     deliberate human checkpoint the rest of the pipeline is built around.
     """
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
     _configure_logging(settings, to_stdout=False)
     store = PendingQueryStore(settings.pending_queries_dir)
     proposed = store.load(hunt_id)
 
     if proposed is None:
-        console.print(f"[red]No pending query for {hunt_id}.[/red] Run `hecate-runner pending` to see what's staged.")
+        console.print(
+            f"[red]No pending query for {hunt_id}.[/red] Run `hecate-runner pending` to see what's staged."
+        )
         raise typer.Exit(code=1)
 
     violations = validate_guardrails(
@@ -266,16 +283,24 @@ def approve(
         max_limit=settings.max_query_limit,
     )
     if violations:
-        console.print(f"[red]Refusing to execute — {len(violations)} guardrail violation(s) on re-check:[/red]")
+        console.print(
+            f"[red]Refusing to execute — {len(violations)} guardrail violation(s) on re-check:[/red]"
+        )
         for v in violations:
             console.print(f"  [red]✗[/red] {v}")
-        console.print("[dim]Left staged — fix and re-propose, or `hecate-runner reject` to discard.[/dim]")
+        console.print(
+            "[dim]Left staged — fix and re-propose, or `hecate-runner reject` to discard.[/dim]"
+        )
         raise typer.Exit(code=1)
 
     console.print(f"[bold]Hunt:[/bold] {proposed.hunt_id}")
-    console.print(f"[bold]Data source:[/bold] {proposed.data_source} (provider: {settings.query_provider})")
+    console.print(
+        f"[bold]Data source:[/bold] {proposed.data_source} (provider: {settings.query_provider})"
+    )
     console.print(f"[bold]Query:[/bold] {proposed.query_text}")
-    console.print(f"[bold]Time range:[/bold] {proposed.time_range_days}d  [bold]Limit:[/bold] {proposed.limit}")
+    console.print(
+        f"[bold]Time range:[/bold] {proposed.time_range_days}d  [bold]Limit:[/bold] {proposed.limit}"
+    )
     if proposed.justification:
         console.print(f"[bold]Justification:[/bold] {proposed.justification}")
 
@@ -283,7 +308,11 @@ def approve(
         console.print("[yellow]Cancelled — query remains staged.[/yellow]")
         raise typer.Exit(code=1)
 
-    provider = get_provider(settings.query_provider, athf_bin=settings.athf_bin_resolved, workspace=settings.athf_workspace)
+    provider = get_provider(
+        settings.query_provider,
+        athf_bin=settings.athf_bin_resolved,
+        workspace=settings.athf_workspace,
+    )
     result = provider.execute(proposed)
 
     console.print()
@@ -296,7 +325,9 @@ def approve(
     if result.ok:
         store.remove(hunt_id)
     else:
-        console.print("[dim]Left staged since execution failed — retry with `hecate-runner approve` once fixed.[/dim]")
+        console.print(
+            "[dim]Left staged since execution failed — retry with `hecate-runner approve` once fixed.[/dim]"
+        )
 
     raise typer.Exit(code=0 if result.ok else 1)
 
@@ -307,7 +338,7 @@ def reject(
     reason: Annotated[str | None, typer.Option("--reason", help="Why, for the log")] = None,
 ) -> None:
     """Discard a proposed query without executing it."""
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
     store = PendingQueryStore(settings.pending_queries_dir)
     proposed = store.load(hunt_id)
 
@@ -316,13 +347,16 @@ def reject(
         raise typer.Exit(code=1)
 
     store.remove(hunt_id)
-    console.print(f"[green]✓[/green] Rejected pending query for {hunt_id}" + (f" ({reason})" if reason else ""))
+    console.print(
+        f"[green]✓[/green] Rejected pending query for {hunt_id}"
+        + (f" ({reason})" if reason else "")
+    )
 
 
 @app.command()
 def status() -> None:
     """Show quota, last run, and total drafts."""
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
     state = OrchestratorState.load(settings.state_file)
 
     table = Table(title="hecate-runner status", show_header=False)
@@ -344,7 +378,7 @@ def status() -> None:
 @app.command()
 def config() -> None:
     """Dump effective settings as JSON (safe for pasting into an issue)."""
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
     dumped = settings.redacted_dict()
     # Add derived paths for clarity
     dumped["_derived"] = {
@@ -360,7 +394,7 @@ def config() -> None:
 @app.command()
 def doctor() -> None:
     """Sanity-check the deployment. Non-zero exit code if anything is off."""
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
     problems: list[str] = []
 
     def check(condition: bool, label: str, remediation: str) -> None:
@@ -398,8 +432,7 @@ def doctor() -> None:
         f"chmod +w {settings.log_dir}",
     )
     check(
-        _has_write(settings.cti_queue_dir_resolved)
-        or not settings.cti_queue_dir_resolved.exists(),
+        _has_write(settings.cti_queue_dir_resolved) or not settings.cti_queue_dir_resolved.exists(),
         f"CTI queue dir writable: {settings.cti_queue_dir_resolved}",
         f"mkdir -p and chmod +w {settings.cti_queue_dir_resolved}",
     )
@@ -412,7 +445,9 @@ def doctor() -> None:
         )
     else:
         multi_names = []
-    active_cti_providers = multi_names if settings.cti_provider == "multi" else [settings.cti_provider]
+    active_cti_providers = (
+        multi_names if settings.cti_provider == "multi" else [settings.cti_provider]
+    )
 
     if "otx" in active_cti_providers:
         check(
@@ -449,7 +484,8 @@ def doctor() -> None:
     )
     if settings.query_provider == "splunk":
         check(
-            _env_key_available(settings, "SPLUNK_HOST") and _env_key_available(settings, "SPLUNK_TOKEN"),
+            _env_key_available(settings, "SPLUNK_HOST")
+            and _env_key_available(settings, "SPLUNK_TOKEN"),
             "SPLUNK_HOST / SPLUNK_TOKEN set (required for SEC7669_QUERY_PROVIDER=splunk)",
             "Set both in the ATHF workspace .env — see `athf splunk test` to verify connectivity "
             "before running `hecate-runner approve` against it.",
@@ -496,6 +532,7 @@ def _has_write(path: Path) -> bool:
     while not check_target.exists():
         check_target = check_target.parent
     import os as _os
+
     return _os.access(check_target, _os.W_OK)
 
 

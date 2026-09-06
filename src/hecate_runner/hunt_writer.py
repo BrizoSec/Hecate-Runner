@@ -156,7 +156,9 @@ def render_draft(req: DraftHuntRequest) -> str:
     platforms = req.platforms
     # Body-only rendering of the same gap, for the reviewer rather than the
     # validator. An empty ", ".join() would render a bare dangling label.
-    techniques_display = ", ".join(techniques) if techniques else "[none mapped - human to populate]"
+    techniques_display = (
+        ", ".join(techniques) if techniques else "[none mapped - human to populate]"
+    )
     data_sources = hyp.data_sources or ["CrowdStrike"]
 
     def bullets(items: list[str]) -> str:
@@ -203,7 +205,7 @@ def render_draft(req: DraftHuntRequest) -> str:
 
 **Hunt Metadata**
 
-- **Date:** {req.generated_at.strftime('%Y-%m-%d')}
+- **Date:** {req.generated_at.strftime("%Y-%m-%d")}
 - **Hunter:** hecate-runner orchestrator (draft)
 - **Status:** planning
 - **MITRE ATT&CK:** {techniques_display}
@@ -214,7 +216,7 @@ def render_draft(req: DraftHuntRequest) -> str:
 
 ### Hypothesis Statement
 
-{hyp.hypothesis or '[Model produced no hypothesis - review CTI intake]'}
+{hyp.hypothesis or "[Model produced no hypothesis - review CTI intake]"}
 
 ### Threat Context
 
@@ -224,7 +226,7 @@ Source CTI:
 
 ### Justification
 
-{hyp.justification or '[No justification generated]'}
+{hyp.justification or "[No justification generated]"}
 
 ### ABLE Scoping
 
@@ -261,9 +263,9 @@ Source CTI:
 
 ### Expected Observables
 
-- **Data Sources:** {", ".join(hyp.data_sources) or '[TBD]'}
+- **Data Sources:** {", ".join(hyp.data_sources) or "[TBD]"}
 - **Observables:**
-{chr(10).join('  - ' + o for o in hyp.observables) if hyp.observables else '  - [TBD]'}
+{chr(10).join("  - " + o for o in hyp.observables) if hyp.observables else "  - [TBD]"}
 
 ### Known False Positives
 
@@ -307,7 +309,7 @@ Source CTI:
 
 ---
 
-**Draft Created:** {req.generated_at.strftime('%Y-%m-%d %H:%M:%S UTC')} by hecate-runner
+**Draft Created:** {req.generated_at.strftime("%Y-%m-%d %H:%M:%S UTC")} by hecate-runner
 **Next Review:** [Human review required before status can advance to `in-progress`]
 """
     return frontmatter + body

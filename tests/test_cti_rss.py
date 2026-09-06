@@ -39,12 +39,12 @@ def _rss_xml(entries: list[dict[str, str]]) -> str:
     items = "\n".join(
         f"""
         <item>
-          <title>{e['title']}</title>
-          <link>{e['link']}</link>
-          <guid>{e.get('guid', e['link'])}</guid>
-          <pubDate>{e['pub_date']}</pubDate>
-          <description>{e.get('description', '')}</description>
-          {"".join(f'<category>{t}</category>' for t in e.get('tags', []))}
+          <title>{e["title"]}</title>
+          <link>{e["link"]}</link>
+          <guid>{e.get("guid", e["link"])}</guid>
+          <pubDate>{e["pub_date"]}</pubDate>
+          <description>{e.get("description", "")}</description>
+          {"".join(f"<category>{t}</category>" for t in e.get("tags", []))}
         </item>
         """
         for e in entries
@@ -89,7 +89,9 @@ def _make_provider(
         if code != 200:
             return httpx.Response(code, text="error")
         entries = feeds.get(url, [])
-        return httpx.Response(200, text=_rss_xml(entries), headers={"content-type": "application/rss+xml"})
+        return httpx.Response(
+            200, text=_rss_xml(entries), headers={"content-type": "application/rss+xml"}
+        )
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     return RssProvider(
@@ -152,9 +154,7 @@ def test_entry_published_falls_back_to_non_rfc822_date_format(tmp_path: Path) ->
     leaves published_parsed/updated_parsed as None for. _entry_published
     must still recover the real date from the raw string rather than
     treating the entry as dateless."""
-    provider = _make_provider(
-        tmp_path, {FEED_A: [_entry(pub_date="Jul 15, 2026 00:00:00-0500")]}
-    )
+    provider = _make_provider(tmp_path, {FEED_A: [_entry(pub_date="Jul 15, 2026 00:00:00-0500")]})
     entries = provider._fetch_entries(FEED_A)
     assert entries[0].get("published_parsed") is None  # confirms feedparser itself can't parse it
 
@@ -195,9 +195,7 @@ def test_one_feed_failing_does_not_block_others(tmp_path: Path) -> None:
 
 
 def test_all_feeds_failing_returns_none_not_raise(tmp_path: Path) -> None:
-    provider = _make_provider(
-        tmp_path, {FEED_A: [_entry()]}, status_codes={FEED_A: 500}
-    )
+    provider = _make_provider(tmp_path, {FEED_A: [_entry()]}, status_codes={FEED_A: 500})
     assert provider.next_item() is None
 
 
@@ -307,7 +305,9 @@ def test_close_closes_owned_client(tmp_path: Path) -> None:
 
 
 def test_close_does_not_close_injected_client(tmp_path: Path) -> None:
-    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text=_rss_xml([]))))
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, text=_rss_xml([])))
+    )
     provider = RssProvider(feed_urls=[FEED_A], cursor_file=tmp_path / "cursor.json", client=client)
     provider.close()
     assert not client.is_closed

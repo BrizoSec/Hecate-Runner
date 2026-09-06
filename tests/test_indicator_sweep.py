@@ -73,7 +73,13 @@ class TestBuildIndicatorSweep:
             ]
         ).lower()
 
-        for fabrication in ("phishing", "credential", "lateral movement", "malware family", "account login"):
+        for fabrication in (
+            "phishing",
+            "credential",
+            "lateral movement",
+            "malware family",
+            "account login",
+        ):
             assert fabrication not in rendered
 
     def test_technique_list_is_empty(self) -> None:

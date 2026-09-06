@@ -61,10 +61,14 @@ class MultiProvider(CTIProvider):
 
     def __init__(self, providers: list[CTIProvider], cursor_file: Path):
         if not providers:
-            raise MultiProviderError("At least one sub-provider is required to use the multi CTI provider")
+            raise MultiProviderError(
+                "At least one sub-provider is required to use the multi CTI provider"
+            )
         names = [p.name for p in providers]
         if len(set(names)) != len(names):
-            raise MultiProviderError(f"Duplicate provider names passed to multi CTI provider: {names}")
+            raise MultiProviderError(
+                f"Duplicate provider names passed to multi CTI provider: {names}"
+            )
         self.providers = providers
         self.cursor_file = cursor_file
         self._by_name = {p.name: p for p in providers}
@@ -82,7 +86,11 @@ class MultiProvider(CTIProvider):
             try:
                 item = provider.next_item()
             except Exception as exc:  # one bad source shouldn't sink the cycle
-                log.warning("CTI sub-provider %r failed (%s); trying the next configured source", provider.name, exc)
+                log.warning(
+                    "CTI sub-provider %r failed (%s); trying the next configured source",
+                    provider.name,
+                    exc,
+                )
                 continue
             if item is not None:
                 cursor.next_index = (idx + 1) % count

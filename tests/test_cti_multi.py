@@ -161,14 +161,18 @@ def test_factory_builds_multi_provider(settings: Settings, monkeypatch: pytest.M
     assert {p.name for p in provider.providers} == {"rss", "file"}
 
 
-def test_factory_rejects_empty_provider_list(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_factory_rejects_empty_provider_list(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("HECATE_RUNNER_CTI_MULTI_PROVIDERS", "")
     empty_settings = Settings(_env_file=None)  # type: ignore[call-arg]
     with pytest.raises(ValueError, match="at least one provider"):
         get_provider("multi", settings=empty_settings)
 
 
-def test_factory_rejects_self_reference(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_factory_rejects_self_reference(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("HECATE_RUNNER_CTI_MULTI_PROVIDERS", "rss,multi")
     settings_with_self = Settings(_env_file=None)  # type: ignore[call-arg]
     with pytest.raises(ValueError, match="cannot include 'multi'"):

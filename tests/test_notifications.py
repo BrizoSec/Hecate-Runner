@@ -12,7 +12,9 @@ from hecate_runner.notifications import notify_draft_created
 from hecate_runner.orchestrator import RunResult
 
 
-def test_noop_when_webhook_not_configured(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_noop_when_webhook_not_configured(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = []
     monkeypatch.setattr(httpx, "post", lambda *a, **kw: calls.append((a, kw)))
 
@@ -25,7 +27,9 @@ def test_noop_when_webhook_not_configured(settings: Settings, monkeypatch: pytes
 def test_posts_to_webhook_when_configured(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings = settings.model_copy(update={"slack_webhook_url": "https://hooks.slack.com/services/test"})
+    settings = settings.model_copy(
+        update={"slack_webhook_url": "https://hooks.slack.com/services/test"}
+    )
     captured = {}
 
     class FakeResponse:
@@ -55,7 +59,9 @@ def test_posts_to_webhook_when_configured(
 
 
 def test_ungrounded_draft_says_so(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = settings.model_copy(update={"slack_webhook_url": "https://hooks.slack.com/services/test"})
+    settings = settings.model_copy(
+        update={"slack_webhook_url": "https://hooks.slack.com/services/test"}
+    )
     captured = {}
 
     class FakeResponse:
@@ -77,7 +83,9 @@ def test_ungrounded_draft_says_so(settings: Settings, monkeypatch: pytest.Monkey
 def test_http_failure_is_swallowed_not_raised(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings = settings.model_copy(update={"slack_webhook_url": "https://hooks.slack.com/services/test"})
+    settings = settings.model_copy(
+        update={"slack_webhook_url": "https://hooks.slack.com/services/test"}
+    )
 
     def fake_post(url: str, json: dict, timeout: float):
         raise httpx.ConnectError("connection refused")
@@ -89,7 +97,9 @@ def test_http_failure_is_swallowed_not_raised(
     notify_draft_created(settings, result)
 
 
-def test_invalid_url_is_swallowed_not_raised(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_invalid_url_is_swallowed_not_raised(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Regression test: a malformed HECATE_RUNNER_SLACK_WEBHOOK_URL makes httpx.post
     itself raise httpx.InvalidURL, which inherits directly from Exception --
     NOT from httpx.HTTPError. The old `except httpx.HTTPError` didn't catch
@@ -110,7 +120,9 @@ def test_invalid_url_is_swallowed_not_raised(settings: Settings, monkeypatch: py
 def test_non_2xx_response_is_swallowed_not_raised(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings = settings.model_copy(update={"slack_webhook_url": "https://hooks.slack.com/services/test"})
+    settings = settings.model_copy(
+        update={"slack_webhook_url": "https://hooks.slack.com/services/test"}
+    )
 
     class FailingResponse:
         def raise_for_status(self) -> None:

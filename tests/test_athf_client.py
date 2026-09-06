@@ -120,7 +120,9 @@ def test_hypothesis_generator_appends_indicators_only_flag(
         return SAMPLE_OUTPUT
 
     monkeypatch.setattr(AthfClient, "_run", fake_run)
-    athf_client.hypothesis_generator(threat_intel="Attributes (245 total): domain (146)", indicators_only=True)
+    athf_client.hypothesis_generator(
+        threat_intel="Attributes (245 total): domain (146)", indicators_only=True
+    )
 
     assert "--indicators-only" in captured["cmd"]
 
@@ -220,9 +222,7 @@ def test_run_raises_on_timeout(athf_client: AthfClient, tmp_path: Path) -> None:
         athf_client._run([str(fake)], timeout_sec=1)
 
 
-def test_hypothesis_generator_end_to_end(
-    athf_client: AthfClient, tmp_path: Path
-) -> None:
+def test_hypothesis_generator_end_to_end(athf_client: AthfClient, tmp_path: Path) -> None:
     fake = _make_fake_athf(
         tmp_path,
         f"#!/bin/sh\ncat <<'END'\n{SAMPLE_OUTPUT}\nEND\n",
@@ -384,7 +384,9 @@ def test_lookup_technique_builds_expected_command(
     assert cmd[-4:] == ["attack", "lookup", "T1003.001", "--json"]
 
 
-def test_lookup_technique_not_found_returns_unresolved(athf_client: AthfClient, tmp_path: Path) -> None:
+def test_lookup_technique_not_found_returns_unresolved(
+    athf_client: AthfClient, tmp_path: Path
+) -> None:
     fake = _make_fake_athf(
         tmp_path,
         '#!/bin/sh\nprintf \'%s\' \'{"error": "not_found", "technique_id": "T9999"}\'\n',
@@ -396,7 +398,9 @@ def test_lookup_technique_not_found_returns_unresolved(athf_client: AthfClient, 
     assert result.platforms == []
 
 
-def test_lookup_technique_athf_failure_is_non_fatal(athf_client: AthfClient, tmp_path: Path) -> None:
+def test_lookup_technique_athf_failure_is_non_fatal(
+    athf_client: AthfClient, tmp_path: Path
+) -> None:
     fake = _make_fake_athf(tmp_path, "#!/bin/sh\necho boom >&2; exit 1\n")
     athf_client.athf_bin = fake
     result = athf_client.lookup_technique("T1098")

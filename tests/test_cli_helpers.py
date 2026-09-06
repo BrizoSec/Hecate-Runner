@@ -29,9 +29,7 @@ def test_tavily_key_from_workspace_env_file(
     assert _tavily_key_available(settings) is True
 
 
-def test_tavily_key_absent_from_both(
-    settings: Settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_tavily_key_absent_from_both(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     # workspace fixture doesn't create a .env file by default
     assert _tavily_key_available(settings) is False

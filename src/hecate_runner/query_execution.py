@@ -174,22 +174,32 @@ class SplunkQueryProvider(QueryProvider):
                 outcome="error", provider=self.name, detail=f"timed out after {self.timeout_sec}s"
             )
         except FileNotFoundError:
-            return QueryResult(outcome="error", provider=self.name, detail=f"athf binary missing at {self.athf_bin}")
+            return QueryResult(
+                outcome="error",
+                provider=self.name,
+                detail=f"athf binary missing at {self.athf_bin}",
+            )
 
         if result.returncode != 0:
-            return QueryResult(outcome="error", provider=self.name, detail=result.stderr.strip()[:500])
+            return QueryResult(
+                outcome="error", provider=self.name, detail=result.stderr.strip()[:500]
+            )
 
         # `athf splunk search --format json` prints a human-readable banner to
         # stdout before the JSON array, even in JSON mode -- find where the
         # array starts rather than assuming the whole stream is valid JSON.
         start = result.stdout.find("[")
         if start == -1:
-            return QueryResult(outcome="error", provider=self.name, detail="no JSON array in athf splunk output")
+            return QueryResult(
+                outcome="error", provider=self.name, detail="no JSON array in athf splunk output"
+            )
 
         try:
             data = json.loads(result.stdout[start:])
         except json.JSONDecodeError as exc:
-            return QueryResult(outcome="error", provider=self.name, detail=f"could not parse results: {exc}")
+            return QueryResult(
+                outcome="error", provider=self.name, detail=f"could not parse results: {exc}"
+            )
 
         return QueryResult(
             outcome="executed",
@@ -199,7 +209,9 @@ class SplunkQueryProvider(QueryProvider):
         )
 
 
-def get_provider(name: str, *, athf_bin: Path | None = None, workspace: Path | None = None) -> QueryProvider:
+def get_provider(
+    name: str, *, athf_bin: Path | None = None, workspace: Path | None = None
+) -> QueryProvider:
     if name == "mock":
         return MockQueryProvider()
     if name == "splunk":

@@ -121,7 +121,7 @@ class TestSplunkQueryProvider:
             "#!/bin/sh\n"
             "printf 'Executing query: index=main\\n'\n"
             "printf 'Time range: -7d to now\\n\\n'\n"
-            "printf '[{\"user\": \"alice\"}, {\"user\": \"bob\"}]'\n"
+            'printf \'[{"user": "alice"}, {"user": "bob"}]\'\n'
         )
         fake = self._make_fake_athf(tmp_path, script)
         provider = SplunkQueryProvider(athf_bin=fake, workspace=tmp_path)
