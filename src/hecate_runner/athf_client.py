@@ -222,6 +222,17 @@ class AthfClient:
             return TechniqueMetadata(technique_id=technique_id)
 
         if "error" in data:
+            # Silent until now: this is the branch a missing/unreadable STIX
+            # cache lands in, and it degrades every draft to empty tactics and
+            # platforms -- losing the only signal that would flag a technique
+            # ID as a poor fit for the hypothesis. Worth a warning, since the
+            # resulting draft otherwise looks entirely normal.
+            log.warning(
+                "athf attack lookup %s returned no metadata (%s); "
+                "draft will have empty tactics/platforms",
+                technique_id,
+                data.get("error"),
+            )
             return TechniqueMetadata(technique_id=technique_id)
 
         return TechniqueMetadata(
