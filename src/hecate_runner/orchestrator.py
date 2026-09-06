@@ -19,6 +19,7 @@ from hecate_runner.athf_client import AthfClient, AthfError
 from hecate_runner.config import Settings
 from hecate_runner.cti import CTIProvider, get_provider
 from hecate_runner.hunt_writer import DraftHuntRequest, hunt_id_lock, next_hunt_id, write_draft
+from hecate_runner.indicator_sweep import build_indicator_sweep, parse_indicator_inventory
 from hecate_runner.notifications import notify_draft_created
 from hecate_runner.state import OrchestratorState
 
@@ -105,6 +106,37 @@ def derive_research_topic(cti_content: str, title: str | None = None) -> tuple[s
     return topic or "Untitled CTI", technique
 
 
+def has_narrative(cti_content: str) -> bool:
+    """Whether ``cti_content`` has real free-text narrative to search on.
+
+    All three CTI providers build their blurb around a "does this item have
+    a human-written description" branch: RSS's ``_entry_to_blurb`` appends a
+    ``Summary:`` line only when the entry has one, OTX's ``_pulse_to_blurb``
+    appends a ``Description:`` line only when the pulse has one, and MISP's
+    ``_event_to_blurb`` never includes a narrative field at all -- just
+    Org/Threat Level/TLP/Tags/attribute counts. Checking for either label is
+    a cheap, provider-agnostic proxy for "is there anything here besides an
+    IOC dump and a title."
+
+    Gates two things, both failing the same way for the same reason -- a
+    bare IOC-count blurb gives each step nothing real to work from, and both
+    fill the gap from background knowledge rather than leaving it empty:
+
+    - Web search during research. Tavily has nothing of substance to match,
+      so it grounds on whatever else shares the topic's generic/templated
+      title -- observed fabricating malware family names ("PureRAT and
+      Overlord RAT") that propagated into the hunt file, unlike the
+      recurring-digest-title case in `derive_research_topic` where the hunt
+      stayed accurate because the CTI still had real text to fall back on.
+    - Hypothesis generation. The agent's default template obliges the model
+      to name a behavior, so against a list of domains it invented one --
+      "phishing emails" as the delivery vector, "stolen credentials ...
+      lateral movement" as follow-on activity, plus an unsupported ATT&CK
+      technique. See `AthfClient.hypothesis_generator`'s indicators_only.
+    """
+    return "Description:" in cti_content or "Summary:" in cti_content
+
+
 @dataclass
 class RunResult:
     """Structured outcome of one orchestrator cycle."""
@@ -173,8 +205,8 @@ class Orchestrator:
         aren't filtered the same way -- a technique's tactic (e.g.
         "persistence") stays meaningful and low-cardinality even when its
         platform list is broad. If every resolved technique happens to be
-        broad, `platforms` comes back empty and hunt_writer's `["Unknown"]`
-        fallback kicks in -- an honest gap signal rather than a fabricated
+        broad, `platforms` comes back empty and stays empty in the draft's
+        frontmatter -- an honest gap signal rather than a fabricated
         full-platform list.
         """
         tactics: list[str] = []
@@ -216,6 +248,17 @@ class Orchestrator:
             state.total_drafts_ever -= 1
             return RunResult(outcome="dry_run", detail=item.content[:100])
 
+        # Computed once for the whole cycle: the same "is there any prose
+        # here?" answer gates web search during research (nothing real to
+        # search for) and constrains hypothesis generation afterwards
+        # (nothing real to infer a behavior from).
+        intel_has_narrative = has_narrative(item.content)
+        if not intel_has_narrative:
+            log.info(
+                "CTI item has no narrative (bare IOC dump); disabling web search and "
+                "constraining the hypothesis to indicator presence for this cycle."
+            )
+
         research_id: str | None = None
         related_hunts: list[str] = []
         if self.settings.research_enabled:
@@ -226,6 +269,7 @@ class Orchestrator:
                     technique=technique,
                     depth=self.settings.research_depth,
                     timeout_sec=self.settings.llm_timeout_sec,
+                    web_search_enabled=intel_has_narrative,
                 )
             except AthfError as exc:
                 # Cold (ungrounded) generation measured ~30% accuracy on known-
@@ -247,18 +291,41 @@ class Orchestrator:
             related_hunts = research_result.related_hunts
             log.info("Research %s grounds this cycle's hypothesis", research_id)
 
-        try:
-            hypothesis = self.athf.hypothesis_generator(
-                threat_intel=item.content,
-                research_id=research_id,
-                timeout_sec=self.settings.llm_timeout_sec,
+        # A narrative-free dump whose indicator inventory we can actually read
+        # gets a deterministic sweep draft -- no LLM call, so no slot for the
+        # model to invent a delivery vector or technique into.
+        #
+        # Both halves of that condition matter. `has_narrative` is a
+        # heuristic over provider blurb formats, and if it were wrong on its
+        # own, building the draft from a template would *discard* real
+        # narrative CTI -- a worse failure than the fabrication this fixes.
+        # Requiring a parseable inventory as well means we act only on
+        # positive evidence that this really is a feed dump; anything else
+        # falls through to the LLM with the indicators-only constraint,
+        # which degrades safely either way.
+        sweep_inventory = {} if intel_has_narrative else parse_indicator_inventory(item.content)
+        if sweep_inventory:
+            log.info(
+                "CTI is an indicator dump (%d indicators, %d type(s)); building a sweep "
+                "draft directly instead of generating a behavioral hypothesis.",
+                sum(sweep_inventory.values()),
+                len(sweep_inventory),
             )
-        except AthfError as exc:
-            log.error("athf hypothesis-generator failed: %s", exc)
-            # Refund the quota — the CTI stays in the queue.
-            state.drafts_today -= 1
-            state.total_drafts_ever -= 1
-            return RunResult(outcome="athf_error", detail=str(exc))
+            hypothesis = build_indicator_sweep(item.content, title=item.title or None)
+        else:
+            try:
+                hypothesis = self.athf.hypothesis_generator(
+                    threat_intel=item.content,
+                    research_id=research_id,
+                    timeout_sec=self.settings.llm_timeout_sec,
+                    indicators_only=not intel_has_narrative,
+                )
+            except AthfError as exc:
+                log.error("athf hypothesis-generator failed: %s", exc)
+                # Refund the quota — the CTI stays in the queue.
+                state.drafts_today -= 1
+                state.total_drafts_ever -= 1
+                return RunResult(outcome="athf_error", detail=str(exc))
 
         if hypothesis.is_empty:
             log.warning("athf returned empty hypothesis; refunding quota and leaving CTI.")

@@ -110,6 +110,61 @@ def test_parse_output_without_able_scoping_defaults_to_empty() -> None:
     assert result.evidence == ""
 
 
+def test_hypothesis_generator_appends_indicators_only_flag(
+    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(self: AthfClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
+        captured["cmd"] = cmd
+        return SAMPLE_OUTPUT
+
+    monkeypatch.setattr(AthfClient, "_run", fake_run)
+    athf_client.hypothesis_generator(threat_intel="Attributes (245 total): domain (146)", indicators_only=True)
+
+    assert "--indicators-only" in captured["cmd"]
+
+
+def test_hypothesis_generator_omits_indicators_only_flag_by_default(
+    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(self: AthfClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
+        captured["cmd"] = cmd
+        return SAMPLE_OUTPUT
+
+    monkeypatch.setattr(AthfClient, "_run", fake_run)
+    athf_client.hypothesis_generator(threat_intel="A real narrative report about an actor")
+
+    assert "--indicators-only" not in captured["cmd"]
+
+
+def test_parse_output_routes_warnings_away_from_evidence() -> None:
+    """Regression test: "Warnings:" wasn't a known section header, so the
+    parser kept appending its lines to whichever section came before it --
+    "Evidence:" in the CLI's real output order. ATT&CK-validation
+    diagnostics were landing verbatim in the drafted hunt's ABLE Evidence
+    cell ("process.name ... Warnings: * Removed 1 unrecognised ATT&CK
+    ID(s): T1067")."""
+    text = (
+        "Evidence:\n"
+        "  process.name (95% populated)\n"
+        "Warnings:\n"
+        "  * Remapped 1 deprecated ATT&CK ID(s) to their current equivalent: T1067 -> T1542.003\n"
+        "  * Removed 1 unrecognised ATT&CK ID(s): T1065.003\n"
+    )
+    result = AthfClient._parse_hypothesis_output(text)
+
+    assert result.evidence == "process.name (95% populated)"
+    assert "Warnings" not in result.evidence
+    assert "T1067" not in result.evidence
+    assert result.warnings == [
+        "Remapped 1 deprecated ATT&CK ID(s) to their current equivalent: T1067 -> T1542.003",
+        "Removed 1 unrecognised ATT&CK ID(s): T1065.003",
+    ]
+
+
 def test_parse_empty_output() -> None:
     result = AthfClient._parse_hypothesis_output("")
     assert result.is_empty
@@ -266,6 +321,36 @@ def test_research_new_omits_technique_when_none(
     assert "--technique" not in captured["cmd"]
 
 
+def test_research_new_appends_no_web_search_flag_when_disabled(
+    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(self: AthfClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
+        captured["cmd"] = cmd
+        return SAMPLE_RESEARCH_OUTPUT
+
+    monkeypatch.setattr(AthfClient, "_run", fake_run)
+    athf_client.research_new(topic="ThreatFox IOCs for 2026-08-05", web_search_enabled=False)
+
+    assert "--no-web-search" in captured["cmd"]
+
+
+def test_research_new_omits_no_web_search_flag_by_default(
+    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(self: AthfClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
+        captured["cmd"] = cmd
+        return SAMPLE_RESEARCH_OUTPUT
+
+    monkeypatch.setattr(AthfClient, "_run", fake_run)
+    athf_client.research_new(topic="Scheduled task abuse")
+
+    assert "--no-web-search" not in captured["cmd"]
+
+
 def test_lookup_technique_end_to_end(athf_client: AthfClient, tmp_path: Path) -> None:
     fake = _make_fake_athf(
         tmp_path,
@@ -324,3 +409,24 @@ def test_lookup_technique_malformed_json_is_non_fatal(
     monkeypatch.setattr(AthfClient, "_run", lambda self, cmd, *, timeout_sec=None: "not valid json")
     result = athf_client.lookup_technique("T1098")
     assert result.found is False
+
+
+def test_parse_output_captures_indicator_only_self_assessment() -> None:
+    """The agent's own indicator-only verdict (the backstop for callers that
+    can't flag the source themselves) must be captured -- and, like
+    "Warnings:", must not bleed into the preceding Evidence section."""
+    text = (
+        "Evidence:\n"
+        "  network_logs.dest_ip\n"
+        "Indicator-Only Source:\n"
+        "  Source is a bare indicator list with no narrative.\n"
+    )
+    result = AthfClient._parse_hypothesis_output(text)
+
+    assert result.is_indicator_only is True
+    assert result.evidence == "network_logs.dest_ip"
+
+
+def test_parse_output_defaults_indicator_only_to_false() -> None:
+    text = "Hypothesis:\n  A real behavioral hypothesis.\n"
+    assert AthfClient._parse_hypothesis_output(text).is_indicator_only is False

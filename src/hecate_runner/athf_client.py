@@ -60,6 +60,19 @@ class HypothesisResult:
     # must not retroactively flag every hunt as low-confidence.
     is_threat_report: bool = True
     low_confidence_reason: str = ""
+    # Set when the CLI reports the agent self-assessed its input as a bare
+    # indicator list (athf's `is_indicator_only`). This is the backstop path:
+    # the orchestrator normally recognises feed dumps itself and builds a
+    # sweep draft without an LLM at all, so this only fires when its
+    # heuristic missed one and the model caught it.
+    is_indicator_only: bool = False
+    # ATT&CK-validation notes the CLI prints under a "Warnings:" heading
+    # (deprecated IDs remapped, fabricated ones removed). Captured into a
+    # field of their own because the section-routing parser below assigns
+    # every unrecognised heading's lines to whatever section preceded it --
+    # in practice "Evidence:", so these diagnostics were being appended verbatim
+    # into the drafted hunt's ABLE Evidence cell.
+    warnings: list[str] = field(default_factory=list)
     raw_output: str = ""
 
     @property
@@ -111,6 +124,7 @@ class AthfClient:
         technique: str | None = None,
         depth: str = "basic",
         timeout_sec: int | None = None,
+        web_search_enabled: bool = True,
     ) -> ResearchResult:
         """Run ``athf research new`` and parse the resulting research ID.
 
@@ -118,6 +132,14 @@ class AthfClient:
         (system research, adversary tradecraft via web search, telemetry
         mapping, related-work correlation, synthesis) instead of asking the
         model to generate a hypothesis from the raw CTI blob alone.
+
+        web_search_enabled should be set to False for narrative-free CTI
+        (e.g. a bare IOC-count blurb with no Description/Summary text) --
+        without real narrative to search for, web search grounds against
+        whatever else shares the topic's generic/templated title (e.g. other
+        days' instances of the same recurring feed digest) and has been
+        observed to fabricate malware family names that then propagate into
+        the hunt.
         """
         cmd = [
             str(self.athf_bin),
@@ -132,6 +154,8 @@ class AthfClient:
         ]
         if technique:
             cmd.extend(["--technique", technique])
+        if not web_search_enabled:
+            cmd.append("--no-web-search")
 
         stdout = self._run(cmd, timeout_sec=timeout_sec)
         parsed = self._parse_research_output(stdout)
@@ -143,8 +167,17 @@ class AthfClient:
         threat_intel: str,
         research_id: str | None = None,
         timeout_sec: int | None = None,
+        indicators_only: bool = False,
     ) -> HypothesisResult:
-        """Run ``athf agent run hypothesis-generator`` and parse the output."""
+        """Run ``athf agent run hypothesis-generator`` and parse the output.
+
+        indicators_only should be set for narrative-free CTI (see
+        `has_narrative`). Without it the agent's hypothesis template obliges
+        the model to name a behavior, and against a bare list of domains it
+        invents one -- observed producing "phishing emails" as the delivery
+        vector and "stolen credentials ... lateral movement" as follow-on
+        activity for feed dumps that described neither.
+        """
         cmd = [
             str(self.athf_bin),
             "agent",
@@ -155,6 +188,8 @@ class AthfClient:
         ]
         if research_id:
             cmd.extend(["--research", research_id])
+        if indicators_only:
+            cmd.append("--indicators-only")
 
         stdout = self._run(cmd, timeout_sec=timeout_sec)
         parsed = self._parse_hypothesis_output(stdout)
@@ -167,10 +202,9 @@ class AthfClient:
         Best-effort and never raises: STIX data may not be installed, the
         technique ID may be unknown/malformed (e.g. a hypothesis-generator
         placeholder), or the call may time out. Any of those just yields a
-        not-``found`` result so callers fall back to an explicit
-        "unclassified" placeholder instead of guessing — or, as before this
-        existed, hardcoding a tactic that has nothing to do with the actual
-        technique.
+        not-``found`` result so callers leave the field empty instead of
+        guessing — or, as before this existed, hardcoding a tactic that has
+        nothing to do with the actual technique.
         """
         cmd = [str(self.athf_bin), "attack", "lookup", technique_id, "--json"]
         try:
@@ -285,6 +319,7 @@ class AthfClient:
             "data_sources": result.data_sources,
             "observables": result.observables,
             "false_positives": result.false_positives,
+            "warnings": result.warnings,
         }
         prose_targets: dict[str, str] = {
             "hypothesis": "",
@@ -294,6 +329,7 @@ class AthfClient:
             "location": "",
             "evidence": "",
             "low_confidence_reason": "",
+            "indicator_only_marker": "",
         }
 
         section_headers = {
@@ -308,6 +344,8 @@ class AthfClient:
             "location:": "location",
             "evidence:": "evidence",
             "low confidence source:": "low_confidence_reason",
+            "indicator-only source:": "indicator_only_marker",
+            "warnings:": "warnings",
         }
 
         for raw_line in text.splitlines():
@@ -341,4 +379,8 @@ class AthfClient:
         if prose_targets["low_confidence_reason"]:
             result.is_threat_report = False
             result.low_confidence_reason = prose_targets["low_confidence_reason"]
+        # Same convention: the CLI prints this section only when the agent
+        # self-assessed the source as indicator-only, so its presence is the
+        # signal and its absence must leave the False default alone.
+        result.is_indicator_only = bool(prose_targets["indicator_only_marker"])
         return result

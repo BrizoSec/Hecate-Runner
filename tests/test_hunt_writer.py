@@ -191,13 +191,17 @@ def test_render_draft_uses_resolved_tactics_and_platforms(
     assert "platform: [Windows]" not in md
 
 
-def test_render_draft_falls_back_to_unclassified_when_ttps_unresolved(
+def test_render_draft_leaves_unresolved_ttps_empty_in_frontmatter(
     sample_hypothesis: HypothesisResult,
 ) -> None:
     """When the orchestrator couldn't resolve any tactic/platform (e.g.
-    STIX unavailable, unknown technique ID), the draft must say so
-    explicitly rather than silently defaulting to a specific, likely-wrong
-    tactic/platform."""
+    STIX unavailable, unknown technique ID), the frontmatter must be empty
+    rather than carrying a stand-in.
+
+    Regression test: the stand-ins used to be "unclassified"/"Unknown",
+    which `athf hunt validate` checks against the ATT&CK matrix and
+    rejects -- so drafts were written already failing the framework's own
+    validator. The gap is still stated for the reviewer, in the body."""
     req = DraftHuntRequest(
         hunt_id="H-0999",
         threat_intel="test intel",
@@ -205,8 +209,9 @@ def test_render_draft_falls_back_to_unclassified_when_ttps_unresolved(
         generated_at=datetime(2026, 7, 4, 22, 0, tzinfo=UTC),
     )
     md = render_draft(req)
-    assert "tactics: [\"unclassified\"]" in md
-    assert "platform: [\"Unknown\"]" in md
+    assert "tactics: []" in md
+    assert "platform: []" in md
+    assert "unclassified" not in md
 
 
 def test_render_draft_uses_hypothesis_data_sources(
@@ -231,8 +236,13 @@ def test_render_draft_handles_empty_hypothesis() -> None:
     )
     md = render_draft(req)
     assert "H-0001" in md
-    assert "TXXXX" in md  # placeholder technique
     assert "[TBD]" in md
+    # An unmapped technique list reads as a gap in the body and is simply
+    # absent from frontmatter -- never a "TXXXX" stand-in, which both fails
+    # `athf hunt validate` and reads as a real ATT&CK ID at a glance.
+    assert "TXXXX" not in md
+    assert "techniques: []" in md
+    assert "**MITRE ATT&CK:** [none mapped - human to populate]" in md
 
 
 def test_short_title_leaves_short_hypothesis_untouched() -> None:

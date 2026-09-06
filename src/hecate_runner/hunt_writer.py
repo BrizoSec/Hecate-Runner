@@ -118,30 +118,45 @@ def _able_cell(value: str) -> str:
     return text.replace("|", "\\|")
 
 
-def _draft_tags(is_threat_report: bool) -> list[str]:
+def _draft_tags(is_threat_report: bool, is_indicator_only: bool = False) -> list[str]:
     """Frontmatter `tags:` for a draft, with `low-confidence-source`
     appended when the hypothesis-generator judged the CTI itself doesn't
     describe real adversary behavior -- lets `athf hunt search`/filtering
     surface (or exclude) these during triage instead of a reviewer having
     to open every draft to notice the banner in the body.
+
+    `indicator-sweep` marks the other kind of thin source: a narrative-free
+    feed dump, which produces an indicator-presence draft rather than a
+    behavioral hypothesis. Distinct from `low-confidence-source` on purpose
+    -- a feed dump is genuine threat intel, just not a story, and conflating
+    the two would dilute what the low-confidence tag means at triage.
     """
     tags = ["draft", "auto-generated", "requires-human-review"]
     if not is_threat_report:
         tags.append("low-confidence-source")
+    if is_indicator_only:
+        tags.append("indicator-sweep")
     return tags
 
 
 def render_draft(req: DraftHuntRequest) -> str:
     """Return the full markdown content for a draft hunt."""
     hyp = req.hypothesis
-    techniques = hyp.techniques or ["TXXXX"]
-    # Real tactics/platforms come from an ATT&CK lookup keyed off hyp.techniques
-    # (see Orchestrator._resolve_ttps) — when that lookup found nothing (no
-    # techniques to resolve, unknown ID, STIX unavailable), an explicit
-    # "unclassified"/"Unknown" placeholder is honest about the gap instead of
-    # defaulting to a fixed tactic/platform that's usually wrong for the CTI.
-    tactics = req.tactics or ["unclassified"]
-    platforms = req.platforms or ["Unknown"]
+    # Frontmatter carries only real, validated values; an unmapped field is
+    # left empty rather than filled with a stand-in. "TXXXX" and
+    # "unclassified" used to sit here as "honest placeholders", but both are
+    # checked by `athf hunt validate` against the ATT&CK matrix, so every
+    # draft that hit this path was written already failing the framework's
+    # own validator ("Unknown MITRE technique: TXXXX"). "TXXXX" also *looks*
+    # like a real ATT&CK ID at a glance, which a word like "unclassified"
+    # at least does not. The human-facing gap markers live in the rendered
+    # body below, where a reviewer actually reads them.
+    techniques = hyp.techniques
+    tactics = req.tactics
+    platforms = req.platforms
+    # Body-only rendering of the same gap, for the reviewer rather than the
+    # validator. An empty ", ".join() would render a bare dangling label.
+    techniques_display = ", ".join(techniques) if techniques else "[none mapped - human to populate]"
     data_sources = hyp.data_sources or ["CrowdStrike"]
 
     def bullets(items: list[str]) -> str:
@@ -165,7 +180,7 @@ def render_draft(req: DraftHuntRequest) -> str:
         "true_positives: 0\n"
         "false_positives: 0\n"
         "customer_deliverables: []\n"
-        f"tags: {json.dumps(_draft_tags(hyp.is_threat_report))}\n"
+        f"tags: {json.dumps(_draft_tags(hyp.is_threat_report, hyp.is_indicator_only))}\n"
         "---\n\n"
     )
 
@@ -191,7 +206,7 @@ def render_draft(req: DraftHuntRequest) -> str:
 - **Date:** {req.generated_at.strftime('%Y-%m-%d')}
 - **Hunter:** hecate-runner orchestrator (draft)
 - **Status:** planning
-- **MITRE ATT&CK:** {", ".join(techniques)}
+- **MITRE ATT&CK:** {techniques_display}
 
 ---
 
@@ -222,7 +237,7 @@ Source CTI:
 
 ### Threat Intel & Research
 
-- **MITRE ATT&CK Techniques:** {", ".join(techniques)}
+- **MITRE ATT&CK Techniques:** {techniques_display}
 - **CTI Sources & References:** {f"[{req.source_url}]({req.source_url})" if req.source_url else "[Review CTI and populate]"}
 {f"- **Research Document:** See [{req.research_id}](../../../../research/{req.research_id}.md) for detailed pre-hunt research" if req.research_id else "- **Research Document:** None — research grounding unavailable this cycle, review CTI directly"}
 

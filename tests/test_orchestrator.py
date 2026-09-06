@@ -7,10 +7,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hecate_runner.athf_client import AthfClient, AthfError, HypothesisResult, ResearchResult, TechniqueMetadata
+from hecate_runner.athf_client import (
+    AthfClient,
+    AthfError,
+    HypothesisResult,
+    ResearchResult,
+    TechniqueMetadata,
+)
 from hecate_runner.config import Settings
 from hecate_runner.cti import FileQueueProvider
-from hecate_runner.orchestrator import Orchestrator, derive_research_topic
+from hecate_runner.orchestrator import Orchestrator, derive_research_topic, has_narrative
 
 
 @pytest.fixture
@@ -78,6 +84,100 @@ def test_happy_path_creates_draft(
     mock_athf.hypothesis_generator.assert_called_once()
     # research_id from the grounding step must flow into hypothesis generation
     assert mock_athf.hypothesis_generator.call_args.kwargs["research_id"] == "R-0001"
+
+
+def test_narrative_free_cti_disables_web_search(
+    settings: Settings,
+    workspace: Path,
+    mock_athf: MagicMock,
+) -> None:
+    # Regression test for the ThreatFox-style bare IOC dump that fabricated
+    # "PureRAT and Overlord RAT" after web search grounded against wrong-
+    # dated pages of the same recurring aggregator title (see has_narrative).
+    provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
+    provider.ensure_dirs()
+    (workspace / "cti_queue" / "next.txt").write_text(
+        "MISP Event: ThreatFox IOCs for 2026-08-05\n"
+        "Org: ThreatFox\n"
+        "Threat Level: Medium\n"
+        "TLP: white\n"
+        "Attributes (42 total): domain (10), ip-dst (20), url (12)"
+    )
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+
+    orch.run_once()
+
+    assert mock_athf.research_new.call_args.kwargs["web_search_enabled"] is False
+    # A readable indicator inventory means the draft is built directly, with
+    # no LLM call at all -- there is no slot left for the model to invent a
+    # delivery vector or technique into.
+    mock_athf.hypothesis_generator.assert_not_called()
+
+
+def test_narrative_free_cti_without_readable_inventory_falls_back_to_llm(
+    settings: Settings,
+    workspace: Path,
+    mock_athf: MagicMock,
+) -> None:
+    """`has_narrative` is a heuristic over provider blurb formats. When it
+    says "no narrative" but there's no indicator inventory to confirm the
+    source really is a feed dump, building a template draft would discard
+    real CTI -- so the LLM path runs instead, with the constraint applied."""
+    provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
+    provider.ensure_dirs()
+    (workspace / "cti_queue" / "next.txt").write_text(
+        "MISP Event: Something unusual\nOrg: SomeOrg\nThreat Level: High"
+    )
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+
+    result = orch.run_once()
+
+    assert result.outcome == "draft_created"
+    assert mock_athf.hypothesis_generator.call_args.kwargs["indicators_only"] is True
+
+
+def test_indicator_dump_draft_has_no_techniques_and_no_invented_behavior(
+    settings: Settings,
+    workspace: Path,
+    mock_athf: MagicMock,
+) -> None:
+    provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
+    provider.ensure_dirs()
+    (workspace / "cti_queue" / "next.txt").write_text(
+        "MISP Event: ThreatFox IOCs for 2026-08-09\n"
+        "Org: abuse.ch\n"
+        "Attributes (245 total): domain (146), ip-dst|port (78), url (21)"
+    )
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+
+    result = orch.run_once()
+
+    assert result.draft_path is not None
+    content = result.draft_path.read_text()
+    assert "techniques: []" in content
+    assert "TXXXX" not in content
+    assert "Indicators published in ThreatFox IOCs for 2026-08-09" in content
+    for fabrication in ("phishing", "lateral movement", "stolen credentials"):
+        assert fabrication not in content.lower()
+
+
+def test_narrative_cti_keeps_web_search_enabled(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_athf: MagicMock,
+) -> None:
+    (file_queue_with_cti.queue_dir / "next.txt").write_text(
+        "RSS: Some Campaign\n"
+        "Source: example.com\n"
+        "Summary: Attackers observed doing something specific and narrative-worthy.\n"
+        "Link: https://example.com/post"
+    )
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+
+    orch.run_once()
+
+    assert mock_athf.research_new.call_args.kwargs["web_search_enabled"] is True
+    assert mock_athf.hypothesis_generator.call_args.kwargs["indicators_only"] is False
 
 
 def test_related_hunts_from_research_flow_into_draft(
@@ -383,6 +483,42 @@ def test_derive_research_topic_truncates_long_title_on_word_boundary() -> None:
     topic, _ = derive_research_topic("irrelevant content body", title=long_title)
     assert len(topic) <= 100
     assert not topic.endswith(" ")
+
+
+def test_has_narrative_true_for_rss_summary_line() -> None:
+    content = (
+        "RSS: Token Jacking: Cybercriminals Could Be Stealing Your AI Resources\n"
+        "Source: unit42.paloaltonetworks.com\n"
+        "Tags: Malware, Threat Research\n"
+        "Summary: Discover how attackers hijack AI tokens to fuel gray market transfer stations.\n"
+        "Link: https://unit42.paloaltonetworks.com/ai-token-jacking/"
+    )
+    assert has_narrative(content) is True
+
+
+def test_has_narrative_true_for_otx_description_line() -> None:
+    content = (
+        "OTX Pulse: Fake Software Installers Disable Windows Update\n"
+        "Adversary/Attribution: Void Arachne\n"
+        "Description: An active malware campaign utilizes fraudulent software-download websites...\n"
+        "Indicators (16 total): domain (16)"
+    )
+    assert has_narrative(content) is True
+
+
+def test_has_narrative_false_for_bare_ioc_dump() -> None:
+    # MISP's _event_to_blurb never includes a narrative field -- only
+    # Org/Threat Level/TLP/Tags/attribute counts -- so a MISP-sourced item
+    # like a ThreatFox IOC-dump event is structurally narrative-free.
+    content = (
+        "MISP Event: ThreatFox IOCs for 2026-08-05\n"
+        "Org: ThreatFox\n"
+        "Threat Level: Medium\n"
+        "TLP: white\n"
+        "Tags: type:OSINT, tlp:white\n"
+        "Attributes (42 total): domain (10), ip-dst (20), url (12)"
+    )
+    assert has_narrative(content) is False
 
 
 def test_resolve_ttps_excludes_near_universal_platforms_from_union(
