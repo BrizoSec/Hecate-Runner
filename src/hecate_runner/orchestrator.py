@@ -367,9 +367,19 @@ class Orchestrator:
         otherwise complete, so a failure leaves the section empty rather than
         aborting the cycle.
         """
+        # Audit the draft *without* its own previous Grounding section. The
+        # section is re-rendered on the second pass (after Sigma), and feeding
+        # a claim table back through the extractor would have the audit read
+        # its own output as though it were hunt content.
+        previous_section, req.grounding_section = req.grounding_section, ""
+        try:
+            draft_text = render_draft(req)
+        finally:
+            req.grounding_section = previous_section
+
         try:
             report = audit_draft(
-                draft_text=render_draft(req),
+                draft_text=draft_text,
                 cti_text=item.content,
                 research_text=self._research_text(req.research_id),
                 cti_techniques=[str(t) for t in (item.metadata.get("techniques") or [])],

@@ -67,6 +67,8 @@ A generated hunt is only worth acting on if its claims trace back to evidence. T
 
 Evidence is ranked because it is not equally trustworthy. Treating a research document as proof lets a fabrication launder itself: a CVE invented during research and written into `R-0611` came back as "asserted" in any hunt built from that research, which is circular. The CTI exists independently of this pipeline; the research does not.
 
+What gets checked: ATT&CK technique IDs (including whether they exist in the current matrix), CVEs, indicators inside generated Sigma rules, and named entities in prose — actor designators like `APT41`, `<Name> backdoor`-style collocations, and CamelCase families like `PureRAT`. Entity checking is precision-first: "adversaries deploy a backdoor" names nothing and is ignored, because a section full of false alarms is one a reviewer learns to skip.
+
 The audit reports rather than blocks, because a hunt that generalises beyond its CTI is doing its job. What it catches is the opposite: an assertion specific enough to *read* as evidence that nothing supports — a fabricated CVE, or a Sigma rule matching a C2 domain no intelligence mentions. Only traceable shapes are examined: a rule matching `\powershell.exe` is behaviour, while one matching `203.0.113.99` is a claim.
 
 ## Query execution: propose, don't run

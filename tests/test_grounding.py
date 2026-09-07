@@ -230,3 +230,63 @@ def test_techniques_without_facts_fall_back_to_provenance_only():
     """Facts are optional; an audit run without them must still work."""
     report = audit_draft(draft_text="T1566", cti_text=CTI, cti_techniques=CTI_TECHNIQUES)
     assert report.claims[0].status == "derived"
+
+
+# --- Named entities in prose (G2) ------------------------------------------
+
+
+def test_flags_an_invented_malware_family():
+    """The documented case: hypothesis generation invented "PureRAT and
+    Overlord RAT" and both propagated into a hunt file as reported fact."""
+    report = audit_draft(
+        draft_text="Related tooling includes PureRAT and the Overlord RAT.",
+        cti_text=CTI,
+    )
+    assert {c.value for c in report.unsupported} == {"PureRAT", "Overlord"}
+
+
+def test_confirms_a_family_the_source_named():
+    report = audit_draft(
+        draft_text="The Chrysalis backdoor is delivered via a compromised installer.",
+        cti_text="MISP Event: The Chrysalis Backdoor: a deep dive",
+    )
+    assert [c.status for c in report.claims] == ["asserted"]
+
+
+def test_flags_an_actor_designator_no_source_names():
+    report = audit_draft(draft_text="Attributed to APT41.", cti_text=CTI)
+    assert [c.value for c in report.unsupported] == ["APT41"]
+
+
+def test_a_generic_backdoor_claim_is_not_an_entity():
+    """ "Adversaries deploy a backdoor" names nothing; flagging it would make
+    the section noise, and noise is what gets a reviewer to skip it."""
+    report = audit_draft(
+        draft_text="Adversaries use obfuscated commands to deploy a backdoor on Windows systems.",
+        cti_text=CTI,
+    )
+    assert not any(c.kind == "entity" for c in report.claims)
+
+
+def test_all_caps_words_are_not_mistaken_for_camelcase_families():
+    report = audit_draft(draft_text="This is a GREAT and THOROUGH analysis.", cti_text=CTI)
+    assert report.claims == []
+
+
+def test_entities_inside_rule_bodies_are_not_double_counted():
+    """A Sigma selection naming a family derives from the prose above it; it
+    is not an independent claim."""
+    report = audit_draft(
+        draft_text=_rule("selection:\n  Description: PureRAT loader"),
+        cti_text=CTI,
+    )
+    assert not any(c.kind == "entity" for c in report.claims)
+
+
+def test_entity_only_in_research_is_corroborated():
+    report = audit_draft(
+        draft_text="The Chrysalis backdoor was used.",
+        cti_text="MISP Event: unrelated",
+        research_text="Chrysalis is a Lotus Blossom tool",
+    )
+    assert [c.status for c in report.claims] == ["corroborated"]

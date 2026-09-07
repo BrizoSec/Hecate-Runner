@@ -41,7 +41,10 @@ every hunt built from that research, which is circular and exactly backwards.
 
 Only claim shapes that *should* be traceable are examined. A rule matching
 ``\\powershell.exe`` is behavioural and has no business being called
-unsupported; a rule matching ``203.0.113.9`` does.
+unsupported; a rule matching ``203.0.113.9`` does. The same rule governs
+prose: an actor designator or a named malware family is a claim a source
+either made or did not, while "adversaries use obfuscated commands" is the
+interpretation a hunt exists to offer.
 """
 
 from __future__ import annotations
@@ -120,6 +123,75 @@ _FILE_SUFFIXES = frozenset(
     }
 )
 
+#: Named entities are audited only in shapes precise enough to be worth
+#: checking. Free-form proper-noun extraction is not viable here -- every
+#: sentence-initial word and section heading is capitalised, and a section
+#: full of false alarms teaches a reviewer to skip it, which costs more than
+#: it catches. These three patterns cover the fabrication actually observed:
+#: hypothesis generation inventing malware family names ("PureRAT and
+#: Overlord RAT") that then propagated into a hunt file as if reported.
+_ACTOR_DESIGNATOR_RE = re.compile(r"\b(?:APT|UNC|FIN|TA|TEMP)[-\s]?\d{2,5}\b", re.IGNORECASE)
+
+#: "<Name> backdoor", "<Name> ransomware" -- a capitalised token immediately
+#: before a malware-category noun is a claim about a specific family.
+_MALWARE_COLLOCATION_RE = re.compile(
+    r"\b([A-Z][A-Za-z0-9._-]{2,30})\s+"
+    r"(?:backdoor|ransomware|stealer|loader|trojan|implant|botnet|dropper|wiper|webshell|rat)\b",
+    re.IGNORECASE,
+)
+
+#: CamelCase family names that carry their own category suffix ("PureRAT").
+#: The lowercase run before the suffix is what keeps ordinary all-caps words
+#: like "GREAT" out.
+_CAMEL_MALWARE_RE = re.compile(r"\b[A-Z][a-z0-9]+(?:RAT|Bot|Loader|Stealer|Locker)\b")
+
+#: Capitalised words that precede a category noun without naming anything --
+#: sentence openers, determiners and the generic subject the hypothesis
+#: template uses.
+_ENTITY_STOPWORDS = frozenset(
+    {
+        "the",
+        "this",
+        "that",
+        "these",
+        "those",
+        "a",
+        "an",
+        "its",
+        "their",
+        "his",
+        "her",
+        "our",
+        "your",
+        "adversaries",
+        "attackers",
+        "actors",
+        "threat",
+        "malicious",
+        "known",
+        "new",
+        "same",
+        "such",
+        "one",
+        "each",
+        "any",
+        "some",
+        "other",
+        "another",
+        "custom",
+        "unknown",
+        "suspected",
+        "and",
+        "or",
+        "with",
+        "for",
+        "via",
+        "using",
+        "detects",
+        "detecting",
+    }
+)
+
 _YAML_BLOCK_RE = re.compile(r"```yaml\n(.*?)```", re.DOTALL)
 
 
@@ -142,7 +214,7 @@ class TechniqueFact:
 class GroundingClaim:
     """One checkable assertion and whether the evidence supports it."""
 
-    kind: str  # "technique" | "cve" | "indicator"
+    kind: str  # "technique" | "cve" | "indicator" | "entity"
     value: str
     status: str  # "asserted" | "derived" | "unsupported"
     note: str = ""
@@ -171,6 +243,31 @@ class GroundingReport:
 def _scaffolding(value: str) -> bool:
     lowered = value.lower().strip(".")
     return lowered in _SCAFFOLDING or any(lowered.endswith("." + s) for s in _SCAFFOLDING)
+
+
+def _named_entities(prose: str) -> list[str]:
+    """Pull the checkable named entities out of prose.
+
+    Returns family and actor names only -- the things a source either named
+    or did not. Everything else a draft says about an adversary is
+    interpretation, which is what a hunt is supposed to contain.
+    """
+    found: list[str] = []
+
+    def keep(value: str) -> None:
+        cleaned = value.strip(".,;:'\"")
+        if not cleaned or cleaned.lower() in _ENTITY_STOPWORDS:
+            return
+        if cleaned.lower() not in {f.lower() for f in found}:
+            found.append(cleaned)
+
+    for match in _ACTOR_DESIGNATOR_RE.findall(prose):
+        keep(match)
+    for match in _MALWARE_COLLOCATION_RE.findall(prose):
+        keep(match)
+    for match in _CAMEL_MALWARE_RE.findall(prose):
+        keep(match)
+    return found
 
 
 def _looks_like_a_filename(value: str) -> bool:
@@ -263,6 +360,15 @@ def audit_draft(
     for cve in _CVE_RE.findall(draft_text):
         status, note = grade(cve)
         add("cve", cve.upper(), status, note)
+
+    # --- Named entities in prose ------------------------------------------
+    # Rule bodies are excluded: a Sigma selection naming a family is derived
+    # from the prose above it, not an independent claim, and auditing both
+    # would double-count the same assertion.
+    prose = _YAML_BLOCK_RE.sub(" ", draft_text)
+    for entity in _named_entities(prose):
+        status, note = grade(entity)
+        add("entity", entity, status, f"actor/malware name {note}")
 
     # --- Indicators inside generated rules --------------------------------
     # Scoped to the rule bodies because that is what would actually be run,
