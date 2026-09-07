@@ -16,6 +16,7 @@ from hecate_runner.athf_client import (
 )
 from hecate_runner.config import Settings
 from hecate_runner.cti import FileQueueProvider
+from hecate_runner.indicator_sweep import parse_indicator_inventory
 from hecate_runner.orchestrator import Orchestrator, derive_research_topic, has_narrative
 
 
@@ -522,9 +523,10 @@ def test_has_narrative_true_for_otx_description_line() -> None:
 
 
 def test_has_narrative_false_for_bare_ioc_dump() -> None:
-    # MISP's _event_to_blurb never includes a narrative field -- only
-    # Org/Threat Level/TLP/Tags/attribute counts -- so a MISP-sourced item
-    # like a ThreatFox IOC-dump event is structurally narrative-free.
+    # A MISP blurb has no prose field, so a ThreatFox-style dump reduces to
+    # Org/Threat Level/TLP/Tags/attribute counts. Crucially it also carries
+    # no galaxy cluster, so it reaches no ATT&CK line either -- nothing here
+    # is evidence of analysed behavior.
     content = (
         "MISP Event: ThreatFox IOCs for 2026-08-05\n"
         "Org: ThreatFox\n"
@@ -793,3 +795,54 @@ def test_a_title_containing_regex_metacharacters_is_inserted_literally() -> None
     )
 
     assert r"Feed \1 (a\b) [x]" in result
+
+
+def test_has_narrative_true_for_curated_misp_event_with_attack_line() -> None:
+    """A curated MISP event has no prose field but does state techniques.
+
+    This is the real shape of the events the galaxy filter and org allowlist
+    exist to select. Classifying it as a bare dump routed it past research
+    and rendered it with `techniques: []` -- discarding the very mapping it
+    was selected for.
+    """
+    content = (
+        "MISP Event: The Chrysalis Backdoor: A Deep Dive into Lotus Blossom's toolkit\n"
+        "Org: CUDESO\n"
+        "Threat Level: Medium\n"
+        "TLP: clear\n"
+        "MITRE ATT&CK Techniques: T1005, T1027.007, T1041, T1059.003, T1071.001\n"
+        "Attributes (20 total): comment (1), filename (2), hostname (2), ip-dst (4)"
+    )
+    assert has_narrative(content) is True
+
+
+def test_curated_misp_event_is_not_classified_as_an_indicator_sweep() -> None:
+    """The consequence that actually mattered, asserted end to end."""
+    content = (
+        "MISP Event: The Chrysalis Backdoor: A Deep Dive into Lotus Blossom's toolkit\n"
+        "Org: CUDESO\n"
+        "MITRE ATT&CK Techniques: T1005, T1027.007, T1041\n"
+        "Attributes (20 total): hostname (2), ip-dst (4), url (9)"
+    )
+    assert has_narrative(content) is True
+    # sweep_inventory is only computed when the narrative check fails, so a
+    # True here is exactly what keeps this off the template path.
+    assert parse_indicator_inventory(content)  # it *would* have parsed as one
+
+
+def test_attack_line_constant_matches_what_every_provider_emits() -> None:
+    """Guards the drift the shared constant exists to prevent.
+
+    has_narrative reads this label back out of rendered text. If any producer
+    stopped emitting the exact string, curated events would silently start
+    classifying as dumps again -- the original bug.
+    """
+    from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE
+
+    for module in ("misp", "otx", "rss"):
+        src = Path(f"src/hecate_runner/cti/{module}.py").read_text()
+        assert "MITRE ATT&CK Techniques:" not in src, (
+            f"{module}.py hardcodes the label instead of using ATTACK_TECHNIQUE_LINE"
+        )
+    rendered = f"{ATTACK_TECHNIQUE_LINE} T1059.003"
+    assert has_narrative(rendered) is True

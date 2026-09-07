@@ -87,3 +87,13 @@ def test_redacted_dict_does_not_touch_non_secret_fields(settings: Settings) -> N
     dumped = settings.redacted_dict()
     assert dumped["max_drafts_per_day"] == settings.max_drafts_per_day
     assert dumped["cti_provider"] == settings.cti_provider
+
+
+def test_misp_org_allowlist_defaults_to_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HECATE_RUNNER_MISP_ORG_ALLOWLIST", raising=False)
+    assert Settings(_env_file=None).misp_org_allowlist == []
+
+
+def test_misp_org_allowlist_parses_and_trims(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HECATE_RUNNER_MISP_ORG_ALLOWLIST", " CIRCL , CUDESO ,, ESET ")
+    assert Settings(_env_file=None).misp_org_allowlist == ["CIRCL", "CUDESO", "ESET"]

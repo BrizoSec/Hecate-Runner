@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from hecate_runner.config import Settings
-from hecate_runner.cti.base import CTIItem, CTIProvider
+from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
 from hecate_runner.cti.file_queue import FileQueueProvider
 from hecate_runner.cti.misp import MispProvider
 from hecate_runner.cti.multi import MultiProvider
@@ -11,6 +11,7 @@ from hecate_runner.cti.otx import OtxProvider
 from hecate_runner.cti.rss import RssProvider
 
 __all__ = [
+    "ATTACK_TECHNIQUE_LINE",
     "CTIItem",
     "CTIProvider",
     "FileQueueProvider",
@@ -52,6 +53,7 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             request_timeout_sec=settings.misp_request_timeout_sec,
             verify_ssl=settings.misp_verify_ssl,
             require_galaxy=settings.misp_require_galaxy,
+            org_allowlist=settings.misp_org_allowlist,
             backfill=settings.misp_backfill,
             max_pages_per_poll=settings.misp_max_pages_per_poll,
         )

@@ -226,6 +226,20 @@ class Settings(BaseSettings):
             "will correctly find nothing to route."
         ),
     )
+    misp_org_allowlist_raw: str = Field(
+        default="",
+        alias="HECATE_RUNNER_MISP_ORG_ALLOWLIST",
+        description=(
+            "Comma-separated MISP organisation names; when set, only events "
+            "from these orgs are routable. Empty (the default) means every org "
+            "is eligible. This is a restriction, not a ranking: an instance "
+            "dominated by one high-volume feed can otherwise bury the handful "
+            "of analyst-written events behind hundreds of drafts. Matching is "
+            "case-insensitive on the owning (Orgc) organisation. Note that "
+            "excluded events are walked past permanently -- the cursor advances "
+            "over them -- so widen the list before backfilling, not after."
+        ),
+    )
     misp_max_pages_per_poll: int = Field(
         default=25,
         ge=1,
@@ -351,6 +365,11 @@ class Settings(BaseSettings):
     @property
     def misp_cursor_file(self) -> Path:
         return self.athf_workspace / ".misp_cursor_state.json"
+
+    @property
+    def misp_org_allowlist(self) -> list[str]:
+        """Parsed, whitespace-trimmed org list from HECATE_RUNNER_MISP_ORG_ALLOWLIST."""
+        return [name.strip() for name in self.misp_org_allowlist_raw.split(",") if name.strip()]
 
     @property
     def cti_multi_provider_names(self) -> list[str]:

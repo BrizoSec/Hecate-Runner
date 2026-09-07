@@ -18,6 +18,12 @@ walked oldest-first. A long-lived instance can hold years of curated events
 that ``max_event_age_days`` puts permanently out of reach, while the recent
 window is dominated by daily dump feeds.
 
+``org_allowlist`` (default empty, i.e. off) restricts routing to named
+organisations. galaxy presence separates curated events from dumps, but it
+cannot separate a high-volume *curated* feed from the handful of
+analyst-written events beside it -- on the reference instance one org
+accounts for 856 of 872 routable events, enough to bury the rest for a year.
+
 Alone, each is a trap: require_galaxy on a dump-heavy recent window starves
 the poll, and backfill without it simply works through the dumps too.
 
@@ -46,6 +52,7 @@ import json
 import logging
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -54,7 +61,7 @@ from typing import Any
 import httpx
 
 from hecate_runner.atomic_write import atomic_write_text
-from hecate_runner.cti.base import CTIItem, CTIProvider
+from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
 
 log = logging.getLogger(__name__)
 
@@ -150,6 +157,7 @@ class MispProvider(CTIProvider):
         request_timeout_sec: float = 30.0,
         verify_ssl: bool = True,
         require_galaxy: bool = True,
+        org_allowlist: Iterable[str] | None = None,
         backfill: bool = False,
         max_pages_per_poll: int = 25,
         client: httpx.Client | None = None,
@@ -165,6 +173,11 @@ class MispProvider(CTIProvider):
         self.page_limit = page_limit
         self.request_timeout_sec = request_timeout_sec
         self.require_galaxy = require_galaxy
+        # Normalised once: matching is case-insensitive, and an empty/omitted
+        # list must mean "every org is eligible", not "no org is".
+        self.org_allowlist = frozenset(
+            o.strip().lower() for o in (org_allowlist or ()) if o.strip()
+        )
         self.backfill = backfill
         self.max_pages_per_poll = max_pages_per_poll
         self._client = client or httpx.Client(timeout=request_timeout_sec, verify=verify_ssl)
@@ -325,7 +338,14 @@ class MispProvider(CTIProvider):
             None if self.backfill else datetime.now(UTC) - timedelta(days=self.max_event_age_days)
         )
         candidates = [
-            e for e in events if _is_high_signal(e, cutoff, require_galaxy=self.require_galaxy)
+            e
+            for e in events
+            if _is_high_signal(
+                e,
+                cutoff,
+                require_galaxy=self.require_galaxy,
+                org_allowlist=self.org_allowlist,
+            )
         ]
         candidates = [
             e
@@ -420,12 +440,19 @@ def _has_galaxy_cluster(event: dict[str, Any]) -> bool:
 
 
 def _is_high_signal(
-    event: dict[str, Any], cutoff: datetime | None, require_galaxy: bool = False
+    event: dict[str, Any],
+    cutoff: datetime | None,
+    require_galaxy: bool = False,
+    org_allowlist: frozenset[str] = frozenset(),
 ) -> bool:
     """Published, not explicitly TLP:RED/AMBER, and newer than ``cutoff``.
 
     ``cutoff`` of None disables the age check entirely -- that is backfill,
     where reaching deliberately old events is the whole point.
+
+    An empty ``org_allowlist`` disables the org check; a non-empty one admits
+    only its members, which is how a single high-volume feed is kept from
+    burying the analyst-written events behind it.
     """
     if not (event.get("info") or "").strip():
         return False
@@ -440,11 +467,30 @@ def _is_high_signal(
     if require_galaxy and not _has_galaxy_cluster(event):
         return False
 
+    if org_allowlist and _event_org(event).lower() not in org_allowlist:
+        return False
+
     if cutoff is None:
         return True
 
     published_at = _event_datetime(event)
     return not (published_at is not None and published_at < cutoff)
+
+
+def _event_org(event: dict[str, Any]) -> str:
+    """Owning organisation name, preferring Orgc (the creator) over Org.
+
+    On a synchronised instance Org is the local host for everything it pulled,
+    so filtering on it would match every event or none; Orgc survives the sync
+    and is what actually identifies who wrote the event.
+    """
+    for key in ("Orgc", "Org"):
+        block = event.get(key)
+        if isinstance(block, dict):
+            name = str(block.get("name") or "").strip()
+            if name:
+                return name
+    return ""
 
 
 def _is_published(event: dict[str, Any]) -> bool:
@@ -543,7 +589,7 @@ def _event_to_blurb(base_url: str, event: dict[str, Any]) -> str:
     if tags:
         lines.append(f"Tags: {', '.join(tags[:10])}")
     if techniques:
-        lines.append(f"MITRE ATT&CK Techniques: {', '.join(techniques)}")
+        lines.append(f"{ATTACK_TECHNIQUE_LINE} {', '.join(techniques)}")
     if attribute_counts:
         lines.append(f"Attributes ({sum(attribute_counts.values())} total): {attribute_summary}")
     if event_id:

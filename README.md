@@ -178,7 +178,9 @@ Polls `POST /events/restSearch` for `published` events, incrementally synced via
 
 Same dual-mode support as OTX/RSS: `HECATE_RUNNER_CTI_PROVIDER=misp` pulls directly from MISP every orchestrator cycle instead of routing through the file queue via a separate `misp-poll` run.
 
-**Two knobs decide what actually gets routed, and they work together.** `HECATE_RUNNER_MISP_REQUIRE_GALAXY` (default on) skips events carrying no galaxy cluster. Galaxy presence is the cleanest separator between a curated, analyst-written event and a bulk indicator dump — on the reference instance every curated event carried clusters and averaged ~25 attributes, while every ThreatFox event carried none and averaged ~734. `HECATE_RUNNER_MISP_BACKFILL` drops the 30-day freshness floor so the archive can be walked oldest-first, for an instance whose curated events predate that window; seed the cursor file to choose where the walk starts. The cursor advances every poll and converges back into normal freshness-floored behavior once it reaches the present — turn backfill off then, since with it on a lost cursor restarts from the beginning of the archive.
+**Three knobs decide what actually gets routed, and they work together.** `HECATE_RUNNER_MISP_REQUIRE_GALAXY` (default on) skips events carrying no galaxy cluster. Galaxy presence is the cleanest separator between a curated, analyst-written event and a bulk indicator dump — on the reference instance every curated event carried clusters and averaged ~25 attributes, while every ThreatFox event carried none and averaged ~734. `HECATE_RUNNER_MISP_BACKFILL` drops the 30-day freshness floor so the archive can be walked oldest-first, for an instance whose curated events predate that window; seed the cursor file to choose where the walk starts. The cursor advances every poll and converges back into normal freshness-floored behavior once it reaches the present — turn backfill off then, since with it on a lost cursor restarts from the beginning of the archive.
+
+`HECATE_RUNNER_MISP_ORG_ALLOWLIST` covers what galaxy presence cannot. Galaxy separates curated events from dumps, but not a *high-volume curated feed* from the handful of analyst-written events beside it: on the reference instance one org accounts for 856 of 872 routable events, so at any sane `MAX_DRAFTS_PER_DAY` the other 16 sit behind a year of queue. Listing the orgs you actually read surfaces those first. It restricts rather than ranks — skipped events are walked past permanently, since the cursor advances over them — so widen the list before a backfill, or reseed the cursor to revisit what it stepped over.
 
 Used alone each is a trap: requiring galaxies on a dump-heavy recent window starves the poll, and backfilling without the filter simply works through the dumps too.
 
@@ -188,7 +190,7 @@ Used alone each is a trap: requiring galaxies on a dump-heavy recent window star
 
 All config comes from environment variables (or a `.env` file in the working directory). See [.env.example](.env.example) for the full list.
 
-**Two `.env` files, different jobs.** This repo's `.env` configures the orchestrator. The ATHF workspace has its own, which `athf` loads itself — that is where `TAVILY_API_KEY`, `ATHF_LLM_PROVIDER` and `ATHF_LLM_MODEL` belong, so manual `athf` runs and orchestrated ones use the same model. `hecate-runner` passes only `ATHF_WORKSPACE` through by default; setting `ATHF_LLM_*` here overrides the workspace for orchestrated runs only.
+**Two `.env` files, different jobs.** This repo's `.env` configures the orchestrator. The ATHF workspace has its own, which `athf` loads itself — that is where `TAVILY_API_KEY`, `ATHF_LLM_PROVIDER` and `ATHF_LLM_MODEL` belong, so manual `athf` runs and orchestrated ones use the same model. `hecate-runner` passes only `ATHF_WORKSPACE` through by default. No variable appears in both `.env.example` files, so there is never a question of which copy wins — the settings still exist to override `ATHF_LLM_*` from here, but they are deliberately absent from the example, since setting them splits manual and orchestrated runs onto different models.
 
 Key ones:
 
@@ -208,6 +210,7 @@ Key ones:
 | `MISP_BASE_URL` / `MISP_API_KEY` | MISP instance + dedicated automation Auth key — required for `cti_provider=misp` and `hecate-runner misp-poll` | — |
 | `HECATE_RUNNER_MISP_VERIFY_SSL` | Set false only for self-signed dev/test MISP instances | `true` |
 | `HECATE_RUNNER_MISP_REQUIRE_GALAXY` | Only route MISP events carrying a galaxy cluster — keeps bulk indicator dumps (ThreatFox-style) out, since they describe no behavior | `true` |
+| `HECATE_RUNNER_MISP_ORG_ALLOWLIST` | Comma-separated MISP org names; only these are routable. Empty = every org. Keeps one high-volume feed from burying the rest | _(empty)_ |
 | `HECATE_RUNNER_MISP_BACKFILL` | Ignore the freshness floor and walk the MISP archive oldest-first. Reset the cursor file to start from the beginning | `false` |
 | `HECATE_RUNNER_MISP_MAX_PAGES_PER_POLL` | How many event pages one poll may walk before giving up (pages are fetched metadata-only) | `25` |
 | `HECATE_RUNNER_QUERY_PROVIDER` | Backend for `hecate-runner approve` (`mock` or `splunk`) — see [Query execution](#query-execution-propose-dont-run) | `mock` |

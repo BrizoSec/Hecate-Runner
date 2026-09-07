@@ -37,6 +37,14 @@ class CTIItem:
     source_url: str = ""
 
 
+# The label every provider's blurb builder emits when its source declares
+# ATT&CK techniques. Defined here, once, because the orchestrator reads it
+# back out of the rendered text to decide whether an item is a curated event
+# or a bare indicator dump -- if a producer and that consumer drifted apart,
+# curated events would silently start classifying as dumps again.
+ATTACK_TECHNIQUE_LINE = "MITRE ATT&CK Techniques:"
+
+
 class CTIProvider(ABC):
     """Abstract source of CTI. Providers should be stateless where possible."""
 

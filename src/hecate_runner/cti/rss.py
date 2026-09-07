@@ -44,7 +44,7 @@ import feedparser
 import httpx
 
 from hecate_runner.atomic_write import atomic_write_text
-from hecate_runner.cti.base import CTIItem, CTIProvider
+from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
 
 log = logging.getLogger(__name__)
 
@@ -328,7 +328,7 @@ def _entry_to_blurb(feed_url: str, entry: dict[str, Any]) -> str:
     if tags:
         lines.append(f"Tags: {', '.join(tags[:10])}")
     if techniques:
-        lines.append(f"MITRE ATT&CK Techniques: {', '.join(techniques)}")
+        lines.append(f"{ATTACK_TECHNIQUE_LINE} {', '.join(techniques)}")
     if summary:
         lines.append(f"Summary: {summary}")
     if link:

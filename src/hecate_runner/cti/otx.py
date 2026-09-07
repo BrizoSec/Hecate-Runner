@@ -28,7 +28,7 @@ from typing import Any
 import httpx
 
 from hecate_runner.atomic_write import atomic_write_text
-from hecate_runner.cti.base import CTIItem, CTIProvider
+from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
 
 log = logging.getLogger(__name__)
 
@@ -267,7 +267,7 @@ def _pulse_to_blurb(pulse: dict[str, Any]) -> str:
     if tags:
         lines.append(f"Tags: {', '.join(tags)}")
     if techniques:
-        lines.append(f"MITRE ATT&CK Techniques: {', '.join(techniques)}")
+        lines.append(f"{ATTACK_TECHNIQUE_LINE} {', '.join(techniques)}")
     if description:
         lines.append(f"Description: {description[:1500]}")
     if indicators:

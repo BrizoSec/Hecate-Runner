@@ -58,6 +58,14 @@ def run_misp_poll(settings: Settings) -> MispPollResult:
         page_limit=settings.misp_page_limit,
         request_timeout_sec=settings.misp_request_timeout_sec,
         verify_ssl=settings.misp_verify_ssl,
+        # These were previously omitted, so `hecate-runner misp-poll` silently
+        # ignored the galaxy/backfill/org settings and polled with library
+        # defaults -- a standalone poll must select the same events the
+        # orchestrator would.
+        require_galaxy=settings.misp_require_galaxy,
+        org_allowlist=settings.misp_org_allowlist,
+        backfill=settings.misp_backfill,
+        max_pages_per_poll=settings.misp_max_pages_per_poll,
     )
     result = MispPollResult()
     try:

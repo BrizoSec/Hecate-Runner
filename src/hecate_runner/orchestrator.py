@@ -17,7 +17,7 @@ from pathlib import Path
 
 from hecate_runner.athf_client import AthfClient, AthfError
 from hecate_runner.config import Settings
-from hecate_runner.cti import CTIProvider, get_provider
+from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIProvider, get_provider
 from hecate_runner.hunt_writer import DraftHuntRequest, hunt_id_lock, next_hunt_id, write_draft
 from hecate_runner.indicator_sweep import build_indicator_sweep, parse_indicator_inventory
 from hecate_runner.notifications import notify_draft_created
@@ -125,16 +125,29 @@ def derive_research_topic(cti_content: str, title: str | None = None) -> tuple[s
 
 
 def has_narrative(cti_content: str) -> bool:
-    """Whether ``cti_content`` has real free-text narrative to search on.
+    """Whether ``cti_content`` carries substance beyond a bare indicator dump.
 
     All three CTI providers build their blurb around a "does this item have
     a human-written description" branch: RSS's ``_entry_to_blurb`` appends a
     ``Summary:`` line only when the entry has one, OTX's ``_pulse_to_blurb``
     appends a ``Description:`` line only when the pulse has one, and MISP's
-    ``_event_to_blurb`` never includes a narrative field at all -- just
-    Org/Threat Level/TLP/Tags/attribute counts. Checking for either label is
-    a cheap, provider-agnostic proxy for "is there anything here besides an
-    IOC dump and a title."
+    ``_event_to_blurb`` has no narrative field to append at all -- a MISP
+    event carries a title (``info``) and structured metadata, not prose.
+
+    An explicit ``MITRE ATT&CK Techniques:`` line counts too, and all three
+    providers emit it under that same label. It is not prose, but the
+    question this gates is not "is there prose" -- it is "is there anything
+    here besides an IOC dump and a title." A stated technique list is an
+    analyst asserting observed behavior, which is the strongest form of that
+    evidence available short of prose, and it is precisely what a bulk
+    indicator dump cannot produce: ThreatFox-style events carry no galaxy
+    cluster, so they reach no such line.
+
+    Without this, every MISP event failed the check no matter how well
+    curated -- classified as an indicator sweep, routed past research, and
+    rendered with ``techniques: []`` even though the event had just handed
+    us fifteen technique IDs. That silently cancelled out the galaxy filter
+    and org allowlist, whose whole purpose is selecting ATT&CK-mapped events.
 
     Gates two things, both failing the same way for the same reason -- a
     bare IOC-count blurb gives each step nothing real to work from, and both
@@ -152,7 +165,11 @@ def has_narrative(cti_content: str) -> bool:
       lateral movement" as follow-on activity, plus an unsupported ATT&CK
       technique. See `AthfClient.hypothesis_generator`'s indicators_only.
     """
-    return "Description:" in cti_content or "Summary:" in cti_content
+    return (
+        "Description:" in cti_content
+        or "Summary:" in cti_content
+        or ATTACK_TECHNIQUE_LINE in cti_content
+    )
 
 
 @dataclass

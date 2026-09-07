@@ -82,6 +82,7 @@ def _make_provider(
     status_code: int = 200,
     max_event_age_days: int = 30,
     require_galaxy: bool = False,
+    org_allowlist: list[str] | None = None,
     backfill: bool = False,
     page_limit: int = 20,
     on_request: Callable[[httpx.Request], None] | None = None,
@@ -100,6 +101,7 @@ def _make_provider(
         cursor_file=tmp_path / "cursor.json",
         max_event_age_days=max_event_age_days,
         require_galaxy=require_galaxy,
+        org_allowlist=org_allowlist,
         backfill=backfill,
         page_limit=page_limit,
         client=client,
@@ -532,3 +534,62 @@ def test_steady_state_still_sends_a_timestamp_floor(tmp_path: Path) -> None:
     provider = _make_provider(tmp_path, [_sample_event()], backfill=False, on_request=capture)
     provider.next_item()
     assert "timestamp" in seen[0]
+
+
+# --- Org allowlist -------------------------------------------------------------
+
+
+def test_empty_org_allowlist_admits_every_org(tmp_path: Path) -> None:
+    """The default must mean "no org filter", not "no org passes"."""
+    event = _sample_event(Orgc={"id": "9", "name": "Rectifyq", "uuid": "u"})
+    provider = _make_provider(tmp_path, [event], org_allowlist=None)
+    assert provider.next_item() is not None
+
+
+def test_org_allowlist_admits_listed_org(tmp_path: Path) -> None:
+    provider = _make_provider(tmp_path, [_sample_event()], org_allowlist=["CIRCL"])
+    item = provider.next_item()
+    assert item is not None
+    assert "LSASS memory dumping" in item.content
+
+
+def test_org_allowlist_rejects_unlisted_org(tmp_path: Path) -> None:
+    event = _sample_event(Orgc={"id": "9", "name": "Rectifyq", "uuid": "u"})
+    provider = _make_provider(tmp_path, [event], org_allowlist=["CIRCL"])
+    assert provider.next_item() is None
+
+
+def test_org_allowlist_matching_is_case_insensitive(tmp_path: Path) -> None:
+    provider = _make_provider(tmp_path, [_sample_event()], org_allowlist=["  cIrCl  "])
+    assert provider.next_item() is not None
+
+
+def test_org_allowlist_prefers_orgc_over_org(tmp_path: Path) -> None:
+    """On a synced instance Org is the local host; Orgc identifies the author."""
+    event = _sample_event(
+        Org={"id": "1", "name": "LOCAL-SYNC-HOST", "uuid": "u"},
+        Orgc={"id": "2", "name": "CIRCL", "uuid": "org-uuid"},
+    )
+    assert _make_provider(tmp_path, [event], org_allowlist=["CIRCL"]).next_item() is not None
+    assert _make_provider(tmp_path, [event], org_allowlist=["LOCAL-SYNC-HOST"]).next_item() is None
+
+
+def test_org_allowlist_picks_listed_event_out_of_a_noisy_page(tmp_path: Path) -> None:
+    """The real shape: one analyst event buried in a high-volume feed."""
+    noise = [
+        _sample_event(
+            uuid=f"noise-{i}",
+            timestamp=str(int(_DEFAULT_TIMESTAMP) + i),
+            Orgc={"id": "9", "name": "Rectifyq", "uuid": "u"},
+        )
+        for i in range(19)
+    ]
+    wanted = _sample_event(
+        uuid="wanted-uuid",
+        info="OSINT - Lotus Blossom toolkit",
+        timestamp=str(int(_DEFAULT_TIMESTAMP) + 50),
+    )
+    provider = _make_provider(tmp_path, [*noise, wanted], org_allowlist=["CIRCL"], page_limit=20)
+    item = provider.next_item()
+    assert item is not None
+    assert "Lotus Blossom" in item.content
