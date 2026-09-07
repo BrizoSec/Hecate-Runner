@@ -23,8 +23,12 @@ class Settings(BaseSettings):
 
     # --- ATHF workspace -----------------------------------------------------
     athf_workspace: Path = Field(
-        default=Path.home() / "agentic-threat-hunting-framework",
-        description="Path to the ATHF workspace directory",
+        # The ATHF workspace is Hecate-Core. This used to default to
+        # ~/agentic-threat-hunting-framework, which no longer exists -- so a
+        # deployment with no ATHF_WORKSPACE set resolved athf_bin and
+        # cti_queue_dir under a missing directory instead of failing clearly.
+        default=Path.home() / "betas" / "Hecate-Core",
+        description="Path to the ATHF workspace directory (Hecate-Core)",
     )
     athf_bin: Path | None = Field(
         default=None,

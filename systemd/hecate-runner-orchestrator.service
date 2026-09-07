@@ -1,6 +1,6 @@
 [Unit]
 Description=hecate-runner - ATHF autonomous hunt draft orchestrator
-Documentation=https://github.com/Nebulock-Inc/hecate-runner
+Documentation=https://github.com/BrizoSec/Hecate-Runner
 After=network-online.target ollama.service
 Wants=network-online.target
 Requires=ollama.service
@@ -9,10 +9,10 @@ Requires=ollama.service
 Type=oneshot
 User=chemch
 Group=chemch
-WorkingDirectory=/home/chemch/hecate-runner
+WorkingDirectory=/home/chemch/betas/Hecate-Runner
 
 # Read env from the .env file inside the repo. Keep secrets out of the unit.
-EnvironmentFile=/home/chemch/hecate-runner/.env
+EnvironmentFile=/home/chemch/betas/Hecate-Runner/.env
 
 # Run via uv so we always execute inside the project venv.
 # If uv isn't on PATH for the service user, use the absolute path from `which uv`.
@@ -23,14 +23,14 @@ ExecStart=/home/chemch/.local/bin/uv run hecate-runner run
 # was tight enough to kill an advanced run mid-flight; 1800s (30 min) leaves
 # headroom above that ceiling plus the hypothesis-generator call after it.
 TimeoutStartSec=1800
-StandardOutput=append:/home/chemch/agentic-threat-hunting-framework/logs/orchestrator.log
-StandardError=append:/home/chemch/agentic-threat-hunting-framework/logs/orchestrator.log
+StandardOutput=append:/home/chemch/betas/Hecate-Core/logs/orchestrator.log
+StandardError=append:/home/chemch/betas/Hecate-Core/logs/orchestrator.log
 
 # Light hardening — orchestrator needs to read/write the ATHF workspace
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/home/chemch/agentic-threat-hunting-framework /home/chemch/hecate-runner
+ReadWritePaths=/home/chemch/betas/Hecate-Core /home/chemch/betas/Hecate-Runner
 
 [Install]
 WantedBy=multi-user.target

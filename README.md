@@ -194,7 +194,7 @@ Key ones:
 
 | Var | Purpose | Default |
 |-----|---------|---------|
-| `ATHF_WORKSPACE` | Path to the ATHF workspace | `~/agentic-threat-hunting-framework` |
+| `ATHF_WORKSPACE` | Path to the ATHF workspace (Hecate-Core) | `~/betas/Hecate-Core` |
 | `ATHF_BIN` | Path to the `athf` CLI | `<workspace>/.venv/bin/athf` |
 | `SEC7669_MAX_DRAFTS_PER_DAY` | Cap on drafts per 24h | `4` |
 | `SEC7669_LLM_TIMEOUT_SEC` | Hard timeout on any single `athf` invocation (research call and hypothesis call each get their own budget) | `600` |

@@ -1,6 +1,6 @@
 [Unit]
 Description=hecate-runner - RSS/Atom CTI poller
-Documentation=https://github.com/Nebulock-Inc/hecate-runner
+Documentation=https://github.com/BrizoSec/Hecate-Runner
 After=network-online.target
 Wants=network-online.target
 
@@ -8,25 +8,25 @@ Wants=network-online.target
 Type=oneshot
 User=chemch
 Group=chemch
-WorkingDirectory=/home/chemch/hecate-runner
+WorkingDirectory=/home/chemch/betas/Hecate-Runner
 
 # Read env from the .env file inside the repo. Keep secrets out of the unit.
-EnvironmentFile=/home/chemch/hecate-runner/.env
+EnvironmentFile=/home/chemch/betas/Hecate-Runner/.env
 
 # Run via uv so we always execute inside the project venv.
 # If uv isn't on PATH for the service user, use the absolute path from `which uv`.
 ExecStart=/home/chemch/.local/bin/uv run hecate-runner rss-poll
 
 TimeoutStartSec=120
-StandardOutput=append:/home/chemch/agentic-threat-hunting-framework/logs/orchestrator.log
-StandardError=append:/home/chemch/agentic-threat-hunting-framework/logs/orchestrator.log
+StandardOutput=append:/home/chemch/betas/Hecate-Core/logs/orchestrator.log
+StandardError=append:/home/chemch/betas/Hecate-Core/logs/orchestrator.log
 
 # Light hardening — poller only needs to read/write the ATHF CTI queue and
 # its own cursor state file.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/home/chemch/agentic-threat-hunting-framework /home/chemch/hecate-runner
+ReadWritePaths=/home/chemch/betas/Hecate-Core /home/chemch/betas/Hecate-Runner
 
 [Install]
 WantedBy=multi-user.target

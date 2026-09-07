@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 import threading
 import time
 from datetime import UTC, datetime
@@ -433,3 +434,86 @@ def test_write_draft_creates_file(
     assert path.exists()
     assert path.name == "H-0042.md"
     assert "H-0042" in path.read_text()
+
+
+def test_next_hunt_id_persists_across_an_emptied_directory(tmp_path: Path) -> None:
+    """Regression test for hunt ID reuse.
+
+    The drafts in this workspace are periodically committed to git and
+    cleaned off disk. Allocation used to be a pure scan of hunts/, so an
+    emptied directory restarted numbering at H-0001 and handed IDs that
+    already named a different hunt in git history to brand new drafts --
+    two unrelated files both carrying `hunt_id: H-0001`. The persisted
+    counter has to outlive the directory being emptied.
+    """
+    root = tmp_path / "hunts"
+    root.mkdir(parents=True)
+    for expected in ("H-0001", "H-0002", "H-0003"):
+        hunt_id = next_hunt_id(root)
+        assert hunt_id == expected
+        path = draft_hunt_path(root, hunt_id, datetime.now(UTC))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("stub")
+
+    # Simulate the cleanup: every draft committed away, directory emptied.
+    for md in list(root.rglob("H-*.md")):
+        md.unlink()
+    assert not list(root.rglob("H-*.md"))
+
+    assert next_hunt_id(root) == "H-0004"
+
+
+def test_next_hunt_id_prefers_on_disk_max_over_a_stale_counter(tmp_path: Path) -> None:
+    """A draft added by hand (or by an older hecate-runner that predates the
+    counter) sits above the counter's value; it must not be clobbered."""
+    root = tmp_path / "hunts"
+    (root / "2026" / "Q3").mkdir(parents=True)
+    (root / ".hunt_id_counter").write_text("3\n")
+    (root / "2026" / "Q3" / "H-0042.md").write_text("stub")
+    assert next_hunt_id(root) == "H-0043"
+
+
+def test_next_hunt_id_survives_a_corrupted_counter(tmp_path: Path) -> None:
+    """A truncated or hand-edited counter falls back to the on-disk floor
+    rather than crashing the cycle."""
+    root = tmp_path / "hunts"
+    (root / "2026" / "Q3").mkdir(parents=True)
+    (root / ".hunt_id_counter").write_text("not-a-number")
+    (root / "2026" / "Q3" / "H-0008.md").write_text("stub")
+    assert next_hunt_id(root) == "H-0009"
+
+
+def test_next_hunt_id_seeds_from_git_history_on_first_run(tmp_path: Path) -> None:
+    """First allocation after the counter was introduced resumes past every
+    draft git remembers, including ones already deleted from disk -- the
+    committed-then-cleaned drafts a disk scan can no longer see."""
+    workspace = tmp_path / "workspace"
+    root = workspace / "hunts" / "2026" / "Q3"
+    root.mkdir(parents=True)
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+    for n in (17, 29, 606):
+        (root / f"H-{n:04d}.md").write_text("stub")
+    subprocess.run([*git, "add", "-A"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(
+        [*git, "commit", "-qm", "drafts"], cwd=workspace, check=True, capture_output=True
+    )
+
+    # The cleanup commit: drafts removed from disk, retained only in history.
+    for md in list(root.glob("H-*.md")):
+        md.unlink()
+    subprocess.run([*git, "add", "-A"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(
+        [*git, "commit", "-qm", "cleanup"], cwd=workspace, check=True, capture_output=True
+    )
+
+    assert next_hunt_id(workspace / "hunts") == "H-0607"
+
+
+def test_next_hunt_id_outside_a_git_repo_uses_on_disk_max(tmp_path: Path) -> None:
+    """A non-git workspace (or a machine without git) still allocates; the
+    seed is best-effort and must not fail the cycle."""
+    root = tmp_path / "hunts"
+    (root / "2026" / "Q3").mkdir(parents=True)
+    (root / "2026" / "Q3" / "H-0004.md").write_text("stub")
+    assert next_hunt_id(root) == "H-0005"

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from hecate_runner.athf_client import HypothesisResult
+from hecate_runner.atomic_write import atomic_write_text
 
 log = logging.getLogger(__name__)
 
@@ -62,8 +64,25 @@ def hunt_id_lock(hunts_root: Path) -> Iterator[None]:
             fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
-def next_hunt_id(hunts_root: Path) -> str:
-    """Find the highest H-XXXX under the workspace and return the next ID."""
+# Persisted high-water mark for allocated hunt IDs, kept in hunts/ beside the
+# lock file. The ID used to be derived purely by scanning hunts/ for the
+# highest H-XXXX still present, which made it a function of what happened to
+# be on disk rather than of what had ever been allocated. Committing the
+# drafts away -- the normal way this workspace is cleaned up -- emptied the
+# directory, so the next cycle restarted at H-0001 and reused IDs that
+# already named a completely different hunt in git history (two unrelated
+# drafts both claiming `hunt_id: H-0001`, one of them only recoverable from
+# a commit). The counter records the highest ID ever handed out, so numbering
+# survives the directory being emptied.
+_COUNTER_FILENAME = ".hunt_id_counter"
+
+# Bound the one-off git seed scan below so a large or damaged repo can not
+# wedge a hunt cycle behind it.
+_GIT_SEED_TIMEOUT_SEC = 30
+
+
+def _max_hunt_id_on_disk(hunts_root: Path) -> int:
+    """Highest H-XXXX currently written under the workspace, or 0."""
     max_id = 0
     if hunts_root.exists():
         for md in hunts_root.rglob("H-*.md"):
@@ -76,7 +95,77 @@ def next_hunt_id(hunts_root: Path) -> str:
         m = re.match(r"H-(\d+)", candidate.stem)
         if m:
             max_id = max(max_id, int(m.group(1)))
-    return f"H-{max_id + 1:04d}"
+    return max_id
+
+
+def _max_hunt_id_in_git(hunts_root: Path) -> int:
+    """Highest H-XXXX ever committed under `hunts_root`, or 0.
+
+    Seeds the counter on the first cycle after it was introduced, so
+    numbering resumes past every draft git remembers instead of restarting
+    underneath drafts that were committed and then cleaned off disk.
+    `--name-only` over `--all` lists paths from every commit on every branch,
+    which includes files that were added and later deleted -- exactly the
+    ones a disk scan can no longer see.
+
+    Returns 0 (and lets the on-disk floor stand) when the workspace is not a
+    git repo, git is not installed, or the scan fails or times out. A missing
+    seed only risks reusing an ID that is already unreachable on disk, so it
+    is not worth failing a hunt cycle over.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "log", "--all", "--pretty=format:", "--name-only", "--", hunts_root.name],
+            cwd=hunts_root.parent,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_SEED_TIMEOUT_SEC,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        log.warning("Could not scan git history to seed the hunt ID counter; using on-disk max")
+        return 0
+    if proc.returncode != 0:
+        return 0
+    max_id = 0
+    for m in re.finditer(r"H-(\d+)\.md", proc.stdout):
+        max_id = max(max_id, int(m.group(1)))
+    return max_id
+
+
+def _read_counter(counter_path: Path) -> int:
+    """Read the persisted high-water mark, or 0 if it is absent/unusable."""
+    try:
+        return int(counter_path.read_text().strip())
+    except (OSError, ValueError):
+        # Absent, unreadable, or corrupted by a hand-edit. Treat it as "no
+        # counter" and let the on-disk and git floors carry the value rather
+        # than crashing the cycle; the counter is rewritten below regardless.
+        return 0
+
+
+def next_hunt_id(hunts_root: Path) -> str:
+    """Allocate the next hunt ID and persist it as the new high-water mark.
+
+    Must be called inside :func:`hunt_id_lock`: this both reads and writes
+    the counter, and the read-modify-write is only safe while that lock is
+    held.
+
+    The ID is burned at allocation time, before the draft is written -- a
+    cycle that dies between the two leaves a gap in the numbering rather
+    than handing the same ID to the next cycle.
+    """
+    counter_path = hunts_root / _COUNTER_FILENAME
+    # The on-disk max is always a floor, so drafts added by hand or by an
+    # older hecate-runner since the last allocation still can not be clobbered.
+    high_water = _max_hunt_id_on_disk(hunts_root)
+    if counter_path.exists():
+        high_water = max(high_water, _read_counter(counter_path))
+    else:
+        high_water = max(high_water, _max_hunt_id_in_git(hunts_root))
+    allocated = high_water + 1
+    atomic_write_text(counter_path, f"{allocated}\n")
+    return f"H-{allocated:04d}"
 
 
 def draft_hunt_path(hunts_root: Path, hunt_id: str, when: datetime) -> Path:
