@@ -86,7 +86,7 @@ def test_happy_path_creates_draft(
     assert mock_athf.hypothesis_generator.call_args.kwargs["research_id"] == "R-0001"
 
 
-def test_narrative_free_cti_disables_web_search(
+def test_parseable_indicator_dump_skips_research_and_llm(
     settings: Settings,
     workspace: Path,
     mock_athf: MagicMock,
@@ -94,6 +94,12 @@ def test_narrative_free_cti_disables_web_search(
     # Regression test for the ThreatFox-style bare IOC dump that fabricated
     # "PureRAT and Overlord RAT" after web search grounded against wrong-
     # dated pages of the same recurring aggregator title (see has_narrative).
+    #
+    # Research used to run here with web search disabled, which produced four
+    # skills' worth of "insufficient information" boilerplate (~2 min, 4 LLM
+    # calls) that the draft then linked as "detailed pre-hunt research". A
+    # sweep draft is built from the indicator inventory alone, so neither call
+    # is made now -- a strictly stronger guarantee than disabling web search.
     provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
     provider.ensure_dirs()
     (workspace / "cti_queue" / "next.txt").write_text(
@@ -105,13 +111,15 @@ def test_narrative_free_cti_disables_web_search(
     )
     orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
 
-    orch.run_once()
+    result = orch.run_once()
 
-    assert mock_athf.research_new.call_args.kwargs["web_search_enabled"] is False
+    assert result.outcome == "draft_created"
+    mock_athf.research_new.assert_not_called()
     # A readable indicator inventory means the draft is built directly, with
     # no LLM call at all -- there is no slot left for the model to invent a
     # delivery vector or technique into.
     mock_athf.hypothesis_generator.assert_not_called()
+    assert result.research_id is None
 
 
 def test_narrative_free_cti_without_readable_inventory_falls_back_to_llm(
@@ -134,6 +142,10 @@ def test_narrative_free_cti_without_readable_inventory_falls_back_to_llm(
 
     assert result.outcome == "draft_created"
     assert mock_athf.hypothesis_generator.call_args.kwargs["indicators_only"] is True
+    # Research still runs on this path (the draft needs grounding), so the
+    # web-search guard is what prevents the wrong-dated-aggregator fabrication
+    # here -- the parseable-dump test above no longer covers it.
+    assert mock_athf.research_new.call_args.kwargs["web_search_enabled"] is False
 
 
 def test_indicator_dump_draft_has_no_techniques_and_no_invented_behavior(

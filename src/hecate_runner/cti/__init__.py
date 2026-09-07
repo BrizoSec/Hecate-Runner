@@ -56,10 +56,10 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
         sub_names = settings.cti_multi_provider_names
         if not sub_names:
             raise ValueError(
-                "SEC7669_CTI_MULTI_PROVIDERS must list at least one provider when SEC7669_CTI_PROVIDER=multi"
+                "HECATE_RUNNER_CTI_MULTI_PROVIDERS must list at least one provider when HECATE_RUNNER_CTI_PROVIDER=multi"
             )
         if "multi" in sub_names:
-            raise ValueError("SEC7669_CTI_MULTI_PROVIDERS cannot include 'multi' itself")
+            raise ValueError("HECATE_RUNNER_CTI_MULTI_PROVIDERS cannot include 'multi' itself")
         sub_providers = [get_provider(sub_name, settings=settings) for sub_name in sub_names]
         return MultiProvider(providers=sub_providers, cursor_file=settings.multi_cursor_file)
     raise ValueError(f"Unknown CTI provider: {name!r}")

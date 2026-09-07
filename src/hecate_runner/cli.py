@@ -263,7 +263,7 @@ def approve(
     Re-validates guardrails before executing — defense in depth in case the
     staged file was hand-edited or the configured ceilings changed since
     `propose` ran. This is the one command in hecate-runner that can touch a real
-    system when SEC7669_QUERY_PROVIDER is set to a real backend; it's the
+    system when HECATE_RUNNER_QUERY_PROVIDER is set to a real backend; it's the
     deliberate human checkpoint the rest of the pipeline is built around.
     """
     settings = Settings()
@@ -440,8 +440,8 @@ def doctor() -> None:
         multi_names = settings.cti_multi_provider_names
         check(
             bool(multi_names) and "multi" not in multi_names,
-            f"SEC7669_CTI_MULTI_PROVIDERS valid ({', '.join(multi_names) or 'empty'})",
-            "Set SEC7669_CTI_MULTI_PROVIDERS to a comma-separated list from: file, otx, rss, misp.",
+            f"HECATE_RUNNER_CTI_MULTI_PROVIDERS valid ({', '.join(multi_names) or 'empty'})",
+            "Set HECATE_RUNNER_CTI_MULTI_PROVIDERS to a comma-separated list from: file, otx, rss, misp.",
         )
     else:
         multi_names = []
@@ -467,7 +467,7 @@ def doctor() -> None:
     check(
         bool(settings.rss_feed_urls),
         f"RSS feed URLs configured ({len(settings.rss_feed_urls)} feeds)",
-        "Set SEC7669_RSS_FEED_URLS to a comma-separated list of feed URLs.",
+        "Set HECATE_RUNNER_RSS_FEED_URLS to a comma-separated list of feed URLs.",
     )
     if settings.research_enabled:
         warn(
@@ -479,21 +479,21 @@ def doctor() -> None:
         )
     warn(
         bool(settings.slack_webhook_url),
-        "SEC7669_SLACK_WEBHOOK_URL set (draft-created notifications)",
+        "HECATE_RUNNER_SLACK_WEBHOOK_URL set (draft-created notifications)",
         "Optional — without it, drafts land silently in hunts/ with no alert.",
     )
     if settings.query_provider == "splunk":
         check(
             _env_key_available(settings, "SPLUNK_HOST")
             and _env_key_available(settings, "SPLUNK_TOKEN"),
-            "SPLUNK_HOST / SPLUNK_TOKEN set (required for SEC7669_QUERY_PROVIDER=splunk)",
+            "SPLUNK_HOST / SPLUNK_TOKEN set (required for HECATE_RUNNER_QUERY_PROVIDER=splunk)",
             "Set both in the ATHF workspace .env — see `athf splunk test` to verify connectivity "
             "before running `hecate-runner approve` against it.",
         )
     else:
         console.print(
             f"[dim]i Query provider is '{settings.query_provider}' — `hecate-runner approve` cannot touch a real "
-            "system yet. Set SEC7669_QUERY_PROVIDER=splunk once real access exists.[/dim]"
+            "system yet. Set HECATE_RUNNER_QUERY_PROVIDER=splunk once real access exists.[/dim]"
         )
 
     if problems:

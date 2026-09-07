@@ -41,22 +41,24 @@ def default_file_mode() -> int:
 DEFAULT_FILE_MODE = default_file_mode()
 
 
-def atomic_write_text(path: Path, content: str, mode: int | None = None) -> None:
+def atomic_write_text(path: Path, content: str, mode: int = DEFAULT_FILE_MODE) -> None:
     """Write `content` to `path` atomically (write to a temp file in the same
     directory, then rename over the destination).
 
-    `mode` is applied to the temp file before the rename. It defaults to None,
-    which keeps mkstemp's restrictive 0o600 -- existing callers' permissions
-    are deliberately left alone; pass DEFAULT_FILE_MODE for a file that should
-    look like any other file in the workspace.
+    `mode` is applied to the temp file before the rename, defaulting to what a
+    plain write_text() would produce. Without it every file written through
+    here inherited mkstemp's 0o600 and ended up owner-only -- an artifact of
+    the temp file, never a deliberate choice, and inconsistent with the rest
+    of the workspace. Everything this helper currently backs is non-sensitive
+    runtime state (quota counts, CTI cursors, ID counters); a caller writing
+    anything secret should pass mode=0o600 explicitly.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(content)
-        if mode is not None:
-            os.chmod(tmp_name, mode)
+        os.chmod(tmp_name, mode)
         os.replace(tmp_name, path)
     except BaseException:
         with contextlib.suppress(OSError):

@@ -279,9 +279,40 @@ class Orchestrator:
                 "constraining the hypothesis to indicator presence for this cycle."
             )
 
+        # A narrative-free dump whose indicator inventory we can actually read
+        # gets a deterministic sweep draft below -- no LLM call, so no slot for
+        # the model to invent a delivery vector or technique into.
+        #
+        # Both halves of that condition matter. `has_narrative` is a
+        # heuristic over provider blurb formats, and if it were wrong on its
+        # own, building the draft from a template would *discard* real
+        # narrative CTI -- a worse failure than the fabrication this fixes.
+        # Requiring a parseable inventory as well means we act only on
+        # positive evidence that this really is a feed dump; anything else
+        # falls through to the LLM with the indicators-only constraint,
+        # which degrades safely either way.
+        #
+        # Computed here, ahead of research, because it now also decides
+        # whether research runs at all.
+        sweep_inventory = {} if intel_has_narrative else parse_indicator_inventory(item.content)
+
         research_id: str | None = None
         related_hunts: list[str] = []
-        if self.settings.research_enabled:
+        if sweep_inventory:
+            # `athf research new` on a bare indicator dump spends four skills
+            # producing "insufficient information" boilerplate -- measured
+            # across R-0604/R-0608/R-0610 at ~2 minutes and 4 LLM calls each
+            # for a document with no findings, no telemetry mapping and no
+            # techniques, which the draft then linked as "detailed pre-hunt
+            # research". The sweep draft below is built from the indicator
+            # inventory alone, so there is nothing for that call to ground.
+            #
+            # This keys off sweep_inventory rather than intel_has_narrative on
+            # purpose: a narrative-free dump we could NOT parse still falls
+            # through to the LLM hypothesis generator, and that path must stay
+            # grounded (ungrounded generation measured ~30% accuracy).
+            log.info("CTI is a parseable indicator dump; skipping research grounding.")
+        elif self.settings.research_enabled:
             topic, technique = derive_research_topic(item.content, title=item.title or None)
             try:
                 research_result = self.athf.research_new(
@@ -316,19 +347,6 @@ class Orchestrator:
             related_hunts = research_result.related_hunts
             log.info("Research %s grounds this cycle's hypothesis", research_id)
 
-        # A narrative-free dump whose indicator inventory we can actually read
-        # gets a deterministic sweep draft -- no LLM call, so no slot for the
-        # model to invent a delivery vector or technique into.
-        #
-        # Both halves of that condition matter. `has_narrative` is a
-        # heuristic over provider blurb formats, and if it were wrong on its
-        # own, building the draft from a template would *discard* real
-        # narrative CTI -- a worse failure than the fabrication this fixes.
-        # Requiring a parseable inventory as well means we act only on
-        # positive evidence that this really is a feed dump; anything else
-        # falls through to the LLM with the indicators-only constraint,
-        # which degrades safely either way.
-        sweep_inventory = {} if intel_has_narrative else parse_indicator_inventory(item.content)
         if sweep_inventory:
             log.info(
                 "CTI is an indicator dump (%d indicators, %d type(s)); building a sweep "

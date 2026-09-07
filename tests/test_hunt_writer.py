@@ -529,3 +529,48 @@ def test_counter_file_is_readable_like_the_rest_of_the_workspace(tmp_path: Path)
     plain.write_text("x")
     counter = root / ".hunt_id_counter"
     assert counter.stat().st_mode & 0o777 == plain.stat().st_mode & 0o777
+
+
+def test_indicator_sweep_draft_says_research_was_not_needed() -> None:
+    """An indicator sweep skips research deliberately, so the draft must not
+    report it as "grounding unavailable" -- that reads like a failure. It
+    previously linked a research doc whose every section said it had nothing
+    to say, under the label "detailed pre-hunt research"."""
+    req = DraftHuntRequest(
+        hunt_id="H-0611",
+        threat_intel="Attributes (42 total): domain (10)",
+        hypothesis=HypothesisResult(
+            hypothesis="Indicators appear in telemetry.", is_indicator_only=True
+        ),
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert "an indicator sweep needs no research grounding" in md
+    assert "detailed pre-hunt research" not in md
+    assert "grounding unavailable" not in md
+
+
+def test_missing_research_on_a_behavioral_draft_still_reads_as_a_gap() -> None:
+    """A behavioral hypothesis with no research doc is a real gap, not a
+    deliberate skip, and must keep saying so."""
+    req = DraftHuntRequest(
+        hunt_id="H-0612",
+        threat_intel="some narrative intel",
+        hypothesis=HypothesisResult(hypothesis="Adversaries dump LSASS."),
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert "research grounding unavailable this cycle" in md
+
+
+def test_research_doc_is_linked_when_one_exists() -> None:
+    req = DraftHuntRequest(
+        hunt_id="H-0613",
+        threat_intel="some narrative intel",
+        hypothesis=HypothesisResult(hypothesis="Adversaries dump LSASS."),
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+        research_id="R-0042",
+    )
+    md = render_draft(req)
+    assert "See [R-0042](" in md
+    assert "for detailed pre-hunt research" in md

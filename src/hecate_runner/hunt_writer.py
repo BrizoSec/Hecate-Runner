@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from hecate_runner.athf_client import HypothesisResult
-from hecate_runner.atomic_write import DEFAULT_FILE_MODE, atomic_write_text
+from hecate_runner.atomic_write import atomic_write_text
 
 log = logging.getLogger(__name__)
 
@@ -164,9 +164,7 @@ def next_hunt_id(hunts_root: Path) -> str:
     else:
         high_water = max(high_water, _max_hunt_id_in_git(hunts_root))
     allocated = high_water + 1
-    # DEFAULT_FILE_MODE so the counter is readable like every other file in
-    # the workspace, rather than inheriting mkstemp's owner-only 0o600.
-    atomic_write_text(counter_path, f"{allocated}\n", mode=DEFAULT_FILE_MODE)
+    atomic_write_text(counter_path, f"{allocated}\n")
     return f"H-{allocated:04d}"
 
 
@@ -246,6 +244,26 @@ def _research_link_target(research_id: str, when: datetime) -> str:
     draft = draft_hunt_path(nominal_root, "H-0000", when)
     research = nominal_root.parent / "research" / f"{research_id}.md"
     return os.path.relpath(research, draft.parent)
+
+
+def _research_document_line(req: DraftHuntRequest) -> str:
+    """Render the Threat Intel & Research bullet naming the research doc.
+
+    An indicator sweep gets its own wording rather than the generic "grounding
+    unavailable": research is deliberately skipped for those, not failed, and
+    the old line read like something had gone wrong. The alternative -- running
+    research anyway -- produced documents whose every section said it had
+    nothing to say, linked from here as "detailed pre-hunt research".
+    """
+    if req.research_id:
+        target = _research_link_target(req.research_id, req.generated_at)
+        return f"- **Research Document:** See [{req.research_id}]({target}) for detailed pre-hunt research"
+    if req.hypothesis.is_indicator_only:
+        return (
+            "- **Research Document:** None — an indicator sweep needs no research "
+            "grounding; the CTI's own indicator list is the hunt"
+        )
+    return "- **Research Document:** None — research grounding unavailable this cycle, review CTI directly"
 
 
 def render_draft(req: DraftHuntRequest) -> str:
@@ -359,7 +377,7 @@ Source CTI:
 
 - **MITRE ATT&CK Techniques:** {techniques_display}
 - **CTI Sources & References:** {f"[{req.source_url}]({req.source_url})" if req.source_url else "[Review CTI and populate]"}
-{f"- **Research Document:** See [{req.research_id}]({_research_link_target(req.research_id, req.generated_at)}) for detailed pre-hunt research" if req.research_id else "- **Research Document:** None — research grounding unavailable this cycle, review CTI directly"}
+{_research_document_line(req)}
 
 ### Related Tickets
 

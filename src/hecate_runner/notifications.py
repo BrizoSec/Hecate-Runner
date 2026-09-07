@@ -36,7 +36,7 @@ def notify_draft_created(settings: Settings, result: RunResult) -> None:
         response.raise_for_status()
     except Exception as exc:
         # Deliberately broad, not just httpx.HTTPError: a malformed
-        # SEC7669_SLACK_WEBHOOK_URL raises httpx.InvalidURL, which inherits
+        # HECATE_RUNNER_SLACK_WEBHOOK_URL raises httpx.InvalidURL, which inherits
         # directly from Exception, not HTTPError -- narrower except clauses
         # here would violate this module's own stated contract ("every
         # function here catches its own errors ... instead of raising").

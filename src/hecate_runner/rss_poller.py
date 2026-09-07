@@ -43,7 +43,7 @@ class RssPollResult:
 def run_rss_poll(settings: Settings) -> RssPollResult:
     """Fetch the next high-signal RSS/Atom entry and route it into the file CTI queue."""
     if not settings.rss_feed_urls:
-        return RssPollResult(error="SEC7669_RSS_FEED_URLS has no feed URLs configured")
+        return RssPollResult(error="HECATE_RUNNER_RSS_FEED_URLS has no feed URLs configured")
 
     queue_dir = settings.cti_queue_dir_resolved
     next_file = queue_dir / "next.txt"

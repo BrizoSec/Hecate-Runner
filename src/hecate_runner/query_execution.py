@@ -123,7 +123,7 @@ class MockQueryProvider(QueryProvider):
             row_count=0,
             detail=(
                 "Mock provider -- no real backend configured. Set "
-                "SEC7669_QUERY_PROVIDER=splunk once real Splunk access exists."
+                "HECATE_RUNNER_QUERY_PROVIDER=splunk once real Splunk access exists."
             ),
         )
 
@@ -135,7 +135,7 @@ class SplunkQueryProvider(QueryProvider):
     no live Splunk access in this environment yet. The guardrail enforcement
     and propose/approve flow around this class are what's actually tested;
     this exists so wiring in real access later is a config change
-    (SEC7669_QUERY_PROVIDER=splunk), not new code.
+    (HECATE_RUNNER_QUERY_PROVIDER=splunk), not new code.
     """
 
     name = "splunk"

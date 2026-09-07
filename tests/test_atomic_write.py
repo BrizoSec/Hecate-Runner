@@ -80,11 +80,19 @@ def test_failure_leaves_no_temp_file_when_destination_never_existed(
     assert list(tmp_path.iterdir()) == []
 
 
-def test_defaults_to_mkstemp_owner_only_mode(tmp_path: Path) -> None:
-    """Existing callers are deliberately left on mkstemp's 0o600 -- this
-    helper backs state files whose permissions should not widen silently."""
+def test_defaults_to_ordinary_file_permissions(tmp_path: Path) -> None:
+    """mkstemp's 0o600 was an artifact of the temp file, not a choice -- a
+    file written through this helper should look like any other file."""
+    plain = tmp_path / "plain.json"
+    plain.write_text("{}")
     path = tmp_path / "state.json"
     atomic_write_text(path, "{}")
+    assert path.stat().st_mode & 0o777 == plain.stat().st_mode & 0o777
+
+
+def test_explicit_mode_overrides_the_default(tmp_path: Path) -> None:
+    path = tmp_path / "secret.json"
+    atomic_write_text(path, "{}", mode=0o600)
     assert path.stat().st_mode & 0o777 == 0o600
 
 
