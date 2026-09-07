@@ -367,7 +367,7 @@ def status() -> None:
     table.add_row("ATHF workspace", str(settings.athf_workspace))
     table.add_row("CTI provider", settings.cti_provider)
     table.add_row("CTI queue dir", str(settings.cti_queue_dir_resolved))
-    table.add_row("Model", f"{settings.athf_llm_provider}:{settings.athf_llm_model}")
+    table.add_row("Model", _effective_model(settings))
     table.add_row("Drafts today", f"{state.drafts_today} / {settings.max_drafts_per_day}")
     table.add_row("Total drafts ever", str(state.total_drafts_ever))
     table.add_row("Last run", state.last_run_iso or "(never)")
@@ -503,6 +503,31 @@ def doctor() -> None:
 
 
 # --- Helpers ---------------------------------------------------------------
+
+
+def _effective_model(settings: Settings) -> str:
+    """Render the LLM the athf subprocess will actually use.
+
+    Unset here means the workspace's own .env supplies it, so resolve from
+    there rather than printing a placeholder -- the point of the row is to
+    show what will run, and "(workspace)" answers a different question.
+    """
+    provider = settings.athf_llm_provider or _workspace_env_value(settings, "ATHF_LLM_PROVIDER")
+    model = settings.athf_llm_model or _workspace_env_value(settings, "ATHF_LLM_MODEL")
+    if not provider and not model:
+        return "(athf autodetects — none set here or in the workspace .env)"
+    suffix = "" if (settings.athf_llm_provider or settings.athf_llm_model) else "  (from workspace)"
+    return f"{provider or '?'}:{model or '?'}{suffix}"
+
+
+def _workspace_env_value(settings: Settings, key_name: str) -> str:
+    """Read one key from the ATHF workspace's own .env, or "" if absent."""
+    if os.getenv(key_name):
+        return os.environ[key_name]
+    workspace_env = settings.athf_workspace / ".env"
+    if workspace_env.exists():
+        return dotenv_values(workspace_env).get(key_name) or ""
+    return ""
 
 
 def _env_key_available(settings: Settings, key_name: str) -> bool:

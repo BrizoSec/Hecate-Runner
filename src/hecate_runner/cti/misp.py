@@ -1,8 +1,25 @@
 """MISP (Malware Information Sharing Platform) CTI provider.
 
 Polls ``POST /events/restSearch`` for events modified since a persisted
-cursor, filters for high-signal events (published, not TLP:RED/AMBER), and
-returns the oldest unrouted candidate as a ``CTIItem``.
+cursor, filters for high-signal events (published, not TLP:RED/AMBER, and by
+default carrying a galaxy cluster), and returns the oldest unrouted candidate
+as a ``CTIItem``.
+
+Two knobs shape *which* events reach the orchestrator, and they are meant to
+be used together:
+
+``require_galaxy`` (default on) keeps bulk indicator dumps out. They pass
+every other filter -- published, TLP:white, recent -- but describe no
+behavior, so they can only yield indicator-sweep drafts with no ATT&CK
+mapping.
+
+``backfill`` (default off) drops the freshness floor so the archive can be
+walked oldest-first. A long-lived instance can hold years of curated events
+that ``max_event_age_days`` puts permanently out of reach, while the recent
+window is dominated by daily dump feeds.
+
+Alone, each is a trap: require_galaxy on a dump-heavy recent window starves
+the poll, and backfill without it simply works through the dumps too.
 
 Field shapes below were verified against MISP's own bundled test fixture
 (``/var/www/MISP/tests/event.json`` inside the misp-core container) and its
@@ -132,6 +149,9 @@ class MispProvider(CTIProvider):
         page_limit: int = 20,
         request_timeout_sec: float = 30.0,
         verify_ssl: bool = True,
+        require_galaxy: bool = True,
+        backfill: bool = False,
+        max_pages_per_poll: int = 25,
         client: httpx.Client | None = None,
     ):
         if not base_url:
@@ -144,6 +164,9 @@ class MispProvider(CTIProvider):
         self.max_event_age_days = max_event_age_days
         self.page_limit = page_limit
         self.request_timeout_sec = request_timeout_sec
+        self.require_galaxy = require_galaxy
+        self.backfill = backfill
+        self.max_pages_per_poll = max_pages_per_poll
         self._client = client or httpx.Client(timeout=request_timeout_sec, verify=verify_ssl)
         self._owns_client = client is None
 
@@ -154,15 +177,63 @@ class MispProvider(CTIProvider):
     # --- CTIProvider interface -----------------------------------------------
 
     def next_item(self) -> CTIItem | None:
+        """Walk forward from the cursor until a routable event is found.
+
+        Several pages may be consumed in one call. A run of rejected events
+        longer than one page is normal -- the reference instance carries a
+        daily indicator-dump feed, so `require_galaxy` can reject hundreds in
+        a row -- and advancing only one page per poll made the first backfill
+        candidate take 25 polls to reach. Walking pages here turns that into
+        a single call, while `max_pages_per_poll` still bounds the work.
+
+        Pages are fetched metadata-only. Everything selection needs (info,
+        published, Tag/TLP, Galaxy, timestamp) is present without attributes,
+        and attributes are the bulk of the payload -- a page of dump events
+        measured ~4MB with them and ~160KB without. Only the winner is then
+        re-fetched in full, since the CTI text summarises its inventory.
+        """
         cursor = MispCursorState.load(self.cursor_file)
-        events = self._fetch_events_since(self._effective_since_timestamp(cursor.last_timestamp))
-        candidate = self._pick_oldest_unrouted(events, cursor)
-        if candidate is None:
-            log.debug(
-                "No new high-signal MISP events since %s", cursor.last_timestamp or "(beginning)"
+
+        for _ in range(self.max_pages_per_poll):
+            events = self._fetch_events_since(
+                self._effective_since_timestamp(cursor.last_timestamp), metadata=True
             )
-            return None
-        return _event_to_cti_item(self.base_url, candidate)
+            candidate = self._pick_oldest_unrouted(events, cursor)
+            if candidate is not None:
+                return _event_to_cti_item(self.base_url, self._hydrate(candidate))
+            if len(events) < self.page_limit:
+                break
+            if not self._skip_exhausted_page(events, cursor):
+                break
+
+        log.debug("No new high-signal MISP events since %s", cursor.last_timestamp or "(beginning)")
+        return None
+
+    def _hydrate(self, event: dict[str, Any]) -> dict[str, Any]:
+        """Re-fetch a metadata-only event with its attributes.
+
+        Falls back to the metadata copy when the lookup fails: a draft naming
+        the event without its indicator inventory is worth more than dropping
+        a genuine candidate over a transient error.
+        """
+        uuid = str(event.get("uuid") or "")
+        if not uuid:
+            return event
+        try:
+            full = self._fetch_events_since(None, uuid=uuid)
+        except MispError as exc:
+            log.warning("Could not hydrate MISP event %s (%s); using metadata only", uuid, exc)
+            return event
+
+        # Match on uuid rather than trusting position. The filter is applied
+        # server-side, so a response whose first entry is a different event
+        # means the server ignored it -- routing that event's attributes under
+        # the candidate's identity would silently describe the wrong intel.
+        for hydrated in full:
+            if str(hydrated.get("uuid") or "") == uuid:
+                return hydrated
+        log.warning("MISP hydrate for %s returned no matching event; using metadata only", uuid)
+        return event
 
     def acknowledge(self, item: CTIItem) -> None:
         event_timestamp = item.metadata.get("event_timestamp")
@@ -190,6 +261,16 @@ class MispProvider(CTIProvider):
         freshness cutoff server-side guarantees the fetched page can
         actually contain a routable candidate.
         """
+        if self.backfill:
+            # Backfill exists precisely to reach past this floor. Returning the
+            # raw cursor (empty on a fresh one, which omits the filter entirely)
+            # lets `order: timestamp ASC` walk the archive from its beginning.
+            # No exit condition is needed: the cursor advances forward every
+            # poll, and once it passes the freshness cutoff this branch and the
+            # floored one below return the same value, so backfill converges
+            # into normal steady-state behavior on its own.
+            return cursor_timestamp
+
         cutoff_epoch = int(
             (datetime.now(UTC) - timedelta(days=self.max_event_age_days)).timestamp()
         )
@@ -199,7 +280,9 @@ class MispProvider(CTIProvider):
             cursor_epoch = 0
         return str(max(cursor_epoch, cutoff_epoch))
 
-    def _fetch_events_since(self, timestamp_since: str | None) -> list[dict[str, Any]]:
+    def _fetch_events_since(
+        self, timestamp_since: str | None, metadata: bool = False, uuid: str | None = None
+    ) -> list[dict[str, Any]]:
         url = f"{self.base_url}{EVENTS_RESTSEARCH_PATH}"
         headers = {
             "Authorization": self.api_key,
@@ -207,6 +290,12 @@ class MispProvider(CTIProvider):
             "Content-Type": "application/json",
         }
         body: dict[str, Any] = {"published": 1, "limit": self.page_limit, "order": "timestamp ASC"}
+        if metadata:
+            # Selection needs no attributes, and they are ~96% of the payload.
+            body["metadata"] = 1
+        if uuid:
+            body["uuid"] = uuid
+            body["limit"] = 1
         if timestamp_since:
             body["timestamp"] = timestamp_since
 
@@ -232,8 +321,12 @@ class MispProvider(CTIProvider):
     def _pick_oldest_unrouted(
         self, events: list[dict[str, Any]], cursor: MispCursorState
     ) -> dict[str, Any] | None:
-        cutoff = datetime.now(UTC) - timedelta(days=self.max_event_age_days)
-        candidates = [e for e in events if _is_high_signal(e, cutoff)]
+        cutoff = (
+            None if self.backfill else datetime.now(UTC) - timedelta(days=self.max_event_age_days)
+        )
+        candidates = [
+            e for e in events if _is_high_signal(e, cutoff, require_galaxy=self.require_galaxy)
+        ]
         candidates = [
             e
             for e in candidates
@@ -243,6 +336,53 @@ class MispProvider(CTIProvider):
             return None
         candidates.sort(key=_event_sort_timestamp)
         return candidates[0]
+
+    def _skip_exhausted_page(self, events: list[dict[str, Any]], cursor: MispCursorState) -> bool:
+        """Advance the cursor past a full page that yielded no candidate.
+
+        The cursor normally only moves in acknowledge(), i.e. when an event is
+        actually routed. That is fine when the filters reject a minority of a
+        page, but `require_galaxy` rejects the ThreatFox-style indicator dumps
+        that arrive dozens in a row -- a full page of them yields no candidate,
+        so no acknowledge(), so no advance, and every later poll refetches the
+        identical page forever. Stepping over an exhausted page is what lets
+        the poll walk through a long run of unwanted events.
+
+        Only *full* pages are skipped. A short page means we have reached the
+        end of what MISP currently holds, and advancing there would step over
+        events that simply have not arrived yet.
+        """
+        if len(events) < self.page_limit:
+            return False
+
+        timestamps = [t for t in (_event_sort_timestamp(e) for e in events) if t != sys.maxsize]
+        if not timestamps:
+            return False
+        newest = max(timestamps)
+        try:
+            if newest <= int(cursor.last_timestamp or 0):
+                return False
+        except ValueError:
+            return False
+
+        newest_str = str(newest)
+        log.info(
+            "MISP page of %d events yielded no routable candidate; advancing cursor to %s "
+            "so the next poll makes progress.",
+            len(events),
+            newest_str,
+        )
+        cursor.last_timestamp = newest_str
+        # Carry forward the uuids sitting exactly at the new cursor. Clearing
+        # the list instead would make any already-routed event at that same
+        # timestamp look unrouted again and get re-drafted under a new hunt ID.
+        cursor.seen_ids_at_cursor = [
+            str(e.get("uuid", ""))
+            for e in events
+            if str(e.get("timestamp", "")) == newest_str and e.get("uuid")
+        ]
+        cursor.save(self.cursor_file)
+        return True
 
 
 def _event_sort_timestamp(event: dict[str, Any]) -> int:
@@ -261,8 +401,32 @@ def _event_sort_timestamp(event: dict[str, Any]) -> int:
         return sys.maxsize
 
 
-def _is_high_signal(event: dict[str, Any], cutoff: datetime) -> bool:
-    """Published, not explicitly TLP:RED/AMBER, not older than ``cutoff``."""
+def _has_galaxy_cluster(event: dict[str, Any]) -> bool:
+    """Whether the event carries any MISP galaxy cluster.
+
+    Galaxy presence is the cleanest available separator between a curated,
+    analyst-written event and a bulk indicator dump. Measured across the
+    reference instance: every Rectifyq and CERT-FR event carried clusters and
+    averaged ~25 attributes, while every abuse.ch/ThreatFox event carried none
+    and averaged ~734. The dumps describe no behavior, so they can only ever
+    produce indicator-sweep drafts with no ATT&CK mapping.
+
+    Any cluster counts, not just an ATT&CK technique one: threat-actor and
+    malware galaxies mark the same "an analyst curated this" signal, and
+    requiring a technique specifically would drop good events whose galaxies
+    name only the actor.
+    """
+    return any(galaxy.get("GalaxyCluster") for galaxy in event.get("Galaxy", []) or [])
+
+
+def _is_high_signal(
+    event: dict[str, Any], cutoff: datetime | None, require_galaxy: bool = False
+) -> bool:
+    """Published, not explicitly TLP:RED/AMBER, and newer than ``cutoff``.
+
+    ``cutoff`` of None disables the age check entirely -- that is backfill,
+    where reaching deliberately old events is the whole point.
+    """
     if not (event.get("info") or "").strip():
         return False
 
@@ -272,6 +436,12 @@ def _is_high_signal(event: dict[str, Any], cutoff: datetime) -> bool:
     tlp = _extract_tlp(event)
     if tlp is not None and tlp in LOW_SIGNAL_TLP:
         return False
+
+    if require_galaxy and not _has_galaxy_cluster(event):
+        return False
+
+    if cutoff is None:
+        return True
 
     published_at = _event_datetime(event)
     return not (published_at is not None and published_at < cutoff)

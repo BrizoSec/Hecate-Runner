@@ -51,6 +51,9 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             page_limit=settings.misp_page_limit,
             request_timeout_sec=settings.misp_request_timeout_sec,
             verify_ssl=settings.misp_verify_ssl,
+            require_galaxy=settings.misp_require_galaxy,
+            backfill=settings.misp_backfill,
+            max_pages_per_poll=settings.misp_max_pages_per_poll,
         )
     if name == "multi":
         sub_names = settings.cti_multi_provider_names

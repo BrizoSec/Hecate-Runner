@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from hecate_runner.cli import _stdout_already_targets, _tavily_key_available
+from hecate_runner.cli import _effective_model, _stdout_already_targets, _tavily_key_available
 from hecate_runner.config import Settings
 
 
@@ -86,3 +86,39 @@ def test_stdout_target_check_non_file_stdout_is_false_not_error(
     log_file.write_text("")
     monkeypatch.setattr(sys, "stdout", io.StringIO())
     assert _stdout_already_targets(log_file) is False
+
+
+def test_effective_model_reads_the_workspace_when_unset(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LLM choice lives in the workspace .env by default, so `status` has to
+    look there -- printing a placeholder would answer a different question
+    than "what will actually run"."""
+    monkeypatch.delenv("ATHF_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("ATHF_LLM_MODEL", raising=False)
+    (settings.athf_workspace / ".env").write_text(
+        "ATHF_LLM_PROVIDER=ollama\nATHF_LLM_MODEL=qwen2.5:14b-instruct-q4_K_M\n"
+    )
+    rendered = _effective_model(settings)
+    assert "ollama:qwen2.5:14b-instruct-q4_K_M" in rendered
+    assert "from workspace" in rendered
+
+
+def test_effective_model_marks_an_explicit_override(settings: Settings) -> None:
+    settings_with_override = settings.model_copy(
+        update={"athf_llm_provider": "ollama", "athf_llm_model": "llama3"}
+    )
+    rendered = _effective_model(settings_with_override)
+    assert rendered.startswith("ollama:llama3")
+    assert "from workspace" not in rendered
+
+
+def test_effective_model_when_nothing_is_configured(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ATHF_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("ATHF_LLM_MODEL", raising=False)
+    workspace_env = settings.athf_workspace / ".env"
+    if workspace_env.exists():
+        workspace_env.unlink()
+    assert "autodetect" in _effective_model(settings)

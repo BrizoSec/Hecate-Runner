@@ -1,6 +1,6 @@
 # hecate-runner
 
-Autonomous hunt draft orchestrator for the [Nebulock Agentic Threat Hunting Framework (ATHF)](https://github.com/Nebulock-Inc/agentic-threat-hunting-framework).
+Autonomous hunt draft orchestrator for the Agentic Threat Hunting Framework (ATHF), whose workspace lives in [Hecate-Core](https://github.com/BrizoSec/Hecate-Core).
 
 `hecate-runner` sits on top of ATHF and turns it into a persistent, 24/7 hunting loop:
 
@@ -21,29 +21,32 @@ Runs as a systemd timer on a hunting host, or manually via `hecate-runner run`.
 ## Architecture
 
 ```
-                        cti_queue/next.txt         <-- CTI provider (file or OTX)
+  CTI provider: file | otx | rss | misp | multi
+  (file reads cti_queue/next.txt; the rest poll their source directly)
                                 |
                                 v
-+------------------+     +--------------+     +----------------------+     +----------------+
-| systemd timer    | --> | hecate-runner run  | --> | athf research new    | --> | Ollama (local) |
-| every 6h + boot  |     | (this repo)  |     | (5-skill, web-search  |     | qwen2.5:14b    |
-+------------------+     +--------------+     | grounded via Tavily)  |     +----------------+
-                                |              +----------------------+
++------------------+     +---------------+     +-----------------------+     +----------------+
+| systemd timer    | --> | hecate-runner | --> | athf research new     | --> | Ollama (local) |
+| hourly + 2m boot |     | run           |     | (5-skill, web-search  |     | qwen2.5:14b    |
++------------------+     +---------------+     |  grounded via Tavily) |     +----------------+
+                                |              +-----------------------+
                                 |                        |
                                 |                 research_id (R-XXXX)
                                 v                        |
-                     +--------------------------+        |
-                     | athf hypothesis-generator | <------+
-                     +--------------------------+
+                     +---------------------------+       |
+                     | athf hypothesis-generator | <-----+
+                     +---------------------------+
                                 |
                                 v
-                     hunts/production/YYYY/QN/H-XXXX.md  (spawned_from: R-XXXX)
+                     hunts/YYYY/QN/H-XXXX.md   (spawned_from: R-XXXX)
                      research/R-XXXX.md
                      logs/orchestrator.log
                      .orchestrator_state.json
 ```
 
 Research grounding runs before hypothesis generation on every cycle by default (`HECATE_RUNNER_RESEARCH_ENABLED=true`). **A research failure aborts the cycle** (refunds the quota, leaves the CTI queued for retry) rather than falling back to an ungrounded hypothesis: `athf eval` measured ungrounded generation at ~30% accuracy on known-answer MITRE technique fixtures, so an ungrounded draft isn't a degraded-but-useful fallback, it's an unreliable one. Set `HECATE_RUNNER_RESEARCH_ENABLED=false` to explicitly opt out of research and always generate ungrounded (e.g. for offline testing) — that's a deliberate choice, different from a research call failing mid-cycle.
+
+One exception is automatic: when the CTI is a bare indicator dump with a parseable inventory (a ThreatFox-style feed event), the draft is built deterministically from the indicator list with no LLM call, and research is skipped along with it. There is no behavior described for research to ground, and running it anyway produced documents whose every section said so.
 
 ## Query execution: propose, don't run
 
@@ -72,8 +75,8 @@ Guardrails (`HECATE_RUNNER_MAX_QUERY_TIME_RANGE_DAYS`, default 7; `HECATE_RUNNER
 
 ```bash
 # Clone
-git clone https://github.com/BrizoSec/hecate-runner.git
-cd hecate-runner
+git clone https://github.com/BrizoSec/Hecate-Runner.git
+cd Hecate-Runner
 
 # uv installs Python + venv + deps in one shot
 uv sync --dev
@@ -100,8 +103,8 @@ git push origin main
 
 # On k3s-core
 cd ~
-git clone https://github.com/BrizoSec/hecate-runner.git
-cd hecate-runner
+git clone https://github.com/BrizoSec/Hecate-Runner.git
+cd Hecate-Runner
 
 # Install with uv (recommended) or pip
 uv sync
@@ -171,15 +174,21 @@ Same dual-mode support as OTX: `HECATE_RUNNER_CTI_PROVIDER=rss` pulls directly f
 uv run hecate-runner misp-poll
 ```
 
-Polls `POST /events/restSearch`, filtered to `published` events, incrementally synced via a `timestamp`-based cursor (`.misp_cursor_state.json`) the same way OTX's `modified_since` works. TLP is tag-based in MISP (`tlp:white`/`tlp:red`/etc.) rather than a dedicated field like OTX has — an event with an explicit `tlp:red` or `tlp:amber` tag is excluded, but an event with **no** TLP tag at all defaults to safe/included, matching how `OtxProvider` treats a missing TLP field. Like RSS (and unlike OTX), an event doesn't need a MITRE Galaxy/technique mapping to be considered high signal — a curated MISP instance is itself the filter. When a Galaxy cluster *is* attached, technique IDs are read from `GalaxyCluster.meta.external_id` (confirmed against MISP's own bundled ATT&CK galaxy library), with a regex fallback across tag names in case a given MISP/galaxy version omits that field.
+Polls `POST /events/restSearch` for `published` events, incrementally synced via a `timestamp` cursor (`.misp_cursor_state.json`) the same way OTX's `modified_since` works. Pages are fetched metadata-only — attributes are the bulk of the payload and selection doesn't need them — and only the chosen event is re-fetched in full. TLP is tag-based rather than a dedicated field: an explicit `tlp:red`/`tlp:amber` tag excludes an event, while no TLP tag at all defaults to included, matching how `OtxProvider` treats a missing TLP field. ATT&CK technique IDs are read from `GalaxyCluster.meta.external_id` (confirmed against MISP's own bundled galaxy library), with a regex fallback across tag names.
 
 Same dual-mode support as OTX/RSS: `HECATE_RUNNER_CTI_PROVIDER=misp` pulls directly from MISP every orchestrator cycle instead of routing through the file queue via a separate `misp-poll` run.
 
-**Standing up a local MISP instance for dev/test:** see [MISP/misp-docker](https://github.com/MISP/misp-docker) — `docker compose up`, then create a dedicated Auth key as above. If it's sharing a host with a k3s cluster running Traefik as ingress, note that Traefik claims ports 80/443 system-wide via iptables NAT (including loopback-originated traffic) — invisible to `ss`, confirmed only by comparing TLS certificate identity. Use non-standard host ports (e.g. 8080/8443) and set `BASE_URL` (MISP's own env var) to match.
+**Two knobs decide what actually gets routed, and they work together.** `HECATE_RUNNER_MISP_REQUIRE_GALAXY` (default on) skips events carrying no galaxy cluster. Galaxy presence is the cleanest separator between a curated, analyst-written event and a bulk indicator dump — on the reference instance every curated event carried clusters and averaged ~25 attributes, while every ThreatFox event carried none and averaged ~734. `HECATE_RUNNER_MISP_BACKFILL` drops the 30-day freshness floor so the archive can be walked oldest-first, for an instance whose curated events predate that window; seed the cursor file to choose where the walk starts. The cursor advances every poll and converges back into normal freshness-floored behavior once it reaches the present — turn backfill off then, since with it on a lost cursor restarts from the beginning of the archive.
+
+Used alone each is a trap: requiring galaxies on a dump-heavy recent window starves the poll, and backfilling without the filter simply works through the dumps too.
+
+**Standing up a local MISP instance for dev/test:** see [MISP/misp-docker](https://github.com/MISP/misp-docker) — `docker compose up`, then create a dedicated Auth key as above. On a host already running an ingress controller, bind non-standard ports (e.g. 8080/8443) and set `BASE_URL` to match: Traefik claims 80/443 system-wide via iptables NAT including loopback, which `ss` does not show.
 
 ## Configuration
 
 All config comes from environment variables (or a `.env` file in the working directory). See [.env.example](.env.example) for the full list.
+
+**Two `.env` files, different jobs.** This repo's `.env` configures the orchestrator. The ATHF workspace has its own, which `athf` loads itself — that is where `TAVILY_API_KEY`, `ATHF_LLM_PROVIDER` and `ATHF_LLM_MODEL` belong, so manual `athf` runs and orchestrated ones use the same model. `hecate-runner` passes only `ATHF_WORKSPACE` through by default; setting `ATHF_LLM_*` here overrides the workspace for orchestrated runs only.
 
 Key ones:
 
@@ -198,6 +207,9 @@ Key ones:
 | `HECATE_RUNNER_RSS_MAX_ENTRY_AGE_DAYS` | Ignore RSS entries older than this | `30` |
 | `MISP_BASE_URL` / `MISP_API_KEY` | MISP instance + dedicated automation Auth key — required for `cti_provider=misp` and `hecate-runner misp-poll` | — |
 | `HECATE_RUNNER_MISP_VERIFY_SSL` | Set false only for self-signed dev/test MISP instances | `true` |
+| `HECATE_RUNNER_MISP_REQUIRE_GALAXY` | Only route MISP events carrying a galaxy cluster — keeps bulk indicator dumps (ThreatFox-style) out, since they describe no behavior | `true` |
+| `HECATE_RUNNER_MISP_BACKFILL` | Ignore the freshness floor and walk the MISP archive oldest-first. Reset the cursor file to start from the beginning | `false` |
+| `HECATE_RUNNER_MISP_MAX_PAGES_PER_POLL` | How many event pages one poll may walk before giving up (pages are fetched metadata-only) | `25` |
 | `HECATE_RUNNER_QUERY_PROVIDER` | Backend for `hecate-runner approve` (`mock` or `splunk`) — see [Query execution](#query-execution-propose-dont-run) | `mock` |
 | `HECATE_RUNNER_MAX_QUERY_TIME_RANGE_DAYS` | Hard ceiling on a proposed query's time range | `7` |
 | `HECATE_RUNNER_MAX_QUERY_LIMIT` | Hard ceiling on a proposed query's result limit | `1000` |
@@ -216,16 +228,21 @@ Open the folder in VS Code. Recommended extensions live in `.vscode/extensions.j
 
 ## Roadmap
 
-- [x] Phase 4a: file-based CTI queue + orchestrator + systemd
-- [x] Phase 4b/5: AlienVault OTX CTI provider + poller timer
-- [x] Phase 4c: RSS/Atom CTI provider + poller timer, no API key required (4 verified default feeds; CISA's advisory feed tried and excluded — blocks automated requests on every path regardless of User-Agent).
-- [~] Phase 4d: MISP CTI provider + poller timer — built and unit-tested against field shapes verified from MISP's own bundled test fixtures (not guessed), but not yet live-verified against a real instance the way RSS was. A local misp-docker instance exists in this environment for exactly that purpose; live verification is the next step once a dedicated automation Auth key is available.
-- [x] Phase 5b: notification hooks — Slack webhook on draft creation (`HECATE_RUNNER_SLACK_WEBHOOK_URL`, no-op if unset); email still open
-- [x] Phase 6a: web-search grounding via TAVILY (`athf research new` wired into the orchestrator, mandatory when enabled — a research failure aborts the cycle rather than falling back to ungrounded) + model swap to qwen2.5:14b
-- [x] Phase 6b: eval harness (`athf eval` — known-answer fixtures replacing manual spot checks; found ungrounded generation scores ~30% on MITRE technique recall, which is why research grounding is mandatory-when-enabled rather than a soft fallback)
-- [x] Phase 6c: ATT&CK STIX grounding in research prompts (`athf attack lookup` fed into HuntResearcherAgent's tradecraft/telemetry/synthesis skills instead of asking the model to recall technique metadata — closed cold-recall's ~30% accuracy to 100% on the same model, per `athf eval --grounded`)
-- [~] Phase 7a: propose/approve query execution bridge (`hecate-runner propose` / `pending` / `approve` / `reject`) — guardrail enforcement and the approval flow are built and tested; the `splunk` backend is unvalidated against a real instance since none exists in this environment yet. `mock` remains the default until it does. Query *authoring* is still human-only — no LLM drafts or approves a query.
-- [ ] Phase 7b: Level 3 execution — MCP connector for CrowdStrike (or whichever EDR/SIEM materializes first) so Observe queries can eventually be proposed automatically, still gated by the approval step above
+Done:
+
+- **4a** file-based CTI queue, orchestrator, systemd timer
+- **4b/5** AlienVault OTX provider
+- **4c** RSS/Atom provider, no API key needed (4 verified default feeds; CISA's advisory feed was tried and excluded — it blocks automated requests on every path regardless of User-Agent)
+- **4d** MISP provider, live-verified against a real instance, with galaxy filtering and archive backfill
+- **5b** Slack webhook on draft creation (email still open)
+- **6a** web-search grounding via Tavily, mandatory when enabled — a research failure aborts the cycle rather than falling back to ungrounded
+- **6b** eval harness (`athf eval`), which is what measured ungrounded generation at ~30% MITRE technique recall and made grounding mandatory rather than a soft fallback
+- **6c** ATT&CK STIX grounding fed into the research skills instead of asking the model to recall technique metadata — closed that ~30% to 100% on the same model
+
+In progress:
+
+- **7a** propose/approve query bridge — guardrails and the approval flow are built and tested; the `splunk` backend is written but has never touched a real SIEM, so `mock` stays the default. Query *authoring* remains human-only.
+- **7b** Level 3 execution — an MCP connector for whichever EDR/SIEM materializes first, so Observe queries can eventually be proposed automatically, still gated by the approval step above
 
 ## License
 

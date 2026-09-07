@@ -7,6 +7,7 @@ app/files/misp-galaxy/clusters/mitre-attack-pattern.json), not guessed.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -80,6 +81,9 @@ def _make_provider(
     *,
     status_code: int = 200,
     max_event_age_days: int = 30,
+    require_galaxy: bool = False,
+    backfill: bool = False,
+    page_limit: int = 20,
     on_request: Callable[[httpx.Request], None] | None = None,
 ) -> MispProvider:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -95,6 +99,9 @@ def _make_provider(
         api_key="test-key",
         cursor_file=tmp_path / "cursor.json",
         max_event_age_days=max_event_age_days,
+        require_galaxy=require_galaxy,
+        backfill=backfill,
+        page_limit=page_limit,
         client=client,
     )
 
@@ -172,12 +179,21 @@ def test_tlp_clear_is_high_signal(tmp_path: Path) -> None:
     assert provider.next_item() is not None
 
 
-def test_event_without_galaxy_is_still_high_signal(tmp_path: Path) -> None:
-    # Unlike OTX (which requires attack_ids), MISP events don't need a
-    # Galaxy/technique mapping to be considered high signal -- the source
-    # instance's own curation is the primary filter, same reasoning as RSS.
+def test_event_without_galaxy_is_filtered_when_galaxy_required(tmp_path: Path) -> None:
+    """This used to pass: "the source instance's own curation is the primary
+    filter, same reasoning as RSS". That holds for a hand-curated instance and
+    breaks for one subscribed to a bulk dump feed -- on the reference instance
+    the daily ThreatFox events are published, TLP:white and recent, so every
+    other filter waves them through, and they describe no behavior at all."""
     event = _sample_event(Galaxy=[])
-    provider = _make_provider(tmp_path, [event])
+    provider = _make_provider(tmp_path, [event], require_galaxy=True)
+    assert provider.next_item() is None
+
+
+def test_event_without_galaxy_is_routed_when_galaxy_not_required(tmp_path: Path) -> None:
+    """The opt-out for an instance that is curated but does not tag galaxies."""
+    event = _sample_event(Galaxy=[])
+    provider = _make_provider(tmp_path, [event], require_galaxy=False)
     item = provider.next_item()
     assert item is not None
     assert "MITRE ATT&CK Techniques" not in item.content
@@ -228,12 +244,18 @@ def test_sends_auth_header_and_published_filter(tmp_path: Path) -> None:
     provider = _make_provider(tmp_path, [_sample_event()], on_request=seen_requests.append)
     provider.next_item()
 
-    assert len(seen_requests) == 1
-    assert seen_requests[0].headers["authorization"] == "test-key"
-    import json as jsonlib
+    # A poll now makes two calls: a metadata-only page, then a full fetch of
+    # the winner by uuid. Only the page requests carry the query shape under
+    # test, so select them rather than indexing blindly.
+    def pages() -> list[dict[str, Any]]:
+        return [b for b in (json.loads(r.content) for r in seen_requests) if "uuid" not in b]
 
-    body = jsonlib.loads(seen_requests[0].content)
+    assert len(pages()) == 1
+    assert seen_requests[0].headers["authorization"] == "test-key"
+
+    body = pages()[0]
     assert body["published"] == 1
+    assert body["metadata"] == 1  # attributes are ~96% of the payload; not needed to select
     # First-ever poll, no cursor yet -- still floored at max_event_age_days
     # (see test_first_poll_floors_query_at_max_event_age_days), not omitted.
     assert "timestamp" in body
@@ -242,8 +264,7 @@ def test_sends_auth_header_and_published_filter(tmp_path: Path) -> None:
     cursor = MispCursorState(last_timestamp=recent_cursor_timestamp)
     cursor.save(provider.cursor_file)
     provider.next_item()
-    body2 = jsonlib.loads(seen_requests[1].content)
-    assert body2["timestamp"] == recent_cursor_timestamp
+    assert pages()[1]["timestamp"] == recent_cursor_timestamp
 
 
 def test_first_poll_floors_query_at_max_event_age_days(tmp_path: Path) -> None:
@@ -441,3 +462,73 @@ def test_blurb_handles_sparse_event() -> None:
     blurb = _event_to_blurb("https://misp.example.com", {})
     assert "Untitled event" in blurb
     assert "Org: Unknown" in blurb
+
+
+def _cursor(tmp_path: Path) -> dict[str, Any]:
+    return json.loads((tmp_path / "cursor.json").read_text())
+
+
+def test_full_page_of_rejected_events_advances_the_cursor(tmp_path: Path) -> None:
+    """Without this the galaxy filter wedges the poller.
+
+    The cursor normally only moves in acknowledge(), i.e. when something is
+    actually routed. A full page of dumps yields nothing to route, so the
+    cursor never moves and every later poll refetches the identical page --
+    the provider would go permanently silent the first time it met a run of
+    indicator dumps longer than one page, which on the reference instance is
+    every day of ThreatFox.
+    """
+    events = [
+        _sample_event(uuid=f"dump-{i}", Galaxy=[], timestamp=str(1_700_000_000 + i))
+        for i in range(3)
+    ]
+    provider = _make_provider(tmp_path, events, require_galaxy=True, page_limit=3)
+
+    assert provider.next_item() is None
+    assert _cursor(tmp_path)["last_timestamp"] == "1700000002"
+
+
+def test_short_page_of_rejected_events_leaves_the_cursor_alone(tmp_path: Path) -> None:
+    """A short page means we have caught up with what MISP holds. Advancing
+    there would step over events that simply have not arrived yet."""
+    events = [
+        _sample_event(uuid=f"dump-{i}", Galaxy=[], timestamp=str(1_700_000_000 + i))
+        for i in range(2)
+    ]
+    provider = _make_provider(tmp_path, events, require_galaxy=True, page_limit=20)
+
+    assert provider.next_item() is None
+    assert not (tmp_path / "cursor.json").exists()
+
+
+def test_backfill_reaches_events_older_than_the_freshness_floor(tmp_path: Path) -> None:
+    """The archive is the point of backfill: a long-lived instance can hold
+    years of curated events that max_event_age_days puts out of reach."""
+    old_event = _sample_event(date="2020-01-01", timestamp=_epoch_days_ago(3650))
+
+    assert _make_provider(tmp_path, [old_event], backfill=False).next_item() is None
+    assert _make_provider(tmp_path, [old_event], backfill=True).next_item() is not None
+
+
+def test_backfill_does_not_send_a_timestamp_floor_to_misp(tmp_path: Path) -> None:
+    """The floor is applied server-side, so backfill has to drop it there too
+    -- filtering client-side alone would still fetch only recent pages."""
+    seen: list[dict[str, Any]] = []
+
+    def capture(request: httpx.Request) -> None:
+        seen.append(json.loads(request.content))
+
+    provider = _make_provider(tmp_path, [_sample_event()], backfill=True, on_request=capture)
+    provider.next_item()
+    assert "timestamp" not in seen[0]
+
+
+def test_steady_state_still_sends_a_timestamp_floor(tmp_path: Path) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def capture(request: httpx.Request) -> None:
+        seen.append(json.loads(request.content))
+
+    provider = _make_provider(tmp_path, [_sample_event()], backfill=False, on_request=capture)
+    provider.next_item()
+    assert "timestamp" in seen[0]

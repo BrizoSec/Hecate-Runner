@@ -30,11 +30,23 @@ def test_derived_paths(settings: Settings, workspace: Path) -> None:
     assert settings.state_file == workspace / ".orchestrator_state.json"
 
 
-def test_env_for_athf(settings: Settings) -> None:
+def test_env_for_athf_omits_unset_llm_keys(settings: Settings) -> None:
+    """Anything passed here overrides the workspace's own .env (athf loads it
+    with override=False), so unset keys must not be passed at all -- otherwise
+    the workspace can never own its LLM choice."""
     env = settings.env_for_athf()
-    assert env["ATHF_LLM_PROVIDER"] == "ollama"
-    assert env["ATHF_LLM_MODEL"].startswith("qwen")
     assert "ATHF_WORKSPACE" in env
+    assert "ATHF_LLM_PROVIDER" not in env
+    assert "ATHF_LLM_MODEL" not in env
+
+
+def test_env_for_athf_passes_explicit_llm_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ATHF_WORKSPACE", "/tmp/athf")
+    monkeypatch.setenv("ATHF_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("ATHF_LLM_MODEL", "qwen2.5:14b-instruct-q4_K_M")
+    env = Settings(_env_file=None).env_for_athf()  # type: ignore[call-arg]
+    assert env["ATHF_LLM_PROVIDER"] == "ollama"
+    assert env["ATHF_LLM_MODEL"] == "qwen2.5:14b-instruct-q4_K_M"
 
 
 def test_max_drafts_bounds(monkeypatch: pytest.MonkeyPatch) -> None:

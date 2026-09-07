@@ -36,8 +36,15 @@ class Settings(BaseSettings):
     )
 
     # --- LLM provider (passed through to athf via env) ---------------------
-    athf_llm_provider: str = Field(default="ollama")
-    athf_llm_model: str = Field(default="qwen2.5:7b-instruct-q4_K_M")
+    # Unset by default so the ATHF workspace's own .env owns LLM choice. These
+    # used to default to ollama/qwen2.5:7b and were force-passed on every athf
+    # call, which silently overrode whatever the workspace had configured --
+    # the same two keys were therefore duplicated in both .env files, and
+    # editing the workspace copy did nothing while looking like it worked.
+    # Set either here only to deliberately override the workspace for
+    # orchestrated runs.
+    athf_llm_provider: str | None = Field(default=None)
+    athf_llm_model: str | None = Field(default=None)
 
     # --- Orchestrator guardrails -------------------------------------------
     max_drafts_per_day: int = Field(
@@ -207,6 +214,42 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_MISP_MAX_EVENT_AGE_DAYS",
         description="Ignore events published before this many days ago.",
     )
+    misp_require_galaxy: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_MISP_REQUIRE_GALAXY",
+        description=(
+            "Only route MISP events carrying a galaxy cluster. Galaxy presence "
+            "separates curated, analyst-written events from bulk indicator dumps "
+            "(ThreatFox-style), which describe no behavior and can only produce "
+            "indicator-sweep drafts with no ATT&CK mapping. Set false for an "
+            "instance that does not tag galaxies at all -- otherwise the provider "
+            "will correctly find nothing to route."
+        ),
+    )
+    misp_max_pages_per_poll: int = Field(
+        default=25,
+        ge=1,
+        le=500,
+        alias="HECATE_RUNNER_MISP_MAX_PAGES_PER_POLL",
+        description=(
+            "How many event pages one poll may walk before giving up. A run of "
+            "rejected events longer than one page is normal on an instance "
+            "carrying a daily indicator-dump feed; walking pages within a single "
+            "poll is what stops the first backfill candidate taking 25 polls to "
+            "reach. Pages are fetched metadata-only, so the cost is small."
+        ),
+    )
+    misp_backfill: bool = Field(
+        default=False,
+        alias="HECATE_RUNNER_MISP_BACKFILL",
+        description=(
+            "Ignore the freshness floor and walk the whole MISP archive "
+            "oldest-first. For an instance whose useful events predate "
+            "misp_max_event_age_days. Reset the cursor file to start from the "
+            "beginning; the cursor advances forward each poll and converges back "
+            "into normal steady-state behavior once it reaches the present."
+        ),
+    )
     misp_page_limit: int = Field(
         default=20,
         ge=1,
@@ -334,12 +377,19 @@ class Settings(BaseSettings):
         return v.expanduser().resolve()
 
     def env_for_athf(self) -> dict[str, str]:
-        """Env vars to pass through when subprocessing the athf CLI."""
-        return {
-            "ATHF_LLM_PROVIDER": self.athf_llm_provider,
-            "ATHF_LLM_MODEL": self.athf_llm_model,
-            "ATHF_WORKSPACE": str(self.athf_workspace),
-        }
+        """Env vars to pass through when subprocessing the athf CLI.
+
+        LLM keys are included only when explicitly set. athf calls
+        load_dotenv() from the workspace with override=False, so anything
+        passed here wins over the workspace's own .env -- omitting the unset
+        ones is what lets that file stay authoritative.
+        """
+        env = {"ATHF_WORKSPACE": str(self.athf_workspace)}
+        if self.athf_llm_provider:
+            env["ATHF_LLM_PROVIDER"] = self.athf_llm_provider
+        if self.athf_llm_model:
+            env["ATHF_LLM_MODEL"] = self.athf_llm_model
+        return env
 
     def redacted_dict(self) -> dict[str, Any]:
         """Effective settings with secrets masked — safe to paste into an issue."""
