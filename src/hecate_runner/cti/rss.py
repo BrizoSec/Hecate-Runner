@@ -34,6 +34,7 @@ import html
 import json
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -92,13 +93,36 @@ class RssCursorState:
         atomic_write_text(path, json.dumps({"seen_ids": self.seen_ids}, indent=2))
 
     def already_routed(self, feed_url: str, entry_id: str) -> bool:
-        return entry_id in self.seen_ids.get(feed_url, [])
+        return self.already_routed_any(feed_url, [entry_id])
+
+    def already_routed_any(self, feed_url: str, identifiers: Iterable[str]) -> bool:
+        """True if *any* of an entry's identifiers has been routed before.
+
+        Matching on more than one identifier is what makes dedup survive a
+        feed whose GUID isn't stable. CrowdStrike's blog re-issued a
+        different ``<guid>`` for an unchanged post on successive fetches --
+        four distinct ``?p=NNNNNN`` ids for one article -- while its link
+        stayed constant, so an id-only check re-routed it once per poll and
+        produced four identical hunts and four identical research documents
+        from a single article.
+        """
+        seen = self.seen_ids.get(feed_url, [])
+        return any(identifier in seen for identifier in identifiers)
 
     def advance(self, feed_url: str, entry_id: str) -> None:
+        self.advance_all(feed_url, [entry_id])
+
+    def advance_all(self, feed_url: str, identifiers: Iterable[str]) -> None:
+        """Remember every identifier an entry was matched on.
+
+        Recording all of them (not just the primary id) is what lets a later
+        poll recognise the same entry through whichever identifier happens to
+        be stable for that feed.
+        """
         ids = self.seen_ids.setdefault(feed_url, [])
-        if entry_id in ids:
-            return
-        ids.append(entry_id)
+        for identifier in identifiers:
+            if identifier and identifier not in ids:
+                ids.append(identifier)
         if len(ids) > _MAX_SEEN_IDS_PER_FEED:
             del ids[: len(ids) - _MAX_SEEN_IDS_PER_FEED]
 
@@ -148,8 +172,8 @@ class RssProvider(CTIProvider):
                 continue
 
             for entry in entries:
-                entry_id = _entry_id(entry)
-                if not entry_id or cursor.already_routed(feed_url, entry_id):
+                identifiers = _entry_identifiers(entry)
+                if not identifiers or cursor.already_routed_any(feed_url, identifiers):
                     continue
                 published = _entry_published(entry)
                 if published is not None and published < cutoff:
@@ -177,12 +201,16 @@ class RssProvider(CTIProvider):
 
     def acknowledge(self, item: CTIItem) -> None:
         feed_url = item.metadata.get("feed_url")
-        entry_id = item.metadata.get("entry_id")
-        if not feed_url or not entry_id:
+        identifiers = [
+            value
+            for value in (item.metadata.get("entry_id"), item.metadata.get("entry_link"))
+            if value
+        ]
+        if not feed_url or not identifiers:
             log.warning("Cannot advance RSS cursor: item missing feed metadata (%r)", item)
             return
         cursor = RssCursorState.load(self.cursor_file)
-        cursor.advance(feed_url, entry_id)
+        cursor.advance_all(feed_url, identifiers)
         cursor.save(self.cursor_file)
 
     # --- Internal --------------------------------------------------------------
@@ -205,6 +233,22 @@ class RssProvider(CTIProvider):
 
 def _entry_id(entry: dict[str, Any]) -> str:
     return str(entry.get("id") or entry.get("link") or "")
+
+
+def _entry_identifiers(entry: dict[str, Any]) -> list[str]:
+    """Every identifier an entry can be recognised by, most specific first.
+
+    ``id`` alone is not enough: it is whatever the feed chooses to put in
+    ``<guid>``, and a feed that regenerates it per fetch defeats dedup
+    entirely. The link is the article's stable identity in practice, so both
+    are checked and both are remembered.
+    """
+    identifiers: list[str] = []
+    for key in ("id", "link"):
+        value = str(entry.get(key) or "").strip()
+        if value and value not in identifiers:
+            identifiers.append(value)
+    return identifiers
 
 
 # feedparser's own date parser misses some real-world formats it still can't

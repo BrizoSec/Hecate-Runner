@@ -721,3 +721,63 @@ def test_state_persists_across_runs(
     assert state.total_drafts_ever == 1
     assert state.last_run_iso != ""
     assert state.consecutive_failures == 0
+
+
+# --- Empty [source] slot in an indicator-sweep hypothesis -------------------
+#
+# The sweep template is "Indicators published in [source] appear in
+# [telemetry] on [target]". Three drafts (H-0009/0011/0013) came back with
+# [source] empty, producing "Indicators published in  appear in telemetry on
+# unpatched systems" -- which lands twice in the file, as the frontmatter
+# title and as the Hypothesis Statement, and reads as a truncation bug rather
+# than a missing value. The CTI item's own title is what belongs there.
+
+
+def test_empty_source_slot_is_filled_from_the_cti_title() -> None:
+    from hecate_runner.orchestrator import _fill_empty_source_slot
+
+    result = _fill_empty_source_slot(
+        "Indicators published in  appear in telemetry on unpatched systems",
+        "August 2026 Patch Tuesday",
+    )
+
+    assert result == (
+        "Indicators published in August 2026 Patch Tuesday appear in telemetry on unpatched systems"
+    )
+
+
+def test_empty_source_slot_falls_back_when_there_is_no_title() -> None:
+    from hecate_runner.orchestrator import _fill_empty_source_slot
+
+    result = _fill_empty_source_slot("Indicators published in  appear in telemetry", None)
+
+    assert result == "Indicators published in the source feed appear in telemetry"
+    assert "  " not in result
+
+
+def test_a_well_formed_sweep_hypothesis_is_untouched() -> None:
+    from hecate_runner.orchestrator import _fill_empty_source_slot
+
+    original = "Indicators published in ThreatFox IOCs for 2026-08-11 appear in telemetry"
+
+    assert _fill_empty_source_slot(original, "ThreatFox IOCs") == original
+
+
+def test_a_behavioral_hypothesis_is_untouched() -> None:
+    from hecate_runner.orchestrator import _fill_empty_source_slot
+
+    original = "Adversaries use Radmin and UltraVNC to establish persistent control"
+
+    assert _fill_empty_source_slot(original, "Some CTI title") == original
+
+
+def test_a_title_containing_regex_metacharacters_is_inserted_literally() -> None:
+    """The replacement runs through re.sub, so a title carrying a backslash or
+    a group reference must not be interpreted as a template."""
+    from hecate_runner.orchestrator import _fill_empty_source_slot
+
+    result = _fill_empty_source_slot(
+        "Indicators published in  appear in telemetry", r"Feed \1 (a\b) [x]"
+    )
+
+    assert r"Feed \1 (a\b) [x]" in result

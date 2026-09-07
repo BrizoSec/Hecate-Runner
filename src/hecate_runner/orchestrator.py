@@ -41,6 +41,24 @@ _TOPIC_MAX_LEN = 100
 # See `_resolve_ttps`.
 _NON_SCOPING_PLATFORM_THRESHOLD = 8
 
+#: The indicator-sweep hypothesis template is "Indicators published in
+#: [source] appear in [telemetry] on [target]". A model that leaves [source]
+#: empty yields "published in  appear" -- which reaches the draft twice, as
+#: the frontmatter title and as the Hypothesis Statement, and reads like a
+#: truncation bug rather than a missing value. The CTI item's own title is
+#: exactly the value that belongs in that slot, so fill it here rather than
+#: hoping the model stops omitting it.
+_EMPTY_SOURCE_SLOT = re.compile(r"(published in)\s{2,}(appear)", re.IGNORECASE)
+
+
+def _fill_empty_source_slot(hypothesis: str, source_title: str | None) -> str:
+    """Repair an indicator-sweep hypothesis whose [source] slot came back empty."""
+    if not _EMPTY_SOURCE_SLOT.search(hypothesis):
+        return hypothesis
+    source = (source_title or "").strip() or "the source feed"
+    return _EMPTY_SOURCE_SLOT.sub(lambda m: f"{m.group(1)} {source} {m.group(2)}", hypothesis)
+
+
 # ATT&CK's own STIX data uses the literal platform value "PRE" for
 # Reconnaissance/Resource-Development techniques (e.g. T1598 "Phishing for
 # Information") that happen before the adversary has a foothold on any
@@ -333,6 +351,11 @@ class Orchestrator:
                 state.drafts_today -= 1
                 state.total_drafts_ever -= 1
                 return RunResult(outcome="athf_error", detail=str(exc))
+
+        repaired = _fill_empty_source_slot(hypothesis.hypothesis, item.title)
+        if repaired != hypothesis.hypothesis:
+            log.info("Filled empty [source] slot in indicator-sweep hypothesis from CTI title.")
+            hypothesis.hypothesis = repaired
 
         if hypothesis.is_empty:
             log.warning("athf returned empty hypothesis; refunding quota and leaving CTI.")

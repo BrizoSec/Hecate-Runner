@@ -347,3 +347,79 @@ def test_strip_html_removes_tags_and_unescapes_entities() -> None:
 
 def test_strip_html_handles_empty_input() -> None:
     assert _strip_html("") == ""
+
+
+# --- Dedup across an unstable GUID -----------------------------------------
+#
+# CrowdStrike's blog re-issued a different <guid> for an unchanged post on
+# successive fetches -- four distinct "?p=NNNNNN" ids for one article, with a
+# constant link. Dedup keyed on `id` alone therefore re-routed it once per
+# poll, producing four identical hunts and four identical research documents
+# from a single article (H-0007/0009/0011/0013). Matching on the link as well
+# is what closes that.
+
+
+def test_same_article_with_a_rotating_guid_routes_only_once(tmp_path: Path) -> None:
+    link = "https://feed-a.example.com/patch-tuesday-analysis"
+    entries = [_entry(title="Patch Tuesday", link=link, guid="https://feed-a.example.com/?p=1")]
+    provider = _make_provider(tmp_path, {FEED_A: entries})
+
+    first = provider.next_item()
+    assert first is not None
+    provider.acknowledge(first)
+
+    # Same article, brand-new guid on each subsequent fetch.
+    for post_id in (2, 3, 4):
+        entries[0]["guid"] = f"https://feed-a.example.com/?p={post_id}"
+        repeat = provider.next_item()
+        assert repeat is None, f"re-routed the same article under guid ?p={post_id}"
+
+
+def test_a_genuinely_new_article_still_routes(tmp_path: Path) -> None:
+    first_entry = _entry(title="First", link="https://feed-a.example.com/first")
+    entries = [first_entry]
+    provider = _make_provider(tmp_path, {FEED_A: entries})
+
+    item = provider.next_item()
+    assert item is not None
+    provider.acknowledge(item)
+
+    entries.append(_entry(title="Second", link="https://feed-a.example.com/second"))
+    second = provider.next_item()
+
+    assert second is not None
+    assert second.metadata["entry_link"] == "https://feed-a.example.com/second"
+
+
+def test_acknowledge_remembers_both_identifiers(tmp_path: Path) -> None:
+    link = "https://feed-a.example.com/post"
+    provider = _make_provider(
+        tmp_path, {FEED_A: [_entry(link=link, guid="https://feed-a.example.com/?p=99")]}
+    )
+
+    item = provider.next_item()
+    assert item is not None
+    provider.acknowledge(item)
+
+    cursor = RssCursorState.load(provider.cursor_file)
+    assert cursor.already_routed(FEED_A, "https://feed-a.example.com/?p=99")
+    assert cursor.already_routed(FEED_A, link)
+
+
+def test_single_identifier_cursor_api_still_works() -> None:
+    """advance()/already_routed() keep their single-string form; the plural
+    variants are additive."""
+    cursor = RssCursorState()
+    cursor.advance(FEED_A, "entry-a1")
+
+    assert cursor.already_routed(FEED_A, "entry-a1")
+    assert not cursor.already_routed(FEED_A, "entry-a2")
+    assert cursor.already_routed_any(FEED_A, ["entry-a2", "entry-a1"])
+    assert not cursor.already_routed_any(FEED_A, ["entry-a2", "entry-a3"])
+
+
+def test_advance_all_ignores_empty_identifiers() -> None:
+    cursor = RssCursorState()
+    cursor.advance_all(FEED_A, ["real-id", "", "real-id"])
+
+    assert cursor.seen_ids[FEED_A] == ["real-id"]
