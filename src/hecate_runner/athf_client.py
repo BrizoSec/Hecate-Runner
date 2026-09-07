@@ -12,8 +12,10 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -88,10 +90,28 @@ class TechniqueMetadata:
     tactics: list[str] = field(default_factory=list)
     platforms: list[str] = field(default_factory=list)
     found: bool = False
+    #: Set when the requested ID was revoked by ATT&CK and resolved to its
+    #: replacement -- ``technique_id`` is then the live one, and this is what
+    #: the CTI actually said. Kept so a draft can record the stale identifier
+    #: its source used rather than appearing to have invented a different one.
+    superseded_from: str = ""
 
 
 class AthfError(RuntimeError):
     """Raised when the athf CLI fails or returns unexpected output."""
+
+
+@dataclass
+class SigmaResult:
+    """Outcome of one sigma-generator run."""
+
+    success: bool
+    error: str | None = None
+    warnings: list[str] = field(default_factory=list)
+    logsources_considered: list[str] = field(default_factory=list)
+    rejected: list[str] = field(default_factory=list)
+    files: list[Path] = field(default_factory=list)
+    rules: list[dict[str, Any]] = field(default_factory=list)
 
 
 class AthfClient:
@@ -196,6 +216,97 @@ class AthfClient:
         parsed.raw_output = stdout
         return parsed
 
+    def sigma_generator(
+        self,
+        payload: dict[str, Any],
+        out_dir: Path,
+        timeout_sec: int | None = None,
+    ) -> SigmaResult:
+        """Run ``athf agent run sigma-generator`` and parse its JSON output.
+
+        The input goes through a temp file rather than flags: the indicator
+        map is nested and can carry long C2 URLs, and an argv-borne blob is
+        both fragile to quote and visible in the process table.
+
+        Rules are written by athf into ``out_dir`` (inside the workspace) so
+        the files an operator reviews are the same files `sigma convert`
+        would later read -- no copy to keep in sync.
+        """
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as handle:
+            json.dump(payload, handle)
+            input_path = Path(handle.name)
+
+        try:
+            stdout = self._run(
+                [
+                    str(self.athf_bin),
+                    "agent",
+                    "run",
+                    "sigma-generator",
+                    "--input-json",
+                    str(input_path),
+                    "--out-dir",
+                    str(out_dir),
+                    "--output-format",
+                    "json",
+                ],
+                timeout_sec=timeout_sec,
+            )
+        finally:
+            input_path.unlink(missing_ok=True)
+
+        return self._parse_sigma_output(stdout)
+
+    @staticmethod
+    def _parse_sigma_output(text: str) -> SigmaResult:
+        """Parse the agent's JSON payload out of rich-rendered stdout.
+
+        `console.print_json` pretty-prints, so the payload spans many lines
+        and cannot be read line-wise like the hypothesis output. Slicing from
+        the first brace to the last is enough here because the command emits
+        exactly one JSON document and nothing else on stdout.
+        """
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise AthfError(f"sigma-generator returned no JSON payload: {text[:300]}")
+        try:
+            data = json.loads(text[start : end + 1])
+        except ValueError as exc:
+            raise AthfError(f"sigma-generator returned malformed JSON: {exc}") from exc
+
+        return SigmaResult(
+            success=bool(data.get("success")),
+            error=data.get("error"),
+            warnings=list(data.get("warnings") or []),
+            logsources_considered=list(data.get("logsources_considered") or []),
+            rejected=list(data.get("rejected") or []),
+            files=[Path(f) for f in (data.get("files") or [])],
+            rules=list(data.get("rules") or []),
+        )
+
+    def link_research_to_hunt(
+        self, research_id: str, hunt_id: str, timeout_sec: int | None = None
+    ) -> None:
+        """Record the hunt on its source research document's ``linked_hunts``.
+
+        Goes through the CLI rather than editing the research file directly:
+        ATHF treats its own commands as the only sanctioned writer of hunt and
+        research frontmatter, and this runner writes hunt files itself only
+        because it needs the ID-allocation lock.
+
+        `athf hunt new --research` already does this for hunts it creates; a
+        runner-written hunt otherwise leaves the research doc reporting
+        `linked_hunts: []` while the hunt names it in `spawned_from`.
+        """
+        self._run(
+            [str(self.athf_bin), "research", "link", research_id, "--hunt", hunt_id],
+            timeout_sec=timeout_sec,
+        )
+
     def lookup_technique(
         self, technique_id: str, timeout_sec: int | None = None
     ) -> TechniqueMetadata:
@@ -235,11 +346,21 @@ class AthfClient:
             )
             return TechniqueMetadata(technique_id=technique_id)
 
+        superseded_from = str(data.get("superseded_from") or "")
+        if superseded_from:
+            log.info(
+                "ATT&CK revoked %s; using its replacement %s. The source CTI's "
+                "technique list is stale, not wrong.",
+                superseded_from,
+                data.get("id"),
+            )
+
         return TechniqueMetadata(
             technique_id=data.get("id") or technique_id,
             tactics=list(data.get("tactics", [])),
             platforms=list(data.get("platforms", [])),
             found=True,
+            superseded_from=superseded_from,
         )
 
     # --- Internal ----------------------------------------------------------

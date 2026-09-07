@@ -12,12 +12,29 @@ from hecate_runner.athf_client import (
     AthfError,
     HypothesisResult,
     ResearchResult,
+    SigmaResult,
     TechniqueMetadata,
 )
 from hecate_runner.config import Settings
 from hecate_runner.cti import FileQueueProvider
+from hecate_runner.cti.base import CTIItem
 from hecate_runner.indicator_sweep import parse_indicator_inventory
-from hecate_runner.orchestrator import Orchestrator, derive_research_topic, has_narrative
+from hecate_runner.orchestrator import (
+    Orchestrator,
+    derive_data_sources,
+    derive_research_topic,
+    has_narrative,
+    merge_techniques,
+    platforms_named_in,
+)
+
+_SIGMA_RULE = {
+    "logsource_category": "network_connection",
+    "title": "Chrysalis C2 beacon",
+    "level": "high",
+    "techniques": ["T1071.001"],
+    "rule_yaml": "title: Chrysalis C2 beacon\n",
+}
 
 
 @pytest.fixture
@@ -35,6 +52,13 @@ def mock_athf(
         tactics=["credential-access"],
         platforms=["Windows"],
         found=True,
+    )
+    # Default to the failure path so tests that are not about Sigma exercise
+    # the graceful degradation. Left as a bare MagicMock this silently
+    # rendered a "0 Sigma rule(s)" header into every draft under test, via
+    # MagicMock's default __len__/__iter__ -- passing, but testing nothing.
+    mock.sigma_generator.return_value = SigmaResult(
+        success=False, error="sigma generation not configured in this test"
     )
     return mock
 
@@ -846,3 +870,280 @@ def test_attack_line_constant_matches_what_every_provider_emits() -> None:
         )
     rendered = f"{ATTACK_TECHNIQUE_LINE} T1059.003"
     assert has_narrative(rendered) is True
+
+
+# --- Sigma drafting --------------------------------------------------------
+
+
+def test_sigma_rules_are_embedded_in_the_draft(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_athf: MagicMock,
+    workspace: Path,
+) -> None:
+    mock_athf.sigma_generator.return_value = SigmaResult(success=True, rules=[_SIGMA_RULE])
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+
+    result = orch.run_once()
+    assert result.outcome == "draft_created"
+    content = result.draft_path.read_text()
+    assert "Chrysalis C2 beacon" in content
+    assert "1 Sigma rule(s) auto-drafted" in content
+    # The review gate must survive generation.
+    assert "Unreviewed" in content
+
+
+def test_sigma_failure_leaves_the_draft_standing(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_athf: MagicMock,
+) -> None:
+    """A drafting failure must not cost the hunt -- the CTI has already been
+    consumed and the quota already spent by this point."""
+    mock_athf.sigma_generator.side_effect = AthfError("ollama unreachable")
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+
+    result = orch.run_once()
+    assert result.outcome == "draft_created"
+    assert "[Human to draft based on Observe section" in result.draft_path.read_text()
+
+
+def test_sigma_generation_can_be_disabled(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_athf: MagicMock,
+) -> None:
+    settings.sigma_generation_enabled = False
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+
+    assert orch.run_once().outcome == "draft_created"
+    mock_athf.sigma_generator.assert_not_called()
+
+
+def test_sigma_uses_cti_techniques_over_the_narrower_hypothesis_list(
+    settings: Settings,
+    mock_athf: MagicMock,
+    workspace: Path,
+) -> None:
+    """The hypothesis narrows to what it reasoned about; the source event
+    asserted fifteen techniques, and the applicable log sources follow from
+    all of them."""
+    from hecate_runner.cti.base import CTIItem
+
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="MISP Event: X\nMITRE ATT&CK Techniques: T1071.001\nSummary: prose",
+        source="misp",
+        metadata={
+            "techniques": ["T1071.001", "T1547.001", "T1005"],
+            "indicators": {"hostname": ["api.wiresguard.com"]},
+        },
+    )
+    mock_athf.sigma_generator.return_value = SigmaResult(success=True, rules=[_SIGMA_RULE])
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+
+    assert orch.run_once().outcome == "draft_created"
+    payload = mock_athf.sigma_generator.call_args.args[0]
+    assert payload["techniques"] == ["T1071.001", "T1547.001", "T1005"]
+    assert payload["indicators"] == {"hostname": ["api.wiresguard.com"]}
+
+
+# --- Technique / platform / data-source fidelity ---------------------------
+
+_CHRYSALIS_CTI_TECHNIQUES = [
+    "T1005",
+    "T1027.007",
+    "T1041",
+    "T1059.003",
+    "T1070.004",
+    "T1071.001",
+    "T1543.003",
+    "T1547.001",
+    "T1574.002",
+]
+
+
+def test_merge_techniques_keeps_subtechnique_precision() -> None:
+    """T1059.003 is Windows-only; bare T1059 spans five platforms, so the
+    generalisation propagated straight into the platform list."""
+    merged = merge_techniques(["T1059.003"], ["T1059"])
+    assert merged == ["T1059.003"]
+
+
+def test_merge_techniques_keeps_everything_the_cti_asserted() -> None:
+    merged = merge_techniques(_CHRYSALIS_CTI_TECHNIQUES, ["T1059", "T1005"])
+    assert len(merged) == len(_CHRYSALIS_CTI_TECHNIQUES)
+    assert merged[0] == "T1005"  # CTI order leads
+
+
+def test_merge_techniques_keeps_hypothesis_only_techniques() -> None:
+    assert "T1566" in merge_techniques(["T1005"], ["T1566"])
+
+
+def test_merge_techniques_keeps_a_parent_with_no_child_present() -> None:
+    assert merge_techniques(["T1059"], []) == ["T1059"]
+
+
+def test_platforms_named_in_reads_the_hypothesis() -> None:
+    assert platforms_named_in("... on compromised Windows systems") == ["Windows"]
+    assert platforms_named_in("no platform named here") == []
+
+
+def test_derive_data_sources_covers_network_when_the_cti_carried_c2() -> None:
+    """The hunt was scoped to process_execution alone despite two C2
+    hostnames, four IPs and nine URLs in the source event."""
+    sources = derive_data_sources(_CHRYSALIS_CTI_TECHNIQUES, ["hostname", "ip-dst", "url"])
+    assert "network_connections" in sources
+    assert "registry_events" in sources
+    assert "file_operations" in sources
+
+
+def test_derive_data_sources_handles_both_provider_spellings() -> None:
+    assert derive_data_sources([], ["IPv4"]) == ["network_connections"]
+    assert derive_data_sources([], ["FileHash-SHA256"]) == ["file_operations"]
+
+
+def test_resolve_ttps_scopes_platforms_to_what_the_hypothesis_claims(
+    settings: Settings, mock_athf: MagicMock
+) -> None:
+    mock_athf.lookup_technique.return_value = TechniqueMetadata(
+        technique_id="T1059",
+        tactics=["execution"],
+        platforms=["ESXi", "Linux", "macOS", "Network Devices", "Windows"],
+        found=True,
+    )
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=MagicMock())
+
+    _, platforms = orch._resolve_ttps(["T1059"], scope_text="on compromised Windows systems")
+    assert platforms == ["Windows"]
+
+
+def test_resolve_ttps_keeps_the_union_when_nothing_is_claimed(
+    settings: Settings, mock_athf: MagicMock
+) -> None:
+    mock_athf.lookup_technique.return_value = TechniqueMetadata(
+        technique_id="T1059", tactics=["execution"], platforms=["Linux", "Windows"], found=True
+    )
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=MagicMock())
+    _, platforms = orch._resolve_ttps(["T1059"], scope_text="")
+    assert platforms == ["Linux", "Windows"]
+
+
+def test_resolve_ttps_ignores_a_claim_no_technique_supports(
+    settings: Settings, mock_athf: MagicMock
+) -> None:
+    """Narrowing only. A hypothesis naming Linux must not add Linux to a
+    Windows-only technique."""
+    mock_athf.lookup_technique.return_value = TechniqueMetadata(
+        technique_id="T1059.003", tactics=["execution"], platforms=["Windows"], found=True
+    )
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=MagicMock())
+    _, platforms = orch._resolve_ttps(["T1059.003"], scope_text="Linux servers")
+    assert platforms == ["Windows"]
+
+
+def test_draft_records_cti_techniques_and_scoped_platform(
+    settings: Settings, mock_athf: MagicMock, sample_hypothesis: HypothesisResult
+) -> None:
+    sample_hypothesis.hypothesis = (
+        "Adversaries run obfuscated commands on compromised Windows systems"
+    )
+    sample_hypothesis.techniques = ["T1059"]
+    mock_athf.hypothesis_generator.return_value = sample_hypothesis
+    mock_athf.lookup_technique.return_value = TechniqueMetadata(
+        technique_id="T1059.003", tactics=["execution"], platforms=["Windows"], found=True
+    )
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="MISP Event: X\nMITRE ATT&CK Techniques: T1059.003\nSummary: prose",
+        source="misp",
+        metadata={
+            "techniques": ["T1059.003", "T1071.001"],
+            "indicators": {"hostname": ["api.wiresguard.com"]},
+        },
+    )
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+
+    result = orch.run_once()
+    content = result.draft_path.read_text()
+    assert "T1059.003" in content
+    assert '"T1059"' not in content  # the generalisation must not survive
+    assert 'platform: ["Windows"]' in content
+    assert "network_connections" in content  # derived from the C2 hostname
+
+
+def test_draft_never_invents_a_vendor_data_source(
+    settings: Settings, mock_athf: MagicMock, sample_hypothesis: HypothesisResult
+) -> None:
+    sample_hypothesis.data_sources = []
+    sample_hypothesis.techniques = []
+    mock_athf.hypothesis_generator.return_value = sample_hypothesis
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="RSS: X\nSummary: prose", source="rss", metadata={}
+    )
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+
+    content = orch.run_once().draft_path.read_text()
+    assert "CrowdStrike" not in content
+    assert "data_sources: []" in content
+
+
+def test_research_is_linked_back_to_the_hunt(
+    settings: Settings, file_queue_with_cti: FileQueueProvider, mock_athf: MagicMock
+) -> None:
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    result = orch.run_once()
+    mock_athf.link_research_to_hunt.assert_called_once()
+    args = mock_athf.link_research_to_hunt.call_args.args
+    assert args[1] == result.hunt_id
+
+
+def test_link_failure_does_not_lose_the_hunt(
+    settings: Settings, file_queue_with_cti: FileQueueProvider, mock_athf: MagicMock
+) -> None:
+    mock_athf.link_research_to_hunt.side_effect = AthfError("athf exit 1")
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    assert orch.run_once().outcome == "draft_created"
+
+
+def test_technique_validity_reaches_the_grounding_audit(
+    settings: Settings, mock_athf: MagicMock, sample_hypothesis: HypothesisResult
+) -> None:
+    """An invented technique ID must be reported as unsupported in the draft,
+    not pass as something the hypothesis reasoned to."""
+    sample_hypothesis.techniques = ["T9999"]
+    mock_athf.hypothesis_generator.return_value = sample_hypothesis
+    mock_athf.lookup_technique.return_value = TechniqueMetadata(technique_id="T9999", found=False)
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="RSS: X\nSummary: prose", source="rss", metadata={}
+    )
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+
+    content = orch.run_once().draft_path.read_text()
+    assert "no such technique in the current ATT&CK matrix" in content
+
+
+def test_revoked_technique_is_recorded_in_the_draft(
+    settings: Settings, mock_athf: MagicMock, sample_hypothesis: HypothesisResult
+) -> None:
+    sample_hypothesis.techniques = ["T1574.002"]
+    mock_athf.hypothesis_generator.return_value = sample_hypothesis
+    mock_athf.lookup_technique.return_value = TechniqueMetadata(
+        technique_id="T1574.001",
+        tactics=["defense-evasion"],
+        platforms=["Windows"],
+        found=True,
+        superseded_from="T1574.002",
+    )
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="MISP Event: X\nMITRE ATT&CK Techniques: T1574.002\nSummary: prose",
+        source="misp",
+        metadata={"techniques": ["T1574.002"]},
+    )
+    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+
+    content = orch.run_once().draft_path.read_text()
+    assert "superseded by T1574.001" in content

@@ -297,3 +297,30 @@ def test_pulse_to_blurb_handles_sparse_pulse() -> None:
     blurb = _pulse_to_blurb({"id": "1"})
     assert "Untitled pulse" in blurb
     assert "Unknown" in blurb
+
+
+def test_indicator_map_groups_observable_values_by_type() -> None:
+    from hecate_runner.cti.otx import _indicator_map
+
+    pulse = {
+        "indicators": [
+            {"type": "domain", "indicator": "evil.example"},
+            {"type": "IPv4", "indicator": "10.0.0.1"},
+            {"type": "FileHash-SHA256", "indicator": "a" * 64},
+            # A CVE names a vulnerability, not something telemetry contains.
+            {"type": "CVE", "indicator": "CVE-2026-1234"},
+        ]
+    }
+    assert _indicator_map(pulse) == {
+        "domain": ["evil.example"],
+        "IPv4": ["10.0.0.1"],
+        "FileHash-SHA256": ["a" * 64],
+    }
+
+
+def test_indicator_map_skips_bulk_feed_pulses() -> None:
+    """Hundreds of indicators describe a feed, not tradecraft."""
+    from hecate_runner.cti.otx import _indicator_map
+
+    pulse = {"indicators": [{"type": "domain", "indicator": f"d{i}.example"} for i in range(500)]}
+    assert _indicator_map(pulse) == {}

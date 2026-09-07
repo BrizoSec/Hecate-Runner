@@ -8,6 +8,13 @@ as a ``CTIItem``.
 Two knobs shape *which* events reach the orchestrator, and they are meant to
 be used together:
 
+``require_attack_technique`` (default off) is the stricter form of the
+galaxy check: it demands the event actually map to ATT&CK techniques, not
+merely carry some galaxy cluster. An event tagged only with a threat-actor
+or malware galaxy passes ``require_galaxy`` and still yields no techniques,
+so it can only become an indicator sweep. Turn it on to route only events a
+behavioural hunt can be built from; leave it off to keep sweeps flowing.
+
 ``require_galaxy`` (default on) keeps bulk indicator dumps out. They pass
 every other filter -- published, TLP:white, recent -- but describe no
 behavior, so they can only yield indicator-sweep drafts with no ATT&CK
@@ -157,6 +164,7 @@ class MispProvider(CTIProvider):
         request_timeout_sec: float = 30.0,
         verify_ssl: bool = True,
         require_galaxy: bool = True,
+        require_attack_technique: bool = False,
         org_allowlist: Iterable[str] | None = None,
         backfill: bool = False,
         max_pages_per_poll: int = 25,
@@ -173,6 +181,7 @@ class MispProvider(CTIProvider):
         self.page_limit = page_limit
         self.request_timeout_sec = request_timeout_sec
         self.require_galaxy = require_galaxy
+        self.require_attack_technique = require_attack_technique
         # Normalised once: matching is case-insensitive, and an empty/omitted
         # list must mean "every org is eligible", not "no org is".
         self.org_allowlist = frozenset(
@@ -345,6 +354,7 @@ class MispProvider(CTIProvider):
                 cutoff,
                 require_galaxy=self.require_galaxy,
                 org_allowlist=self.org_allowlist,
+                require_attack_technique=self.require_attack_technique,
             )
         ]
         candidates = [
@@ -444,6 +454,7 @@ def _is_high_signal(
     cutoff: datetime | None,
     require_galaxy: bool = False,
     org_allowlist: frozenset[str] = frozenset(),
+    require_attack_technique: bool = False,
 ) -> bool:
     """Published, not explicitly TLP:RED/AMBER, and newer than ``cutoff``.
 
@@ -468,6 +479,14 @@ def _is_high_signal(
         return False
 
     if org_allowlist and _event_org(event).lower() not in org_allowlist:
+        return False
+
+    # `require_galaxy` asks "is this curated"; this asks "can this produce a
+    # behavioural hunt". They are not the same question: a MISP event tagged
+    # only with a threat-actor or malware galaxy carries a cluster but no
+    # attack-pattern, so it passes the first check, yields no technique IDs,
+    # and lands on the indicator-sweep path. Observed live on the 17:46 poll.
+    if require_attack_technique and not _extract_techniques(event):
         return False
 
     if cutoff is None:
@@ -544,6 +563,48 @@ def _extract_techniques(event: dict[str, Any]) -> list[str]:
     return sorted(techniques)
 
 
+# Types that name something a detection rule can actually match on. `link`
+# and `comment` are context for a human, not selection criteria, and feeding
+# them to a rule generator invites rules keyed on a blog URL.
+_DETECTABLE_ATTR_TYPES = frozenset(
+    {
+        "ip-dst",
+        "ip-src",
+        "domain",
+        "hostname",
+        "url",
+        "uri",
+        "filename",
+        "filepath",
+        "md5",
+        "sha1",
+        "sha256",
+        "regkey",
+        "mutex",
+    }
+)
+
+
+def _indicator_map(event: dict[str, Any]) -> dict[str, list[str]]:
+    """Group an event's detectable attribute values by type.
+
+    Bounded by the same rule as the blurb: a dump's hundreds of indicators
+    describe a feed, not tradecraft, and would push a rule generator toward
+    an indicator-match rule per line.
+    """
+    attributes = event.get("Attribute", []) or []
+    if not attributes or len(attributes) > _MAX_ATTRS_INLINE:
+        return {}
+    grouped: dict[str, list[str]] = {}
+    for attr in attributes:
+        atype = str(attr.get("type") or "")
+        value = str(attr.get("value") or "").strip()
+        if not value or atype not in _DETECTABLE_ATTR_TYPES:
+            continue
+        grouped.setdefault(atype, []).append(value[:_MAX_VALUE_CHARS])
+    return grouped
+
+
 def _event_to_cti_item(base_url: str, event: dict[str, Any]) -> CTIItem:
     timestamp = str(event.get("timestamp", ""))
     received_at = _event_datetime(event) or datetime.now(UTC)
@@ -558,10 +619,68 @@ def _event_to_cti_item(base_url: str, event: dict[str, Any]) -> CTIItem:
             "event_id": event_id,
             "event_timestamp": timestamp,
             "event_info": event.get("info", ""),
+            # Structured alongside the rendered blurb so downstream steps
+            # (Sigma drafting) get typed values instead of re-parsing prose.
+            "indicators": _indicator_map(event),
+            "techniques": _extract_techniques(event),
         },
         title=str(event.get("info") or ""),
         source_url=f"{base_url}/events/view/{event_id}" if event_id else "",
     )
+
+
+# A curated event's attribute *values* are the most actionable thing it
+# carries -- the C2 domains and the masquerading file path are what a hunt
+# query is actually built from. A dump's several hundred are noise that would
+# swamp the prompt and teach the model to write indicator sweeps. So values
+# are inlined only for events small enough to have been written by hand, and
+# capped per type so one long URL list cannot crowd out the filenames.
+_MAX_ATTRS_INLINE = 40
+_MAX_VALUES_PER_TYPE = 6
+_MAX_VALUE_CHARS = 120
+
+
+def _attribute_detail_lines(event: dict[str, Any]) -> list[str]:
+    """Render concrete indicator values for a small, curated event.
+
+    Returns no lines at all for a bulk dump: past ``_MAX_ATTRS_INLINE`` the
+    values stop being evidence of tradecraft and become a feed, which the
+    counts line already summarises adequately.
+    """
+    attributes = event.get("Attribute", []) or []
+    if not attributes or len(attributes) > _MAX_ATTRS_INLINE:
+        return []
+
+    by_type: dict[str, list[str]] = {}
+    notes: list[str] = []
+    for attr in attributes:
+        value = str(attr.get("value") or "").strip()
+        if not value:
+            continue
+        atype = str(attr.get("type") or "unknown")
+        comment = str(attr.get("comment") or "").strip()
+        # A "comment" attribute's value *is* the analyst's prose -- on the
+        # reference event that is where the Cobalt Strike beacon config was
+        # recorded, which no indicator list would have conveyed.
+        if atype == "comment":
+            notes.append(value[:400])
+            continue
+        rendered = value[:_MAX_VALUE_CHARS]
+        if comment:
+            rendered = f"{rendered} ({comment[:60]})"
+        by_type.setdefault(atype, []).append(rendered)
+
+    lines: list[str] = []
+    if by_type:
+        lines.append("Key indicators:")
+        for atype in sorted(by_type):
+            values = by_type[atype]
+            shown = values[:_MAX_VALUES_PER_TYPE]
+            suffix = f" (+{len(values) - len(shown)} more)" if len(values) > len(shown) else ""
+            lines.append(f"  {atype}: {', '.join(shown)}{suffix}")
+    for note in notes:
+        lines.append(f"Analyst note: {note}")
+    return lines
 
 
 def _event_to_blurb(base_url: str, event: dict[str, Any]) -> str:
@@ -592,6 +711,9 @@ def _event_to_blurb(base_url: str, event: dict[str, Any]) -> str:
         lines.append(f"{ATTACK_TECHNIQUE_LINE} {', '.join(techniques)}")
     if attribute_counts:
         lines.append(f"Attributes ({sum(attribute_counts.values())} total): {attribute_summary}")
+    # Kept strictly below the counts line, which indicator_sweep.py parses by
+    # regex -- these detail lines must never displace or reshape it.
+    lines.extend(_attribute_detail_lines(event))
     if event_id:
         lines.append(f"Link: {base_url}/events/view/{event_id}")
 

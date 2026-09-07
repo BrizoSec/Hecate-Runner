@@ -48,9 +48,44 @@ Research grounding runs before hypothesis generation on every cycle by default (
 
 One exception is automatic: when the CTI is a bare indicator dump with a parseable inventory (a ThreatFox-style feed event), the draft is built deterministically from the indicator list with no LLM call, and research is skipped along with it. There is no behavior described for research to ground, and running it anyway produced documents whose every section said so.
 
+## Grounding
+
+A generated hunt is only worth acting on if its claims trace back to evidence. That is enforced at three points, not one:
+
+**Intake** decides what is worth hunting at all — the galaxy, ATT&CK-technique and org filters above, so a draft starts from a curated event rather than a feed dump.
+
+**Generation** carries the evidence forward. A curated MISP event's indicator *values* reach the model (it previously saw only type counts — "url (9)" — and so wrote hunts that could have been written without reading the CTI). The source's own technique list is merged into the draft rather than replaced by the two or three the hypothesis reasoned about, and sub-technique precision is preserved, since `T1059.003` is Windows-only where bare `T1059` spans five platforms. Research findings citing a CVE that appears in none of the retrieved sources are dropped before they can reach a hunt. Revoked ATT&CK IDs resolve to their replacements instead of vanishing — CTI keeps emitting `T1574.002` years after it was folded into `T1574.001`.
+
+**Audit** re-reads the finished draft and classifies every claim it can check, writing the result into the hunt's own Grounding section:
+
+| Status | Meaning |
+|--------|---------|
+| `asserted` | The source CTI contains this verbatim — primary evidence |
+| `corroborated` | Absent from the CTI, present in the research document. Research is generated, so this is a claim *about* evidence, not evidence |
+| `derived` | In no source text but legitimately inferable — a technique the hypothesis reasoned to |
+| `unsupported` | Specific, checkable, and absent from every source — the fabrication class, including ATT&CK IDs that do not exist |
+
+Evidence is ranked because it is not equally trustworthy. Treating a research document as proof lets a fabrication launder itself: a CVE invented during research and written into `R-0611` came back as "asserted" in any hunt built from that research, which is circular. The CTI exists independently of this pipeline; the research does not.
+
+The audit reports rather than blocks, because a hunt that generalises beyond its CTI is doing its job. What it catches is the opposite: an assertion specific enough to *read* as evidence that nothing supports — a fabricated CVE, or a Sigma rule matching a C2 domain no intelligence mentions. Only traceable shapes are examined: a rule matching `\powershell.exe` is behaviour, while one matching `203.0.113.99` is a claim.
+
 ## Query execution: propose, don't run
 
-A draft hunt's CHECK section still says "hecate-runner DOES NOT auto-generate queries" — that hasn't changed, and won't until query *authoring* has its own eval-backed accuracy check the way hypothesis generation now does. What's new is a bounded bridge for the query a *human* writes, so running it doesn't mean dropping to a raw SIEM CLI:
+Two separate things live here, and the distinction is the whole design: **detection logic is now drafted automatically; execution is still human-initiated and always will be.**
+
+### Sigma drafting (automatic, before review)
+
+After the hypothesis lands, the orchestrator runs `athf agent run sigma-generator` and writes one Sigma rule per applicable log source into `$ATHF_WORKSPACE/queries/H-XXXX/`, embedding them in the draft's CHECK section. An operator therefore reviews a hunt that already has candidate detection logic rather than an empty query block.
+
+Sigma rather than SPL or KQL because this program has no committed query platform. `sigma convert -t <backend>` retargets a rule to Splunk, Elastic, CrowdStrike or Defender later, so drafting now commits to nothing — and correspondingly, **a Sigma rule cannot be executed by the propose/approve path below.** It is review material, not a runnable query.
+
+Which log sources are "applicable" is derived deterministically from the hunt's ATT&CK techniques and the indicator types the CTI actually carried, not asked of the model — a backdoor whose event carries nine C2 URLs gets network and DNS rules whether or not the prose mentioned them. The model returns JSON and this code renders the YAML, so a malformed rule is impossible by construction; rules whose `condition` names an undefined selection are rejected rather than emitted, because pySigma would only reject them much later, after the hunt had been reviewed around them.
+
+Generation failing leaves the draft standing with its placeholder query section — the CTI has already been consumed and the quota already spent by that point, so losing the hunt over it would be the wrong trade. Disable with `HECATE_RUNNER_SIGMA_GENERATION_ENABLED=false`.
+
+### Query execution (human-initiated, unchanged)
+
+A bounded bridge for the query a *human* writes, so running it doesn't mean dropping to a raw SIEM CLI:
 
 ```
 hecate-runner propose H-0016 --query '...' --data-source splunk \
@@ -210,6 +245,9 @@ Key ones:
 | `MISP_BASE_URL` / `MISP_API_KEY` | MISP instance + dedicated automation Auth key — required for `cti_provider=misp` and `hecate-runner misp-poll` | — |
 | `HECATE_RUNNER_MISP_VERIFY_SSL` | Set false only for self-signed dev/test MISP instances | `true` |
 | `HECATE_RUNNER_MISP_REQUIRE_GALAXY` | Only route MISP events carrying a galaxy cluster — keeps bulk indicator dumps (ThreatFox-style) out, since they describe no behavior | `true` |
+| `HECATE_RUNNER_SIGMA_GENERATION_ENABLED` | Draft Sigma rules per applicable log source before operator review | `true` |
+| `HECATE_RUNNER_SIGMA_TIMEOUT_SEC` | Per-call timeout for Sigma drafting | `900` |
+| `HECATE_RUNNER_MISP_REQUIRE_ATTACK_TECHNIQUE` | Only route MISP events that map to an ATT&CK technique — stricter than the galaxy check, which any cluster satisfies | `false` |
 | `HECATE_RUNNER_MISP_ORG_ALLOWLIST` | Comma-separated MISP org names; only these are routable. Empty = every org. Keeps one high-volume feed from burying the rest | _(empty)_ |
 | `HECATE_RUNNER_MISP_BACKFILL` | Ignore the freshness floor and walk the MISP archive oldest-first. Reset the cursor file to start from the beginning | `false` |
 | `HECATE_RUNNER_MISP_MAX_PAGES_PER_POLL` | How many event pages one poll may walk before giving up (pages are fetched metadata-only) | `25` |

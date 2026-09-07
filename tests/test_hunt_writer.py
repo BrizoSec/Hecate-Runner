@@ -109,7 +109,9 @@ def test_render_draft_includes_hypothesis(sample_hypothesis: HypothesisResult) -
     assert "T1003.001" in md
     assert sample_hypothesis.hypothesis in md
     assert "APT actor X" in md
-    assert "hecate-runner DOES NOT auto-generate queries" in md
+    # No rules supplied -> the section degrades to a human-to-draft
+    # placeholder rather than looking like queries exist.
+    assert "[Human to draft based on Observe section" in md
 
 
 def test_render_draft_includes_research_link_when_present(

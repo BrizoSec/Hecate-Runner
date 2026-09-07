@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from hecate_runner.athf_client import HypothesisResult
 from hecate_runner.atomic_write import atomic_write_text
@@ -35,6 +36,17 @@ class DraftHuntRequest:
     platforms: list[str] = field(default_factory=list)
     source_url: str = ""
     related_hunts: list[str] = field(default_factory=list)
+    # Sigma rules drafted for this hunt, as
+    # {"logsource_category", "title", "level", "techniques", "rule_yaml"}.
+    # Empty renders the same "human to draft" placeholder as before, so a
+    # generation failure degrades to the old behavior rather than to a hunt
+    # that looks like it has queries and does not.
+    sigma_rules: list[dict[str, Any]] = field(default_factory=list)
+    sigma_rule_dir: str = ""
+    #: Rendered grounding audit (see grounding.py). Empty renders nothing, so
+    #: a draft written before the audit runs is simply missing the section
+    #: rather than claiming a clean result it never computed.
+    grounding_section: str = ""
 
 
 @contextmanager
@@ -266,6 +278,53 @@ def _research_document_line(req: DraftHuntRequest) -> str:
     return "- **Research Document:** None — research grounding unavailable this cycle, review CTI directly"
 
 
+def _render_sigma_section(req: DraftHuntRequest) -> str:
+    """Render the drafted Sigma rules, or the old placeholder if there are none.
+
+    Rules are shown in full rather than linked. An operator reviewing this
+    hunt has to be able to judge the detection logic here, before advancing
+    the status -- making them open five files elsewhere to do it is how
+    review turns into rubber-stamping. The files still exist alongside, and
+    are what `sigma convert` reads.
+    """
+    if not req.sigma_rules:
+        return (
+            "#### Initial Query\n\n"
+            "```\n"
+            "[Human to draft based on Observe section - no rules were generated "
+            "for this hunt]\n"
+            "```\n"
+        )
+
+    parts = [
+        f"> {len(req.sigma_rules)} Sigma rule(s) auto-drafted from the source intelligence, "
+        "one per applicable log source.",
+        "> **Unreviewed.** Sigma is platform-neutral: convert with "
+        "`sigma convert -t <backend>` once a target is chosen. Field names and "
+        "false positives are the model's proposal and must be checked against "
+        "real telemetry before anything is run.",
+    ]
+    if req.sigma_rule_dir:
+        parts.append(f">\n> Rule files: `{req.sigma_rule_dir}`")
+    parts.append("")
+
+    for rule in req.sigma_rules:
+        category = str(rule.get("logsource_category", "unknown"))
+        title = str(rule.get("title", "Untitled rule"))
+        level = str(rule.get("level", "medium"))
+        techniques = ", ".join(str(t) for t in rule.get("techniques") or []) or "unmapped"
+        parts.append(f"#### {category} - {title}")
+        parts.append("")
+        parts.append(f"*Severity:* {level} | *ATT&CK:* {techniques}")
+        parts.append("")
+        parts.append("```yaml")
+        parts.append(str(rule.get("rule_yaml", "")).rstrip())
+        parts.append("```")
+        parts.append("")
+
+    return "\n".join(parts)
+
+
 def render_draft(req: DraftHuntRequest) -> str:
     """Return the full markdown content for a draft hunt."""
     hyp = req.hypothesis
@@ -286,7 +345,11 @@ def render_draft(req: DraftHuntRequest) -> str:
     techniques_display = (
         ", ".join(techniques) if techniques else "[none mapped - human to populate]"
     )
-    data_sources = hyp.data_sources or ["CrowdStrike"]
+    # An empty list is an honest gap the reviewer can see; a vendor name is a
+    # fabricated answer to "what telemetry does this hunt need", and this
+    # workspace has no CrowdStrike. The rendered body already shows "[TBD]"
+    # for the same emptiness.
+    data_sources = hyp.data_sources
 
     def bullets(items: list[str]) -> str:
         return "\n".join(f"- {i}" for i in items) if items else "- [TBD]"
@@ -379,6 +442,10 @@ Source CTI:
 - **CTI Sources & References:** {f"[{req.source_url}]({req.source_url})" if req.source_url else "[Review CTI and populate]"}
 {_research_document_line(req)}
 
+### Grounding
+
+{req.grounding_section or "Not yet audited."}
+
 ### Related Tickets
 
 | **Team** | **Ticket/Details** |
@@ -415,11 +482,7 @@ Source CTI:
 
 ### Hunting Queries
 
-#### Initial Query
-
-```
-[Human to draft based on Observe section - hecate-runner DOES NOT auto-generate queries]
-```
+{_render_sigma_section(req)}
 
 ---
 

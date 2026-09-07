@@ -53,6 +53,7 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             request_timeout_sec=settings.misp_request_timeout_sec,
             verify_ssl=settings.misp_verify_ssl,
             require_galaxy=settings.misp_require_galaxy,
+            require_attack_technique=settings.misp_require_attack_technique,
             org_allowlist=settings.misp_org_allowlist,
             backfill=settings.misp_backfill,
             max_pages_per_poll=settings.misp_max_pages_per_poll,

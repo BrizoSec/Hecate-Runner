@@ -225,6 +225,37 @@ def _is_high_signal(pulse: dict[str, Any], cutoff: datetime) -> bool:
     return not (created is not None and created < cutoff)
 
 
+# OTX pulses routinely carry hundreds of indicators from bulk feeds. The same
+# bound the MISP provider uses applies: past this many, the list describes a
+# feed rather than tradecraft, and handing it to a rule generator produces an
+# indicator-match rule per line instead of a behavioural one.
+_MAX_INDICATORS_INLINE = 40
+_MAX_INDICATOR_VALUES_PER_TYPE = 10
+
+# A CVE identifies a vulnerability, not an observable a detection rule can
+# match on; the rest name something that appears in telemetry.
+_NON_OBSERVABLE_OTX_TYPES = frozenset({"CVE"})
+
+
+def _indicator_map(pulse: dict[str, Any]) -> dict[str, list[str]]:
+    """Group a pulse's observable indicator values by OTX type."""
+    indicators = pulse.get("indicators") or []
+    if not indicators or len(indicators) > _MAX_INDICATORS_INLINE:
+        return {}
+    grouped: dict[str, list[str]] = {}
+    for ind in indicators:
+        if not isinstance(ind, dict):
+            continue
+        itype = str(ind.get("type") or "")
+        value = str(ind.get("indicator") or "").strip()
+        if not value or not itype or itype in _NON_OBSERVABLE_OTX_TYPES:
+            continue
+        bucket = grouped.setdefault(itype, [])
+        if len(bucket) < _MAX_INDICATOR_VALUES_PER_TYPE:
+            bucket.append(value[:120])
+    return grouped
+
+
 def _pulse_to_cti_item(pulse: dict[str, Any]) -> CTIItem:
     modified = pulse.get("modified", "")
     received_at = _parse_otx_timestamp(modified) or datetime.now(UTC)
@@ -238,6 +269,14 @@ def _pulse_to_cti_item(pulse: dict[str, Any]) -> CTIItem:
             "pulse_id": str(pulse.get("id", "")),
             "pulse_modified": modified,
             "pulse_name": pulse.get("name", ""),
+            # Structured alongside the blurb, matching the MISP provider, so
+            # Sigma drafting gets typed values rather than re-parsing prose.
+            "indicators": _indicator_map(pulse),
+            "techniques": [
+                a.get("id", "")
+                for a in (pulse.get("attack_ids") or [])
+                if isinstance(a, dict) and a.get("id")
+            ],
         },
         title=str(pulse.get("name") or ""),
         source_url=str(references[0]) if references else "",

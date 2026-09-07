@@ -112,6 +112,29 @@ class Settings(BaseSettings):
             "and always generate ungrounded, e.g. for offline testing."
         ),
     )
+    sigma_generation_enabled: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_SIGMA_GENERATION_ENABLED",
+        description=(
+            "Draft Sigma detection rules for each applicable log source after "
+            "the hypothesis, so an operator reviews a hunt that already has "
+            "candidate queries. Rules are proposals only — nothing is ever "
+            "executed from them, and Sigma is platform-neutral, so this "
+            "commits to no query language. A failure here leaves the draft "
+            "standing with its placeholder query section rather than losing "
+            "the hunt, so disabling this only removes the section."
+        ),
+    )
+    sigma_timeout_sec: int = Field(
+        default=900,
+        ge=30,
+        alias="HECATE_RUNNER_SIGMA_TIMEOUT_SEC",
+        description=(
+            "Per-call timeout for Sigma drafting. Generous by default: one "
+            "call writes a rule for every applicable log source, which on a "
+            "local 14B model is several minutes of generation."
+        ),
+    )
     research_depth: Literal["basic", "advanced"] = Field(
         default="advanced",
         alias="HECATE_RUNNER_RESEARCH_DEPTH",
@@ -224,6 +247,19 @@ class Settings(BaseSettings):
             "indicator-sweep drafts with no ATT&CK mapping. Set false for an "
             "instance that does not tag galaxies at all -- otherwise the provider "
             "will correctly find nothing to route."
+        ),
+    )
+    misp_require_attack_technique: bool = Field(
+        default=False,
+        alias="HECATE_RUNNER_MISP_REQUIRE_ATTACK_TECHNIQUE",
+        description=(
+            "Only route MISP events that map to at least one ATT&CK technique. "
+            "Stricter than misp_require_galaxy, which is satisfied by any "
+            "galaxy cluster: an event tagged only with a threat-actor or "
+            "malware galaxy has a cluster but no attack-pattern, so it yields "
+            "no technique IDs and can only produce an indicator-sweep draft. "
+            "Off by default because a sweep is still useful output; turn it on "
+            "to route only events a behavioural hunt can be built from."
         ),
     )
     misp_org_allowlist_raw: str = Field(

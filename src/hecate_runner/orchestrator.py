@@ -16,9 +16,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from hecate_runner.athf_client import AthfClient, AthfError
+from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.config import Settings
-from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIProvider, get_provider
-from hecate_runner.hunt_writer import DraftHuntRequest, hunt_id_lock, next_hunt_id, write_draft
+from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider, get_provider
+from hecate_runner.grounding import TechniqueFact, audit_draft, render_grounding_section
+from hecate_runner.hunt_writer import (
+    DraftHuntRequest,
+    hunt_id_lock,
+    next_hunt_id,
+    render_draft,
+    write_draft,
+)
 from hecate_runner.indicator_sweep import build_indicator_sweep, parse_indicator_inventory
 from hecate_runner.notifications import notify_draft_created
 from hecate_runner.state import OrchestratorState
@@ -48,6 +56,129 @@ _NON_SCOPING_PLATFORM_THRESHOLD = 8
 #: truncation bug rather than a missing value. The CTI item's own title is
 #: exactly the value that belongs in that slot, so fill it here rather than
 #: hoping the model stops omitting it.
+#: Platform names ATT&CK uses, keyed by how a hypothesis is likely to spell
+#: them. Used to scope a draft's platform list by what the hypothesis actually
+#: claims: a union across every technique the CTI asserted returned
+#: ESXi/Linux/macOS/Network Devices/Windows for a hypothesis whose own text
+#: said "compromised Windows systems" and whose ABLE Location said "Windows
+#: domain-joined endpoints".
+_PLATFORM_MENTIONS: dict[str, str] = {
+    "windows": "Windows",
+    "linux": "Linux",
+    "macos": "macOS",
+    "mac os": "macOS",
+    "esxi": "ESXi",
+    "network device": "Network Devices",
+    "container": "Containers",
+    "kubernetes": "Containers",
+    "azure": "Azure AD",
+    "office 365": "Office 365",
+    "saas": "SaaS",
+    "iaas": "IaaS",
+}
+
+#: Telemetry a technique implies, by ID prefix so sub-techniques inherit. Uses
+#: the same four category names the research document and hypothesis agent
+#: already speak, so a derived source and a model-proposed one are comparable.
+_TECHNIQUE_DATA_SOURCES: dict[str, tuple[str, ...]] = {
+    "T1059": ("process_execution",),
+    "T1106": ("process_execution",),
+    "T1204": ("process_execution",),
+    "T1140": ("process_execution",),
+    "T1620": ("process_execution",),
+    "T1027": ("process_execution", "file_operations"),
+    "T1005": ("file_operations", "process_execution"),
+    "T1083": ("file_operations", "process_execution"),
+    "T1070": ("file_operations",),
+    "T1574": ("file_operations",),
+    "T1105": ("network_connections", "file_operations"),
+    "T1041": ("network_connections",),
+    "T1071": ("network_connections",),
+    "T1090": ("network_connections",),
+    "T1547": ("registry_events",),
+    "T1543": ("registry_events", "process_execution"),
+    "T1112": ("registry_events",),
+}
+
+#: Indicator type -> telemetry that could match it. Covers both providers'
+#: spellings (MISP's "ip-dst", OTX's "IPv4"); lookups lowercase the type.
+_INDICATOR_DATA_SOURCES: dict[str, tuple[str, ...]] = {
+    "ip-dst": ("network_connections",),
+    "ip-src": ("network_connections",),
+    "ipv4": ("network_connections",),
+    "ipv6": ("network_connections",),
+    "domain": ("network_connections",),
+    "hostname": ("network_connections",),
+    "url": ("network_connections",),
+    "uri": ("network_connections",),
+    "filename": ("file_operations", "process_execution"),
+    "filepath": ("file_operations",),
+    "md5": ("file_operations",),
+    "sha1": ("file_operations",),
+    "sha256": ("file_operations",),
+    "filehash-md5": ("file_operations",),
+    "filehash-sha1": ("file_operations",),
+    "filehash-sha256": ("file_operations",),
+    "regkey": ("registry_events",),
+    "mutex": ("process_execution",),
+}
+
+
+def merge_techniques(cti_techniques: list[str], hypothesis_techniques: list[str]) -> list[str]:
+    """Combine what the CTI asserted with what the hypothesis reasoned about.
+
+    The hypothesis agent returns the two or three techniques it wrote prose
+    around, and generalises sub-techniques while doing it -- a source event
+    naming T1059.003 (Windows Command Shell) reached the draft as bare T1059.
+    That is a real loss: T1059.003 is Windows-only, T1059 spans five
+    platforms, so the imprecision propagates straight into the platform list.
+
+    The CTI's list leads because it is the asserted evidence; the
+    hypothesis's own additions follow. A bare parent is dropped when a
+    sub-technique of it is present, so T1059 + T1059.003 collapses to the
+    specific one rather than carrying both.
+    """
+    merged: list[str] = []
+    for technique in [*cti_techniques, *hypothesis_techniques]:
+        normalised = str(technique).upper().strip()
+        if normalised and normalised not in merged:
+            merged.append(normalised)
+
+    parents_with_children = {t.split(".", 1)[0] for t in merged if "." in t}
+    return [t for t in merged if "." in t or t not in parents_with_children]
+
+
+def platforms_named_in(*texts: str) -> list[str]:
+    """Platforms a hypothesis explicitly claims, in ATT&CK's spelling."""
+    haystack = " ".join(t for t in texts if t).lower()
+    named: list[str] = []
+    for mention, platform in _PLATFORM_MENTIONS.items():
+        if mention in haystack and platform not in named:
+            named.append(platform)
+    return named
+
+
+def derive_data_sources(techniques: list[str], indicator_types: list[str]) -> list[str]:
+    """Telemetry this hunt needs, from its techniques and indicator types.
+
+    Deterministic, and independent of both the model's vocabulary and the
+    environment profile. The hypothesis agent's own list is kept and merged
+    with this -- it was reaching the draft as `["process_execution"]` alone
+    for a hunt whose CTI carried two C2 hostnames, four IPs and nine URLs.
+    """
+    found: list[str] = []
+    for technique in techniques or []:
+        normalised = str(technique).upper().strip()
+        for prefix, sources in _TECHNIQUE_DATA_SOURCES.items():
+            if normalised.startswith(prefix):
+                found.extend(s for s in sources if s not in found)
+    for indicator_type in indicator_types or []:
+        for source in _INDICATOR_DATA_SOURCES.get(str(indicator_type).lower().strip(), ()):
+            if source not in found:
+                found.append(source)
+    return found
+
+
 _EMPTY_SOURCE_SLOT = re.compile(r"(published in)\s{2,}(appear)", re.IGNORECASE)
 
 
@@ -224,7 +355,138 @@ class Orchestrator:
 
     # --- Internal ----------------------------------------------------------
 
-    def _resolve_ttps(self, techniques: list[str]) -> tuple[list[str], list[str]]:
+    def _grounding_section(
+        self,
+        req: DraftHuntRequest,
+        item: CTIItem,
+        technique_facts: dict[str, TechniqueFact] | None = None,
+    ) -> str:
+        """Audit the draft as it currently stands and render the result.
+
+        Best-effort: an audit that raises must not cost a hunt that is
+        otherwise complete, so a failure leaves the section empty rather than
+        aborting the cycle.
+        """
+        try:
+            report = audit_draft(
+                draft_text=render_draft(req),
+                cti_text=item.content,
+                research_text=self._research_text(req.research_id),
+                cti_techniques=[str(t) for t in (item.metadata.get("techniques") or [])],
+                technique_facts=technique_facts,
+            )
+        except Exception as exc:
+            log.warning("Grounding audit failed for %s (%s); section left empty.", req.hunt_id, exc)
+            return ""
+
+        if report.unsupported:
+            log.warning(
+                "%s carries %d claim(s) that trace to no source: %s",
+                req.hunt_id,
+                len(report.unsupported),
+                ", ".join(c.value for c in report.unsupported),
+            )
+        return render_grounding_section(report)
+
+    def _research_text(self, research_id: str | None) -> str:
+        """The research document's text, so its cited sources also count as
+        grounding for a claim the CTI itself did not make."""
+        if not research_id:
+            return ""
+        path = self.settings.athf_workspace / "research" / f"{research_id}.md"
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    def _attach_sigma_rules(
+        self,
+        req: DraftHuntRequest,
+        path: Path,
+        item: CTIItem,
+        technique_facts: dict[str, TechniqueFact] | None = None,
+    ) -> None:
+        """Draft Sigma rules for the hunt and rewrite the draft to include them.
+
+        Techniques come from the CTI itself where the provider supplied them,
+        not from the hypothesis. The hypothesis narrows to the two or three
+        techniques it reasoned about; the source event asserted fifteen, and
+        the log sources a hunt should cover follow from all of them. Falling
+        back to the hypothesis keeps providers that map no techniques working.
+        """
+        techniques = list(item.metadata.get("techniques") or []) or list(req.hypothesis.techniques)
+        indicators = dict(item.metadata.get("indicators") or {})
+        out_dir = self.settings.athf_workspace / "queries" / req.hunt_id
+
+        payload = {
+            "hunt_id": req.hunt_id,
+            "hypothesis": req.hypothesis.hypothesis,
+            "justification": req.hypothesis.justification,
+            "techniques": techniques,
+            "platforms": req.platforms,
+            "indicators": indicators,
+            "references": [item.source_url] if item.source_url else [],
+        }
+
+        try:
+            result = self.athf.sigma_generator(
+                payload, out_dir, timeout_sec=self.settings.sigma_timeout_sec
+            )
+        except AthfError as exc:
+            log.warning(
+                "Sigma drafting failed for %s (%s); draft keeps its placeholder query section.",
+                req.hunt_id,
+                exc,
+            )
+            return
+
+        if not result.success or not result.rules:
+            log.warning(
+                "Sigma drafting produced no usable rules for %s (%s); draft keeps its placeholder query section.",
+                req.hunt_id,
+                result.error or "no rules returned",
+            )
+            return
+
+        for warning in result.warnings:
+            log.info("Sigma drafting note for %s: %s", req.hunt_id, warning)
+
+        req.sigma_rules = result.rules
+        try:
+            req.sigma_rule_dir = str(out_dir.relative_to(self.settings.athf_workspace))
+        except ValueError:  # out_dir outside the workspace -- show it whole
+            req.sigma_rule_dir = str(out_dir)
+
+        # Re-audit: the rules just added are themselves claims, and a rule
+        # matching a C2 domain no source mentions is exactly what the audit
+        # exists to surface.
+        req.grounding_section = self._grounding_section(req, item, technique_facts)
+        try:
+            atomic_write_text(path, render_draft(req))
+        except OSError as exc:
+            log.warning(
+                "Generated %d Sigma rule(s) for %s but could not rewrite the draft (%s); "
+                "the rule files are still at %s.",
+                len(result.rules),
+                req.hunt_id,
+                exc,
+                out_dir,
+            )
+            return
+
+        log.info(
+            "Attached %d Sigma rule(s) to %s covering %s",
+            len(result.rules),
+            req.hunt_id,
+            ", ".join(sorted({str(r.get("logsource_category")) for r in result.rules})),
+        )
+
+    def _resolve_ttps(
+        self,
+        techniques: list[str],
+        scope_text: str = "",
+        facts: dict[str, TechniqueFact] | None = None,
+    ) -> tuple[list[str], list[str]]:
         """Derive real tactics/platforms for a hypothesis's techniques.
 
         Looks each technique up against live ATT&CK data instead of
@@ -250,6 +512,13 @@ class Orchestrator:
             meta = self.athf.lookup_technique(
                 technique_id, timeout_sec=self.settings.llm_timeout_sec
             )
+            # Record what the matrix said so the grounding audit can call out
+            # an invented ID without paying for these subprocess lookups twice.
+            if facts is not None:
+                facts[technique_id.upper()] = TechniqueFact(
+                    valid=meta.found,
+                    superseded_by=(meta.superseded_from and meta.technique_id) or "",
+                )
             for tactic in meta.tactics:
                 if tactic not in tactics:
                     tactics.append(tactic)
@@ -259,6 +528,19 @@ class Orchestrator:
                 platform = _PLATFORM_LABELS.get(platform, platform)
                 if platform not in platforms:
                     platforms.append(platform)
+
+        # A hypothesis that names its platforms outranks the union. Unioning
+        # across every technique the CTI asserted is right for "where could
+        # this technique occur" and wrong for "where does this hunt look":
+        # it returned five platforms for a hypothesis whose own sentence said
+        # "compromised Windows systems". Only narrows -- a claimed platform
+        # that no resolved technique supports is ignored rather than added,
+        # and if the two share nothing the union stands.
+        claimed = platforms_named_in(scope_text)
+        if claimed:
+            scoped = [p for p in platforms if p in claimed]
+            if scoped:
+                return tactics, scoped
         return tactics, platforms
 
     def _run_body(self, state: OrchestratorState, *, dry_run: bool) -> RunResult:
@@ -398,7 +680,25 @@ class Orchestrator:
             state.total_drafts_ever -= 1
             return RunResult(outcome="empty_hypothesis")
 
-        tactics, platforms = self._resolve_ttps(hypothesis.techniques)
+        # Restore what the pipeline was discarding before the draft is built.
+        # The hypothesis agent returns only the techniques it reasoned about,
+        # generalised (T1059.003 -> T1059); the CTI asserted the full, precise
+        # list. Merging is what keeps the draft's ATT&CK mapping, its platform
+        # scope and its telemetry list faithful to the source.
+        cti_techniques = [str(t) for t in (item.metadata.get("techniques") or [])]
+        hypothesis.techniques = merge_techniques(cti_techniques, hypothesis.techniques)
+
+        indicator_types = list((item.metadata.get("indicators") or {}).keys())
+        for source in derive_data_sources(hypothesis.techniques, indicator_types):
+            if source not in hypothesis.data_sources:
+                hypothesis.data_sources.append(source)
+
+        technique_facts: dict[str, TechniqueFact] = {}
+        tactics, platforms = self._resolve_ttps(
+            hypothesis.techniques,
+            scope_text=" ".join([hypothesis.hypothesis, hypothesis.location]),
+            facts=technique_facts,
+        )
 
         try:
             with hunt_id_lock(self.settings.hunts_root):
@@ -414,6 +714,7 @@ class Orchestrator:
                     source_url=item.source_url,
                     related_hunts=related_hunts,
                 )
+                req.grounding_section = self._grounding_section(req, item, technique_facts)
                 path = write_draft(req, self.settings.hunts_root)
         except OSError as exc:
             log.error("Failed to allocate/write draft hunt file: %s", exc)
@@ -422,6 +723,32 @@ class Orchestrator:
             state.drafts_today -= 1
             state.total_drafts_ever -= 1
             return RunResult(outcome="write_error", detail=str(exc))
+
+        # Close the loop back to the research document. Isolated like the
+        # other post-write steps: the draft already exists and its quota is
+        # already spent, so a link failure is a warning, not a lost hunt.
+        if research_id:
+            try:
+                self.athf.link_research_to_hunt(
+                    research_id, hunt_id, timeout_sec=self.settings.llm_timeout_sec
+                )
+            except AthfError as exc:
+                log.warning(
+                    "Could not link %s back to %s (%s); the hunt still records "
+                    "spawned_from, so the forward reference is intact.",
+                    hunt_id,
+                    research_id,
+                    exc,
+                )
+
+        # Sigma drafting sits here deliberately: after the file exists, and
+        # outside hunt_id_lock. It is a multi-minute LLM call, and holding
+        # the ID-allocation lock across it would stall every concurrent
+        # cycle behind it. The draft is rewritten in place once rules are
+        # in hand, so a failure leaves the hunt standing with its
+        # placeholder query section rather than losing it.
+        if self.settings.sigma_generation_enabled:
+            self._attach_sigma_rules(req, path, item, technique_facts)
 
         # The draft file already exists on disk at this point. A failure from
         # here on must NOT be treated as "the cycle failed" (that would
