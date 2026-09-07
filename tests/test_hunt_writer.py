@@ -517,3 +517,15 @@ def test_next_hunt_id_outside_a_git_repo_uses_on_disk_max(tmp_path: Path) -> Non
     (root / "2026" / "Q3").mkdir(parents=True)
     (root / "2026" / "Q3" / "H-0004.md").write_text("stub")
     assert next_hunt_id(root) == "H-0005"
+
+
+def test_counter_file_is_readable_like_the_rest_of_the_workspace(tmp_path: Path) -> None:
+    """The counter used to inherit mkstemp's owner-only 0o600, unlike every
+    other file the workspace holds."""
+    root = tmp_path / "hunts"
+    root.mkdir(parents=True)
+    next_hunt_id(root)
+    plain = root / "reference.txt"
+    plain.write_text("x")
+    counter = root / ".hunt_id_counter"
+    assert counter.stat().st_mode & 0o777 == plain.stat().st_mode & 0o777

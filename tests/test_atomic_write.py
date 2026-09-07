@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from hecate_runner.atomic_write import atomic_write_text
+from hecate_runner.atomic_write import DEFAULT_FILE_MODE, atomic_write_text
 
 
 def test_writes_content(tmp_path: Path) -> None:
@@ -78,3 +78,27 @@ def test_failure_leaves_no_temp_file_when_destination_never_existed(
 
     assert not path.exists()
     assert list(tmp_path.iterdir()) == []
+
+
+def test_defaults_to_mkstemp_owner_only_mode(tmp_path: Path) -> None:
+    """Existing callers are deliberately left on mkstemp's 0o600 -- this
+    helper backs state files whose permissions should not widen silently."""
+    path = tmp_path / "state.json"
+    atomic_write_text(path, "{}")
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_mode_is_applied_before_the_rename(tmp_path: Path) -> None:
+    path = tmp_path / "counter"
+    atomic_write_text(path, "7\n", mode=0o644)
+    assert path.stat().st_mode & 0o777 == 0o644
+
+
+def test_default_file_mode_matches_a_plain_write(tmp_path: Path) -> None:
+    """DEFAULT_FILE_MODE must equal what an ordinary file creation produces
+    under the current umask -- that is the whole point of passing it."""
+    plain = tmp_path / "plain.txt"
+    plain.write_text("x")
+    atomic = tmp_path / "atomic.txt"
+    atomic_write_text(atomic, "x", mode=DEFAULT_FILE_MODE)
+    assert atomic.stat().st_mode & 0o777 == plain.stat().st_mode & 0o777

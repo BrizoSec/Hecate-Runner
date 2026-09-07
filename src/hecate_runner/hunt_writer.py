@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from hecate_runner.athf_client import HypothesisResult
-from hecate_runner.atomic_write import atomic_write_text
+from hecate_runner.atomic_write import DEFAULT_FILE_MODE, atomic_write_text
 
 log = logging.getLogger(__name__)
 
@@ -164,7 +164,9 @@ def next_hunt_id(hunts_root: Path) -> str:
     else:
         high_water = max(high_water, _max_hunt_id_in_git(hunts_root))
     allocated = high_water + 1
-    atomic_write_text(counter_path, f"{allocated}\n")
+    # DEFAULT_FILE_MODE so the counter is readable like every other file in
+    # the workspace, rather than inheriting mkstemp's owner-only 0o600.
+    atomic_write_text(counter_path, f"{allocated}\n", mode=DEFAULT_FILE_MODE)
     return f"H-{allocated:04d}"
 
 
