@@ -29,8 +29,8 @@ import fcntl
 import logging
 import os
 import shutil
-from contextlib import contextmanager
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 log = logging.getLogger(__name__)

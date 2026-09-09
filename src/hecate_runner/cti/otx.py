@@ -236,6 +236,54 @@ _MAX_INDICATOR_VALUES_PER_TYPE = 10
 # match on; the rest name something that appears in telemetry.
 _NON_OBSERVABLE_OTX_TYPES = frozenset({"CVE"})
 
+#: Matches the MISP provider's per-value ceiling.
+_MAX_INDICATOR_VALUE_CHARS = 120
+
+
+def _indicator_detail_lines(pulse: dict[str, Any]) -> list[str]:
+    """Render concrete indicator values for a small, curated pulse.
+
+    The counts line alone ("FileHash-SHA256 (13)") told the model how many
+    indicators existed without telling it what any of them were, so a pulse
+    carrying thirteen real hashes produced a hunt containing none of them.
+    This is the OTX half of the MISP provider's ``_attribute_detail_lines``;
+    the rendered shape is deliberately identical, because ``hunt_audit`` and
+    the grounding audit already parse the MISP one.
+
+    Returns no lines for a bulk dump: past ``_MAX_INDICATORS_INLINE`` the
+    values stop being evidence of tradecraft and become a feed, which the
+    counts line summarises adequately.
+
+    Unlike ``_indicator_map``, CVEs are kept. That map feeds Sigma drafting,
+    where a CVE is not something a rule can match; this blurb feeds the model
+    and the grounding corpus, where naming the CVE the source actually cited
+    is what lets the audit tell it apart from an invented one.
+    """
+    indicators = pulse.get("indicators") or []
+    if not indicators or len(indicators) > _MAX_INDICATORS_INLINE:
+        return []
+
+    grouped: dict[str, list[str]] = {}
+    for ind in indicators:
+        if not isinstance(ind, dict):
+            continue
+        itype = str(ind.get("type") or "")
+        value = str(ind.get("indicator") or "").strip()
+        if not value or not itype:
+            continue
+        grouped.setdefault(itype, []).append(value[:_MAX_INDICATOR_VALUE_CHARS])
+
+    if not grouped:
+        return []
+
+    lines = ["Key indicators:"]
+    for itype in sorted(grouped):
+        values = grouped[itype]
+        shown = values[:_MAX_INDICATOR_VALUES_PER_TYPE]
+        suffix = f" (+{len(values) - len(shown)} more)" if len(values) > len(shown) else ""
+        lines.append(f"  {itype}: {', '.join(shown)}{suffix}")
+    return lines
+
 
 def _indicator_map(pulse: dict[str, Any]) -> dict[str, list[str]]:
     """Group a pulse's observable indicator values by OTX type."""
@@ -252,7 +300,7 @@ def _indicator_map(pulse: dict[str, Any]) -> dict[str, list[str]]:
             continue
         bucket = grouped.setdefault(itype, [])
         if len(bucket) < _MAX_INDICATOR_VALUES_PER_TYPE:
-            bucket.append(value[:120])
+            bucket.append(value[:_MAX_INDICATOR_VALUE_CHARS])
     return grouped
 
 
@@ -311,6 +359,7 @@ def _pulse_to_blurb(pulse: dict[str, Any]) -> str:
         lines.append(f"Description: {description[:1500]}")
     if indicators:
         lines.append(f"Indicators ({len(indicators)} total): {indicator_summary}")
+        lines.extend(_indicator_detail_lines(pulse))
     if references:
         lines.append(f"References: {', '.join(references[:5])}")
 

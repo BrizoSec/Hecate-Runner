@@ -13,57 +13,57 @@ from hecate_runner.config import Settings
 def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     for k in list(monkeypatch._setenv.keys()) if hasattr(monkeypatch, "_setenv") else []:
         monkeypatch.delenv(k, raising=False)
-    monkeypatch.setenv("ATHF_WORKSPACE", "/tmp/athf")
+    monkeypatch.setenv("HECATE_WORKSPACE", "/tmp/hecate")
 
     s = Settings(_env_file=None)  # type: ignore[call-arg]
-    assert s.athf_workspace == Path("/tmp/athf").resolve()
+    assert s.hecate_workspace == Path("/tmp/hecate").resolve()
     assert s.max_drafts_per_day == 4
     assert s.cti_provider == "file"
     assert s.log_level == "INFO"
 
 
 def test_derived_paths(settings: Settings, workspace: Path) -> None:
-    assert settings.athf_bin_resolved == workspace / ".venv" / "bin" / "athf"
+    assert settings.hecate_bin_resolved == workspace / ".venv" / "bin" / "hecate-agent"
     assert settings.cti_queue_dir_resolved == workspace / "cti_queue"
     assert settings.cti_next_file == workspace / "cti_queue" / "next.txt"
     assert settings.hunts_root == workspace / "hunts"
     assert settings.state_file == workspace / ".orchestrator_state.json"
 
 
-def test_env_for_athf_omits_unset_llm_keys(settings: Settings) -> None:
-    """Anything passed here overrides the workspace's own .env (athf loads it
+def test_env_for_hecate_omits_unset_llm_keys(settings: Settings) -> None:
+    """Anything passed here overrides the workspace's own .env (hecate loads it
     with override=False), so unset keys must not be passed at all -- otherwise
     the workspace can never own its LLM choice."""
-    env = settings.env_for_athf()
-    assert "ATHF_WORKSPACE" in env
-    assert "ATHF_LLM_PROVIDER" not in env
-    assert "ATHF_LLM_MODEL" not in env
+    env = settings.env_for_hecate()
+    assert "HECATE_WORKSPACE" in env
+    assert "HECATE_LLM_PROVIDER" not in env
+    assert "HECATE_LLM_MODEL" not in env
 
 
-def test_env_for_athf_passes_explicit_llm_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ATHF_WORKSPACE", "/tmp/athf")
-    monkeypatch.setenv("ATHF_LLM_PROVIDER", "ollama")
-    monkeypatch.setenv("ATHF_LLM_MODEL", "qwen2.5:14b-instruct-q4_K_M")
-    env = Settings(_env_file=None).env_for_athf()  # type: ignore[call-arg]
-    assert env["ATHF_LLM_PROVIDER"] == "ollama"
-    assert env["ATHF_LLM_MODEL"] == "qwen2.5:14b-instruct-q4_K_M"
+def test_env_for_hecate_passes_explicit_llm_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HECATE_WORKSPACE", "/tmp/hecate")
+    monkeypatch.setenv("HECATE_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("HECATE_LLM_MODEL", "qwen2.5:14b-instruct-q4_K_M")
+    env = Settings(_env_file=None).env_for_hecate()  # type: ignore[call-arg]
+    assert env["HECATE_LLM_PROVIDER"] == "ollama"
+    assert env["HECATE_LLM_MODEL"] == "qwen2.5:14b-instruct-q4_K_M"
 
 
 def test_max_drafts_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ATHF_WORKSPACE", "/tmp/athf")
+    monkeypatch.setenv("HECATE_WORKSPACE", "/tmp/hecate")
     monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "0")
     with pytest.raises(ValidationError):
         Settings(_env_file=None)  # type: ignore[call-arg]
 
 
 def test_workspace_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ATHF_WORKSPACE", "~/athf")
+    monkeypatch.setenv("HECATE_WORKSPACE", "~/hecate")
     s = Settings(_env_file=None)  # type: ignore[call-arg]
-    assert not str(s.athf_workspace).startswith("~")
+    assert not str(s.hecate_workspace).startswith("~")
 
 
 def test_redacted_dict_masks_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ATHF_WORKSPACE", "/tmp/athf")
+    monkeypatch.setenv("HECATE_WORKSPACE", "/tmp/hecate")
     monkeypatch.setenv("OTX_API_KEY", "super-secret-otx-key")
     monkeypatch.setenv(
         "HECATE_RUNNER_SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/super/secret/path"

@@ -72,7 +72,7 @@ dmypy.json
 .env.local
 .env.*.local
 
-# Runtime state (should live in the ATHF workspace, not the repo)
+# Runtime state (should live in the Hecate workspace, not the repo)
 logs/
 *.log
 .orchestrator_state.json

@@ -9,7 +9,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from hecate_runner.athf_client import HypothesisResult
+from hecate_runner.hecate_client import HypothesisResult
 from hecate_runner.hunt_writer import (
     DraftHuntRequest,
     _draft_tags,
@@ -202,7 +202,7 @@ def test_render_draft_leaves_unresolved_ttps_empty_in_frontmatter(
     rather than carrying a stand-in.
 
     Regression test: the stand-ins used to be "unclassified"/"Unknown",
-    which `athf hunt validate` checks against the ATT&CK matrix and
+    which `hecate-agent hunt validate` checks against the ATT&CK matrix and
     rejects -- so drafts were written already failing the framework's own
     validator. The gap is still stated for the reviewer, in the body."""
     req = DraftHuntRequest(
@@ -242,7 +242,7 @@ def test_render_draft_handles_empty_hypothesis() -> None:
     assert "[TBD]" in md
     # An unmapped technique list reads as a gap in the body and is simply
     # absent from frontmatter -- never a "TXXXX" stand-in, which both fails
-    # `athf hunt validate` and reads as a real ATT&CK ID at a glance.
+    # `hecate-agent hunt validate` and reads as a real ATT&CK ID at a glance.
     assert "TXXXX" not in md
     assert "techniques: []" in md
     assert "**MITRE ATT&CK:** [none mapped - human to populate]" in md

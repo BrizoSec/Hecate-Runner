@@ -1,5 +1,5 @@
 [Unit]
-Description=hecate-runner - ATHF autonomous hunt draft orchestrator
+Description=hecate-runner - Hecate autonomous hunt draft orchestrator
 Documentation=https://github.com/BrizoSec/Hecate-Runner
 After=network-online.target ollama.service
 Wants=network-online.target
@@ -18,7 +18,7 @@ EnvironmentFile=/home/chemch/betas/Hecate-Runner/.env
 # If uv isn't on PATH for the service user, use the absolute path from `which uv`.
 ExecStart=/home/chemch/.local/bin/uv run hecate-runner run
 
-# research_depth now defaults to "advanced" (~15-20 min for `athf research
+# research_depth now defaults to "advanced" (~15-20 min for `hecate-agent research
 # new` alone, see config.py's research_depth/llm_timeout_sec). 900s (15 min)
 # was tight enough to kill an advanced run mid-flight; 1800s (30 min) leaves
 # headroom above that ceiling plus the hypothesis-generator call after it.
@@ -26,7 +26,7 @@ TimeoutStartSec=1800
 StandardOutput=append:/home/chemch/betas/Hecate-Core/logs/orchestrator.log
 StandardError=append:/home/chemch/betas/Hecate-Core/logs/orchestrator.log
 
-# Light hardening — orchestrator needs to read/write the ATHF workspace
+# Light hardening — orchestrator needs to read/write the Hecate workspace
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

@@ -1,6 +1,6 @@
 """Bounded query proposal + execution -- the "propose, don't run" bridge.
 
-Mirrors the CTIProvider/AthfClient pattern already used for CTI intake and
+Mirrors the CTIProvider/HecateClient pattern already used for CTI intake and
 hypothesis generation: a small typed interface plus pluggable backends.
 
 Deliberately narrow in scope: no LLM drafts or approves a query here. A
@@ -129,7 +129,7 @@ class MockQueryProvider(QueryProvider):
 
 
 class SplunkQueryProvider(QueryProvider):
-    """Shells out to `athf splunk search`, same subprocess pattern as AthfClient.
+    """Shells out to `hecate-agent splunk search`, same subprocess pattern as HecateClient.
 
     Unvalidated against a real Splunk instance as of this writing -- there is
     no live Splunk access in this environment yet. The guardrail enforcement
@@ -140,14 +140,14 @@ class SplunkQueryProvider(QueryProvider):
 
     name = "splunk"
 
-    def __init__(self, athf_bin: Path, workspace: Path, timeout_sec: int = 300):
-        self.athf_bin = athf_bin
+    def __init__(self, hecate_bin: Path, workspace: Path, timeout_sec: int = 300):
+        self.hecate_bin = hecate_bin
         self.workspace = workspace
         self.timeout_sec = timeout_sec
 
     def execute(self, query: ProposedQuery) -> QueryResult:
         cmd = [
-            str(self.athf_bin),
+            str(self.hecate_bin),
             "splunk",
             "search",
             query.query_text,
@@ -177,7 +177,7 @@ class SplunkQueryProvider(QueryProvider):
             return QueryResult(
                 outcome="error",
                 provider=self.name,
-                detail=f"athf binary missing at {self.athf_bin}",
+                detail=f"hecate-agent binary missing at {self.hecate_bin}",
             )
 
         if result.returncode != 0:
@@ -185,13 +185,15 @@ class SplunkQueryProvider(QueryProvider):
                 outcome="error", provider=self.name, detail=result.stderr.strip()[:500]
             )
 
-        # `athf splunk search --format json` prints a human-readable banner to
+        # `hecate-agent splunk search --format json` prints a human-readable banner to
         # stdout before the JSON array, even in JSON mode -- find where the
         # array starts rather than assuming the whole stream is valid JSON.
         start = result.stdout.find("[")
         if start == -1:
             return QueryResult(
-                outcome="error", provider=self.name, detail="no JSON array in athf splunk output"
+                outcome="error",
+                provider=self.name,
+                detail="no JSON array in hecate-agent splunk output",
             )
 
         try:
@@ -210,12 +212,12 @@ class SplunkQueryProvider(QueryProvider):
 
 
 def get_provider(
-    name: str, *, athf_bin: Path | None = None, workspace: Path | None = None
+    name: str, *, hecate_bin: Path | None = None, workspace: Path | None = None
 ) -> QueryProvider:
     if name == "mock":
         return MockQueryProvider()
     if name == "splunk":
-        if athf_bin is None or workspace is None:
-            raise ValueError("splunk provider requires athf_bin and workspace")
-        return SplunkQueryProvider(athf_bin=athf_bin, workspace=workspace)
+        if hecate_bin is None or workspace is None:
+            raise ValueError("splunk provider requires hecate_bin and workspace")
+        return SplunkQueryProvider(hecate_bin=hecate_bin, workspace=workspace)
     raise ValueError(f"Unknown query provider: {name!r}. Supported: mock, splunk")

@@ -290,3 +290,149 @@ def test_entity_only_in_research_is_corroborated():
         research_text="Chrysalis is a Lotus Blossom tool",
     )
     assert [c.status for c in report.claims] == ["corroborated"]
+
+
+# --- Indicator scoping: detection: only (G5) -------------------------------
+
+_RULE_DRAFT = """### Justification
+
+Prose about the campaign.
+
+```yaml
+title: Suspicious Beacon
+description: Detects beaconing described at unit42.paloaltonetworks.com
+references:
+- https://unit42.paloaltonetworks.com/large-scale-credential-attacks/
+author: hecate (auto-generated draft - requires analyst review)
+logsource:
+  category: network_connection
+detection:
+  selection:
+    DestinationHostname: api.wiresguard.com
+  condition: selection
+falsepositives:
+- Traffic to vendor.example-cdn.net during updates
+level: medium
+```
+"""
+
+
+def _indicators(draft, cti=""):
+    report = audit_draft(draft_text=draft, cti_text=cti, research_text="", cti_techniques=[])
+    return {c.value for c in report.claims if c.kind == "indicator"}
+
+
+def test_the_citation_host_is_not_an_indicator():
+    """`references:` cites the article the hunt came from. Auditing it graded
+    the publisher's own domain as an indicator "asserted by CTI"."""
+    assert "unit42.paloaltonetworks.com" not in _indicators(_RULE_DRAFT)
+
+
+def test_the_detection_value_is_still_audited():
+    """The narrowing must not cost the fabrication check anything."""
+    assert "api.wiresguard.com" in _indicators(_RULE_DRAFT)
+
+
+def test_a_fabricated_detection_domain_is_still_unsupported():
+    report = audit_draft(
+        draft_text=_RULE_DRAFT, cti_text="Nothing here", research_text="", cti_techniques=[]
+    )
+    verdict = {c.value: c.status for c in report.claims if c.kind == "indicator"}
+    assert verdict["api.wiresguard.com"] == "unsupported"
+
+
+def test_metadata_outside_detection_is_ignored():
+    """description:, author: and falsepositives: are not run."""
+    found = _indicators(_RULE_DRAFT)
+    assert "vendor.example-cdn.net" not in found
+    assert found == {"api.wiresguard.com"}
+
+
+def test_a_block_without_a_detection_section_is_audited_whole():
+    """Not a runnable rule. An audit should over-report here rather than go
+    quiet -- the Sigma validator rejects these before they reach a hunt."""
+    draft = "```yaml\ntitle: Broken\nreferences:\n- https://evil.example-c2.net/p\n```\n"
+    assert "evil.example-c2.net" in _indicators(draft)
+
+
+def test_detection_section_stops_at_the_next_top_level_key():
+    from hecate_runner.grounding import _detection_section
+
+    body = "detection:\n  selection:\n    a: 1\nfalsepositives:\n- b.example-fp.net\n"
+    section = _detection_section(body)
+    assert "a: 1" in section
+    assert "b.example-fp.net" not in section
+
+
+# --- Entity precision and recall (G9) --------------------------------------
+
+from hecate_runner.grounding import _named_entities  # noqa: E402
+
+
+def test_a_lowercase_token_is_not_a_malware_family():
+    """re.IGNORECASE defeated the pattern's own [A-Z] anchor, so the OTX tag
+    "chrome rat" was captured as a family named `chrome`."""
+    assert _named_entities("session hijacking, post-exploitation, peep, chrome rat") == []
+
+
+def test_a_generic_platform_noun_is_not_a_family():
+    """ "Browser RAT" names a category, not a family. H-0003 graded `Browser`
+    as an asserted malware name."""
+    assert "Browser" not in _named_entities("PEEP: A Browser RAT Posing as a Chrome Extension")
+
+
+def test_an_implementation_language_is_not_a_family():
+    assert _named_entities("A JavaScript loader ran.") == []
+    assert _named_entities("A PowerShell dropper ran.") == []
+
+
+def test_a_based_suffix_is_a_description_not_a_name():
+    assert _named_entities("A Rust-based loader dropped it.") == []
+
+
+def test_an_all_caps_family_is_recovered():
+    """Missed by both older patterns: the collocation yields the token before
+    the category noun, and _CAMEL_MALWARE_RE needs a lowercase run."""
+    assert "PEEP" in _named_entities("PEEP: A Browser RAT Posing as a Chrome Extension")
+
+
+def test_all_caps_scan_is_confined_to_sentences_naming_a_category():
+    """Unbounded, this would report every acronym in the document."""
+    assert _named_entities("The SIEM ingested EVENTS from the estate.") == []
+
+
+def test_ordinary_protocol_acronyms_are_not_families():
+    assert _named_entities("The loader used HTTP and SOCKS5 with HVNC.") == []
+
+
+def test_short_acronyms_are_excluded_by_length():
+    """CVE, DNS, API and RAT are three characters; the length floor keeps them
+    out without needing to enumerate them."""
+    assert _named_entities("The RAT used DNS and an API for its backdoor.") == []
+
+
+def test_established_extraction_still_works():
+    assert _named_entities("The Chrysalis backdoor beacons to C2.") == ["Chrysalis"]
+    assert _named_entities("PlugX implant seen.") == ["PlugX"]
+    assert _named_entities("Attributed to APT41 and UNC2452.") == ["APT41", "UNC2452"]
+    assert _named_entities("PureRAT was dropped.") == ["PureRAT"]
+
+
+def test_a_plural_category_noun_still_collocates():
+    assert "Chrysalis" in _named_entities("Chrysalis backdoors were deployed.")
+
+
+def test_our_own_draft_marker_is_not_a_malware_name():
+    """The hunt template's "DRAFT" sits in a title line that also names a
+    category, so it was reported UNSUPPORTED on every generated draft -- a
+    false fabrication alarm on the audit's own scaffolding."""
+    title = "DRAFT - Indicators published in OSINT - New Arena Crysis Ransomware Variant Released"
+    found = _named_entities(title)
+    assert "DRAFT" not in found
+    assert "Crysis" in found
+
+
+def test_the_provider_label_is_not_a_malware_name():
+    found = _named_entities("MISP Event: KadNap botnet IOC")
+    assert "MISP" not in found
+    assert "KadNap" in found

@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "BrizoSec" }]
-keywords = ["threat-hunting", "cti", "athf", "security", "agentic-ai"]
+keywords = ["threat-hunting", "cti", "hecate", "security", "agentic-ai"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Information Technology",

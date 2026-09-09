@@ -28,10 +28,10 @@ def cli_env(workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     # delenv below. chdir somewhere with no .env at all. Deliberately not
     # `workspace` itself: one test below writes workspace/.env on purpose,
     # a *different*, intentional lookup path (_env_key_available checks
-    # settings.athf_workspace / ".env" explicitly).
+    # settings.hecate_workspace / ".env" explicitly).
     monkeypatch.chdir(tmp_path)
     for var in [
-        "ATHF_WORKSPACE",
+        "HECATE_WORKSPACE",
         "HECATE_RUNNER_MAX_DRAFTS_PER_DAY",
         "HECATE_RUNNER_CTI_PROVIDER",
         "HECATE_RUNNER_CTI_MULTI_PROVIDERS",
@@ -46,7 +46,7 @@ def cli_env(workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         "SPLUNK_TOKEN",
     ]:
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("ATHF_WORKSPACE", str(workspace))
+    monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))
     monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "4")
     # doctor's RSS check is unconditional; keep it satisfied unless a test
     # explicitly needs it empty.
@@ -95,7 +95,7 @@ class TestDoctorCommand:
         assert "All checks passed" in result.stdout
 
     def test_missing_workspace_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("ATHF_WORKSPACE", str(tmp_path / "does-not-exist"))
+        monkeypatch.setenv("HECATE_WORKSPACE", str(tmp_path / "does-not-exist"))
         monkeypatch.setenv("HECATE_RUNNER_RSS_FEED_URLS", "https://example.com/feed")
 
         result = runner.invoke(app, ["doctor"])
@@ -157,7 +157,7 @@ class TestDoctorCommand:
     def test_missing_rss_feeds_fails(
         self, workspace: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("ATHF_WORKSPACE", str(workspace))
+        monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))
         monkeypatch.setenv("HECATE_RUNNER_RSS_FEED_URLS", "")
 
         result = runner.invoke(app, ["doctor"])

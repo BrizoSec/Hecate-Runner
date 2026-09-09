@@ -1,4 +1,4 @@
-"""Render draft hunt markdown files into the ATHF workspace.
+"""Render draft hunt markdown files into the Hecate workspace.
 
 Kept separate from the orchestrator so we can unit-test rendering without any
 subprocess or filesystem side effects other than writing the final file.
@@ -19,8 +19,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from hecate_runner.athf_client import HypothesisResult
 from hecate_runner.atomic_write import atomic_write_text
+from hecate_runner.hecate_client import HypothesisResult
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ def _max_hunt_id_on_disk(hunts_root: Path) -> int:
             m = re.match(r"H-(\d+)", md.stem)
             if m:
                 max_id = max(max_id, int(m.group(1)))
-    # Also check the flat hunts/ dir if it exists (some ATHF workspaces put
+    # Also check the flat hunts/ dir if it exists (some Hecate workspaces put
     # hunts at the root of the hunts/ directory)
     for candidate in hunts_root.parent.glob("H-*.md"):
         m = re.match(r"H-(\d+)", candidate.stem)
@@ -223,7 +223,7 @@ def _able_cell(value: str) -> str:
 def _draft_tags(is_threat_report: bool, is_indicator_only: bool = False) -> list[str]:
     """Frontmatter `tags:` for a draft, with `low-confidence-source`
     appended when the hypothesis-generator judged the CTI itself doesn't
-    describe real adversary behavior -- lets `athf hunt search`/filtering
+    describe real adversary behavior -- lets `hecate-agent hunt search`/filtering
     surface (or exclude) these during triage instead of a reviewer having
     to open every draft to notice the banner in the body.
 
@@ -331,7 +331,7 @@ def render_draft(req: DraftHuntRequest) -> str:
     # Frontmatter carries only real, validated values; an unmapped field is
     # left empty rather than filled with a stand-in. "TXXXX" and
     # "unclassified" used to sit here as "honest placeholders", but both are
-    # checked by `athf hunt validate` against the ATT&CK matrix, so every
+    # checked by `hecate-agent hunt validate` against the ATT&CK matrix, so every
     # draft that hit this path was written already failing the framework's
     # own validator ("Unknown MITRE technique: TXXXX"). "TXXXX" also *looks*
     # like a real ATT&CK ID at a glance, which a word like "unclassified"
@@ -387,7 +387,7 @@ def render_draft(req: DraftHuntRequest) -> str:
         else ""
     )
 
-    # OBSERVE mirrors the three subsections of ATHF's own HUNT_LOCK template.
+    # OBSERVE mirrors the three subsections of Hecate's own HUNT_LOCK template.
     # It previously carried a fourth, "Known False Positives", and left "What
     # Normal Looks Like" as "[Human review required]" -- but the template
     # defines that section as "legitimate activity that might trigger false

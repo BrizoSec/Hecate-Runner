@@ -1,6 +1,6 @@
-"""Subprocess wrapper around the ``athf`` CLI.
+"""Subprocess wrapper around the ``hecate-agent`` CLI.
 
-Everything that touches ATHF flows through here so we can mock it in tests
+Everything that touches Hecate flows through here so we can mock it in tests
 and swap out the transport later (e.g., MCP or direct import) without
 touching the orchestrator.
 """
@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class ResearchResult:
-    """Parsed output of ``athf research new --output json``."""
+    """Parsed output of ``hecate-agent research new --output json``."""
 
     research_id: str = ""
     recommended_hypothesis: str = ""
@@ -36,7 +36,7 @@ class ResearchResult:
 
 @dataclass
 class HypothesisResult:
-    """Parsed output of ``athf agent run hypothesis-generator``."""
+    """Parsed output of ``hecate-agent agent run hypothesis-generator``."""
 
     hypothesis: str = ""
     justification: str = ""
@@ -44,7 +44,7 @@ class HypothesisResult:
     data_sources: list[str] = field(default_factory=list)
     observables: list[str] = field(default_factory=list)
     false_positives: list[str] = field(default_factory=list)
-    # ABLE scoping (see ATHF's templates/HUNT_LOCK.md). Empty when the CLI
+    # ABLE scoping (see Hecate's templates/HUNT_LOCK.md). Empty when the CLI
     # didn't emit a section for one -- the agent leaves these blank rather
     # than invent specifics not grounded in the CTI it was given, and
     # hunt_writer falls back to the same "[Review CTI and populate]"
@@ -63,7 +63,7 @@ class HypothesisResult:
     is_threat_report: bool = True
     low_confidence_reason: str = ""
     # Set when the CLI reports the agent self-assessed its input as a bare
-    # indicator list (athf's `is_indicator_only`). This is the backstop path:
+    # indicator list (hecate's `is_indicator_only`). This is the backstop path:
     # the orchestrator normally recognises feed dumps itself and builds a
     # sweep draft without an LLM at all, so this only fires when its
     # heuristic missed one and the model caught it.
@@ -84,7 +84,7 @@ class HypothesisResult:
 
 @dataclass
 class TechniqueMetadata:
-    """Parsed output of ``athf attack lookup <id> --json``."""
+    """Parsed output of ``hecate-agent attack lookup <id> --json``."""
 
     technique_id: str = ""
     tactics: list[str] = field(default_factory=list)
@@ -97,8 +97,8 @@ class TechniqueMetadata:
     superseded_from: str = ""
 
 
-class AthfError(RuntimeError):
-    """Raised when the athf CLI fails or returns unexpected output."""
+class HecateError(RuntimeError):
+    """Raised when the hecate-agent CLI fails or returns unexpected output."""
 
 
 @dataclass
@@ -114,27 +114,27 @@ class SigmaResult:
     rules: list[dict[str, Any]] = field(default_factory=list)
 
 
-class AthfClient:
-    """Thin wrapper: locate the athf binary, run subprocesses, parse output."""
+class HecateClient:
+    """Thin wrapper: locate the hecate-agent binary, run subprocesses, parse output."""
 
     def __init__(
         self,
-        athf_bin: Path,
+        hecate_bin: Path,
         workspace: Path,
         env_overrides: dict[str, str] | None = None,
         default_timeout_sec: int = 600,
     ):
-        self.athf_bin = athf_bin
+        self.hecate_bin = hecate_bin
         self.workspace = workspace
         self.env_overrides = env_overrides or {}
         self.default_timeout_sec = default_timeout_sec
 
     def check_installed(self) -> None:
-        """Raise if the athf binary is missing or not executable."""
-        if not self.athf_bin.exists():
-            raise AthfError(f"athf binary not found at {self.athf_bin}")
-        if not os.access(self.athf_bin, os.X_OK):
-            raise AthfError(f"athf binary at {self.athf_bin} is not executable")
+        """Raise if the hecate-agent binary is missing or not executable."""
+        if not self.hecate_bin.exists():
+            raise HecateError(f"hecate-agent binary not found at {self.hecate_bin}")
+        if not os.access(self.hecate_bin, os.X_OK):
+            raise HecateError(f"hecate-agent binary at {self.hecate_bin} is not executable")
 
     # --- Public API --------------------------------------------------------
 
@@ -146,7 +146,7 @@ class AthfClient:
         timeout_sec: int | None = None,
         web_search_enabled: bool = True,
     ) -> ResearchResult:
-        """Run ``athf research new`` and parse the resulting research ID.
+        """Run ``hecate-agent research new`` and parse the resulting research ID.
 
         Grounds the downstream hypothesis in the 5-skill research pipeline
         (system research, adversary tradecraft via web search, telemetry
@@ -162,7 +162,7 @@ class AthfClient:
         the hunt.
         """
         cmd = [
-            str(self.athf_bin),
+            str(self.hecate_bin),
             "research",
             "new",
             "--topic",
@@ -189,7 +189,7 @@ class AthfClient:
         timeout_sec: int | None = None,
         indicators_only: bool = False,
     ) -> HypothesisResult:
-        """Run ``athf agent run hypothesis-generator`` and parse the output.
+        """Run ``hecate-agent agent run hypothesis-generator`` and parse the output.
 
         indicators_only should be set for narrative-free CTI (see
         `has_narrative`). Without it the agent's hypothesis template obliges
@@ -199,7 +199,7 @@ class AthfClient:
         activity for feed dumps that described neither.
         """
         cmd = [
-            str(self.athf_bin),
+            str(self.hecate_bin),
             "agent",
             "run",
             "hypothesis-generator",
@@ -222,13 +222,13 @@ class AthfClient:
         out_dir: Path,
         timeout_sec: int | None = None,
     ) -> SigmaResult:
-        """Run ``athf agent run sigma-generator`` and parse its JSON output.
+        """Run ``hecate-agent agent run sigma-generator`` and parse its JSON output.
 
         The input goes through a temp file rather than flags: the indicator
         map is nested and can carry long C2 URLs, and an argv-borne blob is
         both fragile to quote and visible in the process table.
 
-        Rules are written by athf into ``out_dir`` (inside the workspace) so
+        Rules are written by hecate into ``out_dir`` (inside the workspace) so
         the files an operator reviews are the same files `sigma convert`
         would later read -- no copy to keep in sync.
         """
@@ -242,7 +242,7 @@ class AthfClient:
         try:
             stdout = self._run(
                 [
-                    str(self.athf_bin),
+                    str(self.hecate_bin),
                     "agent",
                     "run",
                     "sigma-generator",
@@ -272,11 +272,11 @@ class AthfClient:
         start = text.find("{")
         end = text.rfind("}")
         if start == -1 or end == -1 or end <= start:
-            raise AthfError(f"sigma-generator returned no JSON payload: {text[:300]}")
+            raise HecateError(f"sigma-generator returned no JSON payload: {text[:300]}")
         try:
             data = json.loads(text[start : end + 1])
         except ValueError as exc:
-            raise AthfError(f"sigma-generator returned malformed JSON: {exc}") from exc
+            raise HecateError(f"sigma-generator returned malformed JSON: {exc}") from exc
 
         return SigmaResult(
             success=bool(data.get("success")),
@@ -294,23 +294,23 @@ class AthfClient:
         """Record the hunt on its source research document's ``linked_hunts``.
 
         Goes through the CLI rather than editing the research file directly:
-        ATHF treats its own commands as the only sanctioned writer of hunt and
+        Hecate treats its own commands as the only sanctioned writer of hunt and
         research frontmatter, and this runner writes hunt files itself only
         because it needs the ID-allocation lock.
 
-        `athf hunt new --research` already does this for hunts it creates; a
+        `hecate-agent hunt new --research` already does this for hunts it creates; a
         runner-written hunt otherwise leaves the research doc reporting
         `linked_hunts: []` while the hunt names it in `spawned_from`.
         """
         self._run(
-            [str(self.athf_bin), "research", "link", research_id, "--hunt", hunt_id],
+            [str(self.hecate_bin), "research", "link", research_id, "--hunt", hunt_id],
             timeout_sec=timeout_sec,
         )
 
     def lookup_technique(
         self, technique_id: str, timeout_sec: int | None = None
     ) -> TechniqueMetadata:
-        """Resolve a technique's real tactic(s)/platform(s) via ``athf attack lookup --json``.
+        """Resolve a technique's real tactic(s)/platform(s) via ``hecate-agent attack lookup --json``.
 
         Best-effort and never raises: STIX data may not be installed, the
         technique ID may be unknown/malformed (e.g. a hypothesis-generator
@@ -319,17 +319,17 @@ class AthfClient:
         guessing — or, as before this existed, hardcoding a tactic that has
         nothing to do with the actual technique.
         """
-        cmd = [str(self.athf_bin), "attack", "lookup", technique_id, "--json"]
+        cmd = [str(self.hecate_bin), "attack", "lookup", technique_id, "--json"]
         try:
             stdout = self._run(cmd, timeout_sec=timeout_sec)
-        except AthfError as exc:
-            log.warning("athf attack lookup %s failed: %s", technique_id, exc)
+        except HecateError as exc:
+            log.warning("hecate-agent attack lookup %s failed: %s", technique_id, exc)
             return TechniqueMetadata(technique_id=technique_id)
 
         try:
             data = json.loads(stdout.strip())
         except json.JSONDecodeError:
-            log.warning("athf attack lookup %s produced non-JSON output", technique_id)
+            log.warning("hecate-agent attack lookup %s produced non-JSON output", technique_id)
             return TechniqueMetadata(technique_id=technique_id)
 
         if "error" in data:
@@ -339,7 +339,7 @@ class AthfClient:
             # ID as a poor fit for the hypothesis. Worth a warning, since the
             # resulting draft otherwise looks entirely normal.
             log.warning(
-                "athf attack lookup %s returned no metadata (%s); "
+                "hecate-agent attack lookup %s returned no metadata (%s); "
                 "draft will have empty tactics/platforms",
                 technique_id,
                 data.get("error"),
@@ -367,7 +367,7 @@ class AthfClient:
 
     @staticmethod
     def _parse_research_output(text: str) -> ResearchResult:
-        """Extract the JSON object from ``athf research new --output json``.
+        """Extract the JSON object from ``hecate-agent research new --output json``.
 
         The CLI prints a human-readable progress banner ("Starting Research:
         R-000X ...") to stdout *before* the JSON payload even in JSON mode,
@@ -376,13 +376,13 @@ class AthfClient:
         """
         start = text.find("{")
         if start == -1:
-            log.warning("athf research new produced no JSON object in output")
+            log.warning("hecate-agent research new produced no JSON object in output")
             return ResearchResult()
 
         try:
             data = json.loads(text[start:])
         except json.JSONDecodeError as exc:
-            log.warning("Failed to parse athf research new JSON output: %s", exc)
+            log.warning("Failed to parse hecate-agent research new JSON output: %s", exc)
             return ResearchResult()
 
         related_hunts = []
@@ -401,10 +401,10 @@ class AthfClient:
         timeout = timeout_sec or self.default_timeout_sec
 
         env = {**os.environ, **self.env_overrides}
-        env["PATH"] = f"{self.athf_bin.parent}{os.pathsep}{env.get('PATH', '')}"
+        env["PATH"] = f"{self.hecate_bin.parent}{os.pathsep}{env.get('PATH', '')}"
 
         preview = " ".join(cmd[:5]) + (" ..." if len(cmd) > 5 else "")
-        log.info("athf exec: %s (timeout=%ds)", preview, timeout)
+        log.info("hecate-agent exec: %s (timeout=%ds)", preview, timeout)
 
         try:
             result = subprocess.run(
@@ -417,17 +417,17 @@ class AthfClient:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise AthfError(f"athf call timed out after {timeout}s: {preview}") from exc
+            raise HecateError(f"hecate call timed out after {timeout}s: {preview}") from exc
         except FileNotFoundError as exc:
-            raise AthfError(f"athf binary missing at {self.athf_bin}") from exc
+            raise HecateError(f"hecate-agent binary missing at {self.hecate_bin}") from exc
 
         if result.returncode != 0:
             log.error(
-                "athf failed rc=%d stderr=%s",
+                "hecate failed rc=%d stderr=%s",
                 result.returncode,
                 result.stderr[:500],
             )
-            raise AthfError(f"athf exit {result.returncode}: {result.stderr.strip()[:500]}")
+            raise HecateError(f"hecate exit {result.returncode}: {result.stderr.strip()[:500]}")
 
         return result.stdout
 

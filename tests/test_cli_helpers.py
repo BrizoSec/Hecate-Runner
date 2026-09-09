@@ -39,7 +39,7 @@ def test_workspace_env_file_present_but_no_tavily_key(
     settings: Settings, workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    (workspace / ".env").write_text("ATHF_LLM_PROVIDER=ollama\n")
+    (workspace / ".env").write_text("HECATE_LLM_PROVIDER=ollama\n")
     assert _tavily_key_available(settings) is False
 
 
@@ -94,10 +94,10 @@ def test_effective_model_reads_the_workspace_when_unset(
     """LLM choice lives in the workspace .env by default, so `status` has to
     look there -- printing a placeholder would answer a different question
     than "what will actually run"."""
-    monkeypatch.delenv("ATHF_LLM_PROVIDER", raising=False)
-    monkeypatch.delenv("ATHF_LLM_MODEL", raising=False)
-    (settings.athf_workspace / ".env").write_text(
-        "ATHF_LLM_PROVIDER=ollama\nATHF_LLM_MODEL=qwen2.5:14b-instruct-q4_K_M\n"
+    monkeypatch.delenv("HECATE_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("HECATE_LLM_MODEL", raising=False)
+    (settings.hecate_workspace / ".env").write_text(
+        "HECATE_LLM_PROVIDER=ollama\nHECATE_LLM_MODEL=qwen2.5:14b-instruct-q4_K_M\n"
     )
     rendered = _effective_model(settings)
     assert "ollama:qwen2.5:14b-instruct-q4_K_M" in rendered
@@ -106,7 +106,7 @@ def test_effective_model_reads_the_workspace_when_unset(
 
 def test_effective_model_marks_an_explicit_override(settings: Settings) -> None:
     settings_with_override = settings.model_copy(
-        update={"athf_llm_provider": "ollama", "athf_llm_model": "llama3"}
+        update={"hecate_llm_provider": "ollama", "hecate_llm_model": "llama3"}
     )
     rendered = _effective_model(settings_with_override)
     assert rendered.startswith("ollama:llama3")
@@ -116,9 +116,9 @@ def test_effective_model_marks_an_explicit_override(settings: Settings) -> None:
 def test_effective_model_when_nothing_is_configured(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("ATHF_LLM_PROVIDER", raising=False)
-    monkeypatch.delenv("ATHF_LLM_MODEL", raising=False)
-    workspace_env = settings.athf_workspace / ".env"
+    monkeypatch.delenv("HECATE_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("HECATE_LLM_MODEL", raising=False)
+    workspace_env = settings.hecate_workspace / ".env"
     if workspace_env.exists():
         workspace_env.unlink()
     assert "autodetect" in _effective_model(settings)

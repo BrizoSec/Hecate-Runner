@@ -1,4 +1,4 @@
-"""Orchestrator loop tests. Uses mocks for AthfClient so no real athf runs."""
+"""Orchestrator loop tests. Uses mocks for HecateClient so no real hecate runs."""
 
 from __future__ import annotations
 
@@ -7,19 +7,20 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hecate_runner.athf_client import (
-    AthfClient,
-    AthfError,
+from hecate_runner.config import Settings
+from hecate_runner.cti import FileQueueProvider
+from hecate_runner.cti.base import CTIItem
+from hecate_runner.hecate_client import (
+    HecateClient,
+    HecateError,
     HypothesisResult,
     ResearchResult,
     SigmaResult,
     TechniqueMetadata,
 )
-from hecate_runner.config import Settings
-from hecate_runner.cti import FileQueueProvider
-from hecate_runner.cti.base import CTIItem
 from hecate_runner.indicator_sweep import parse_indicator_inventory
 from hecate_runner.orchestrator import (
+    _MAX_SKIPS_PER_CYCLE,
     Orchestrator,
     derive_data_sources,
     derive_research_topic,
@@ -27,6 +28,8 @@ from hecate_runner.orchestrator import (
     merge_techniques,
     platforms_named_in,
 )
+from hecate_runner.parked_store import list_parked
+from hecate_runner.state import OrchestratorState
 
 _SIGMA_RULE = {
     "logsource_category": "network_connection",
@@ -38,11 +41,11 @@ _SIGMA_RULE = {
 
 
 @pytest.fixture
-def mock_athf(
+def mock_hecate(
     sample_hypothesis: HypothesisResult,
     sample_research_result: ResearchResult,
 ) -> MagicMock:
-    mock = MagicMock(spec=AthfClient)
+    mock = MagicMock(spec=HecateClient)
     mock.hypothesis_generator.return_value = sample_hypothesis
     mock.research_new.return_value = sample_research_result
     # Matches sample_hypothesis's T1003.001 so tests asserting on rendered
@@ -66,26 +69,26 @@ def mock_athf(
 def test_no_cti_returns_no_cti(
     settings: Settings,
     workspace: Path,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
     provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
     provider.ensure_dirs()
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     result = orch.run_once()
     assert result.outcome == "no_cti"
-    mock_athf.hypothesis_generator.assert_not_called()
+    mock_hecate.hypothesis_generator.assert_not_called()
 
 
 def test_happy_path_creates_draft(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     workspace: Path,
 ) -> None:
     orch = Orchestrator(
         settings=settings,
-        athf=mock_athf,
+        hecate=mock_hecate,
         cti_provider=file_queue_with_cti,
     )
     result = orch.run_once()
@@ -105,16 +108,16 @@ def test_happy_path_creates_draft(
     processed = list((workspace / "cti_queue" / "processed").glob("cti-*.txt"))
     assert len(processed) == 1
 
-    mock_athf.research_new.assert_called_once()
-    mock_athf.hypothesis_generator.assert_called_once()
+    mock_hecate.research_new.assert_called_once()
+    mock_hecate.hypothesis_generator.assert_called_once()
     # research_id from the grounding step must flow into hypothesis generation
-    assert mock_athf.hypothesis_generator.call_args.kwargs["research_id"] == "R-0001"
+    assert mock_hecate.hypothesis_generator.call_args.kwargs["research_id"] == "R-0001"
 
 
 def test_parseable_indicator_dump_skips_research_and_llm(
     settings: Settings,
     workspace: Path,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
     # Regression test for the ThreatFox-style bare IOC dump that fabricated
     # "PureRAT and Overlord RAT" after web search grounded against wrong-
@@ -134,49 +137,153 @@ def test_parseable_indicator_dump_skips_research_and_llm(
         "TLP: white\n"
         "Attributes (42 total): domain (10), ip-dst (20), url (12)"
     )
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     result = orch.run_once()
 
     assert result.outcome == "draft_created"
-    mock_athf.research_new.assert_not_called()
+    mock_hecate.research_new.assert_not_called()
     # A readable indicator inventory means the draft is built directly, with
     # no LLM call at all -- there is no slot left for the model to invent a
     # delivery vector or technique into.
-    mock_athf.hypothesis_generator.assert_not_called()
+    mock_hecate.hypothesis_generator.assert_not_called()
     assert result.research_id is None
 
 
-def test_narrative_free_cti_without_readable_inventory_falls_back_to_llm(
+def test_free_form_cti_without_any_marker_still_reaches_the_llm(
     settings: Settings,
     workspace: Path,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
-    """`has_narrative` is a heuristic over provider blurb formats. When it
-    says "no narrative" but there's no indicator inventory to confirm the
-    source really is a feed dump, building a template draft would discard
-    real CTI -- so the LLM path runs instead, with the constraint applied."""
+    """`has_narrative` recognises the markers provider blurbs use, so its
+    absence is not evidence that no narrative exists. The file queue takes
+    hand-written text carrying no marker at all; skipping on that basis would
+    discard real CTI, which is worse than the empty draft C4 set out to stop."""
     provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
     provider.ensure_dirs()
     (workspace / "cti_queue" / "next.txt").write_text(
-        "MISP Event: Something unusual\nOrg: SomeOrg\nThreat Level: High"
+        "APT actor X observed dumping LSASS via comsvcs.dll on Windows endpoints."
     )
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     result = orch.run_once()
 
     assert result.outcome == "draft_created"
-    assert mock_athf.hypothesis_generator.call_args.kwargs["indicators_only"] is True
-    # Research still runs on this path (the draft needs grounding), so the
-    # web-search guard is what prevents the wrong-dated-aggregator fabrication
-    # here -- the parseable-dump test above no longer covers it.
-    assert mock_athf.research_new.call_args.kwargs["web_search_enabled"] is False
+    assert mock_hecate.hypothesis_generator.call_args.kwargs["indicators_only"] is True
+    assert mock_hecate.research_new.call_args.kwargs["web_search_enabled"] is False
+
+
+def test_a_blurb_that_is_only_metadata_is_skipped(
+    settings: Settings,
+    workspace: Path,
+    mock_hecate: MagicMock,
+) -> None:
+    """C4: no narrative field, no indicator inventory and no prose means
+    nothing to hunt. H-0630 -- title, source, tags, link off a vendor
+    marketing post -- became "Indicators published in <title> appear in
+    telemetry", a sweep for indicators that do not exist."""
+    provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
+    provider.ensure_dirs()
+    (workspace / "cti_queue" / "next.txt").write_text(
+        "RSS: Teaching AI to Reason Through Detection Triage\n"
+        "Source: crowdstrike.com\n"
+        "Tags: Agentic SOC\n"
+        "Link: https://www.crowdstrike.com/en-us/blog/teaching-ai-to-reason/"
+    )
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    result = orch.run_once()
+
+    assert result.outcome == "no_actionable_cti"
+    assert result.ok is True
+    mock_hecate.hypothesis_generator.assert_not_called()
+    mock_hecate.research_new.assert_not_called()
+
+
+def test_skipping_costs_no_draft_quota(
+    settings: Settings,
+    workspace: Path,
+    mock_hecate: MagicMock,
+) -> None:
+    """Walking past an item is not a draft. The check runs ahead of the
+    reservation so a feed of marketing posts cannot exhaust the daily quota."""
+    provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
+    provider.ensure_dirs()
+    (workspace / "cti_queue" / "next.txt").write_text(
+        "RSS: X\nSource: y.example\nLink: https://y.example/p"
+    )
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    orch.run_once()
+
+    assert OrchestratorState.load(settings.state_file).drafts_today == 0
+
+
+def test_a_skipped_item_is_acknowledged_so_the_cursor_advances(
+    settings: Settings,
+    workspace: Path,
+    mock_hecate: MagicMock,
+) -> None:
+    """Without the cursor advance the same item is re-offered every cycle."""
+    provider = MagicMock()
+    provider.next_item.side_effect = [
+        CTIItem(
+            content="RSS: X\nSource: y.example\nLink: https://y.example/p",
+            source="rss",
+            metadata={},
+        ),
+        None,
+    ]
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    orch.run_once()
+
+    provider.acknowledge.assert_called_once()
+
+
+def test_the_skip_scan_is_bounded(
+    settings: Settings,
+    workspace: Path,
+    mock_hecate: MagicMock,
+) -> None:
+    """A feed of nothing but marketing posts should cost one cycle, not an
+    unbounded walk through the archive."""
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="RSS: X\nSource: y.example\nLink: https://y.example/p", source="rss", metadata={}
+    )
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    result = orch.run_once()
+
+    assert result.outcome == "no_actionable_cti"
+    assert provider.next_item.call_count <= _MAX_SKIPS_PER_CYCLE + 1
+
+
+def test_a_provider_that_cannot_advance_is_not_spun_on(
+    settings: Settings,
+    workspace: Path,
+    mock_hecate: MagicMock,
+) -> None:
+    """If acknowledge fails the same item comes back, so stopping is the only
+    way not to loop on it."""
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="RSS: X\nSource: y.example\nLink: https://y.example/p", source="rss", metadata={}
+    )
+    provider.acknowledge.side_effect = RuntimeError("cursor write failed")
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    result = orch.run_once()
+
+    assert result.outcome == "no_actionable_cti"
+    assert provider.next_item.call_count == 1
 
 
 def test_indicator_dump_draft_has_no_techniques_and_no_invented_behavior(
     settings: Settings,
     workspace: Path,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
     provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
     provider.ensure_dirs()
@@ -185,7 +292,7 @@ def test_indicator_dump_draft_has_no_techniques_and_no_invented_behavior(
         "Org: abuse.ch\n"
         "Attributes (245 total): domain (146), ip-dst|port (78), url (21)"
     )
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     result = orch.run_once()
 
@@ -201,7 +308,7 @@ def test_indicator_dump_draft_has_no_techniques_and_no_invented_behavior(
 def test_narrative_cti_keeps_web_search_enabled(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
     (file_queue_with_cti.queue_dir / "next.txt").write_text(
         "RSS: Some Campaign\n"
@@ -209,32 +316,32 @@ def test_narrative_cti_keeps_web_search_enabled(
         "Summary: Attackers observed doing something specific and narrative-worthy.\n"
         "Link: https://example.com/post"
     )
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
 
     orch.run_once()
 
-    assert mock_athf.research_new.call_args.kwargs["web_search_enabled"] is True
-    assert mock_athf.hypothesis_generator.call_args.kwargs["indicators_only"] is False
+    assert mock_hecate.research_new.call_args.kwargs["web_search_enabled"] is True
+    assert mock_hecate.hypothesis_generator.call_args.kwargs["indicators_only"] is False
 
 
 def test_related_hunts_from_research_flow_into_draft(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     sample_research_result: ResearchResult,
 ) -> None:
     # A research step that found related past hunts (see
-    # HuntResearcherAgent._skill_4_related_work in athf) must actually land
+    # HuntResearcherAgent._skill_4_related_work in hecate) must actually land
     # in the draft's related_hunts frontmatter, not the hardcoded [] this
     # regression-tests against.
-    mock_athf.research_new.return_value = ResearchResult(
+    mock_hecate.research_new.return_value = ResearchResult(
         research_id=sample_research_result.research_id,
         recommended_hypothesis=sample_research_result.recommended_hypothesis,
         related_hunts=["H-0602", "H-0578"],
     )
     orch = Orchestrator(
         settings=settings,
-        athf=mock_athf,
+        hecate=mock_hecate,
         cti_provider=file_queue_with_cti,
     )
     result = orch.run_once()
@@ -244,21 +351,21 @@ def test_related_hunts_from_research_flow_into_draft(
     assert 'related_hunts: ["H-0602", "H-0578"]' in content
 
 
-def test_dry_run_does_not_call_athf(
+def test_dry_run_does_not_call_hecate(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     workspace: Path,
 ) -> None:
     orch = Orchestrator(
         settings=settings,
-        athf=mock_athf,
+        hecate=mock_hecate,
         cti_provider=file_queue_with_cti,
     )
     result = orch.run_once(dry_run=True)
     assert result.outcome == "dry_run"
-    mock_athf.research_new.assert_not_called()
-    mock_athf.hypothesis_generator.assert_not_called()
+    mock_hecate.research_new.assert_not_called()
+    mock_hecate.hypothesis_generator.assert_not_called()
     # CTI stays in the queue
     assert (workspace / "cti_queue" / "next.txt").exists()
 
@@ -266,7 +373,7 @@ def test_dry_run_does_not_call_athf(
 def test_quota_enforcement(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     workspace: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -275,7 +382,7 @@ def test_quota_enforcement(
 
     orch = Orchestrator(
         settings=settings,
-        athf=mock_athf,
+        hecate=mock_hecate,
         cti_provider=file_queue_with_cti,
     )
     first = orch.run_once()
@@ -286,26 +393,26 @@ def test_quota_enforcement(
     second = orch.run_once()
     assert second.outcome == "quota_reached"
     # Ensure hypothesis-generator only called once
-    assert mock_athf.hypothesis_generator.call_count == 1
+    assert mock_hecate.hypothesis_generator.call_count == 1
 
 
-def test_athf_error_refunds_quota(
+def test_hecate_error_refunds_quota(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
     workspace: Path,
     sample_research_result: ResearchResult,
 ) -> None:
-    failing_athf = MagicMock(spec=AthfClient)
-    failing_athf.research_new.return_value = sample_research_result
-    failing_athf.hypothesis_generator.side_effect = AthfError("simulated failure")
+    failing_hecate = MagicMock(spec=HecateClient)
+    failing_hecate.research_new.return_value = sample_research_result
+    failing_hecate.hypothesis_generator.side_effect = HecateError("simulated failure")
 
     orch = Orchestrator(
         settings=settings,
-        athf=failing_athf,
+        hecate=failing_hecate,
         cti_provider=file_queue_with_cti,
     )
     result = orch.run_once()
-    assert result.outcome == "athf_error"
+    assert result.outcome == "hecate_error"
     # CTI stays in queue for retry
     assert (workspace / "cti_queue" / "next.txt").exists()
 
@@ -314,7 +421,7 @@ def test_write_failure_refunds_quota_and_leaves_cti_queued(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
     workspace: Path,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Regression test: next_hunt_id()/write_draft() had no failure handling
@@ -328,7 +435,7 @@ def test_write_failure_refunds_quota_and_leaves_cti_queued(
 
     monkeypatch.setattr(orchestrator_module, "write_draft", _boom)
 
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
     result = orch.run_once()
 
     assert result.outcome == "write_error"
@@ -340,7 +447,7 @@ def test_acknowledge_failure_does_not_fail_the_cycle_or_refund_quota(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
     workspace: Path,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
     """Regression test: self.cti.acknowledge(item) ran unguarded AFTER the
     draft file was already written. If it raised, the exception propagated
@@ -363,7 +470,7 @@ def test_acknowledge_failure_does_not_fail_the_cycle_or_refund_quota(
 
     orch = Orchestrator(
         settings=settings,
-        athf=mock_athf,
+        hecate=mock_hecate,
         cti_provider=_AcknowledgeFailsProvider(file_queue_with_cti),  # type: ignore[arg-type]
     )
     result = orch.run_once()
@@ -381,13 +488,13 @@ def test_empty_hypothesis_refunds_quota(
     workspace: Path,
     sample_research_result: ResearchResult,
 ) -> None:
-    empty_athf = MagicMock(spec=AthfClient)
-    empty_athf.research_new.return_value = sample_research_result
-    empty_athf.hypothesis_generator.return_value = HypothesisResult()
+    empty_hecate = MagicMock(spec=HecateClient)
+    empty_hecate.research_new.return_value = sample_research_result
+    empty_hecate.hypothesis_generator.return_value = HypothesisResult()
 
     orch = Orchestrator(
         settings=settings,
-        athf=empty_athf,
+        hecate=empty_hecate,
         cti_provider=file_queue_with_cti,
     )
     result = orch.run_once()
@@ -397,30 +504,30 @@ def test_empty_hypothesis_refunds_quota(
 def test_research_disabled_skips_research_call(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HECATE_RUNNER_RESEARCH_ENABLED", "false")
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
     result = orch.run_once()
 
     assert result.outcome == "draft_created"
     assert result.research_id is None
-    mock_athf.research_new.assert_not_called()
-    assert mock_athf.hypothesis_generator.call_args.kwargs["research_id"] is None
+    mock_hecate.research_new.assert_not_called()
+    assert mock_hecate.hypothesis_generator.call_args.kwargs["research_id"] is None
 
 
 def test_research_failure_aborts_cycle(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     workspace: Path,
 ) -> None:
-    mock_athf.research_new.side_effect = AthfError("ollama timed out")
+    mock_hecate.research_new.side_effect = HecateError("ollama timed out")
 
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
     result = orch.run_once()
 
     # Cold generation is unreliable (~30% accuracy on known-answer fixtures),
@@ -429,7 +536,7 @@ def test_research_failure_aborts_cycle(
     assert result.research_id is None
     assert result.draft_path is None
     assert not result.ok
-    mock_athf.hypothesis_generator.assert_not_called()
+    mock_hecate.hypothesis_generator.assert_not_called()
 
     # Quota refunded and CTI left in queue for retry, same as any other failure.
     assert (workspace / "cti_queue" / "next.txt").exists()
@@ -443,13 +550,13 @@ def test_research_failure_aborts_cycle(
 def test_research_failure_does_not_notify(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
-    mock_athf.research_new.side_effect = AthfError("ollama timed out")
+    mock_hecate.research_new.side_effect = HecateError("ollama timed out")
     notify = MagicMock()
 
     orch = Orchestrator(
-        settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti, notify=notify
+        settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti, notify=notify
     )
     orch.run_once()
 
@@ -459,17 +566,17 @@ def test_research_failure_does_not_notify(
 def test_research_empty_result_aborts_cycle(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
-    mock_athf.research_new.return_value = ResearchResult()  # empty research_id
+    mock_hecate.research_new.return_value = ResearchResult()  # empty research_id
 
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
     result = orch.run_once()
 
     assert result.outcome == "research_empty"
     assert result.research_id is None
     assert not result.ok
-    mock_athf.hypothesis_generator.assert_not_called()
+    mock_hecate.hypothesis_generator.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -564,7 +671,7 @@ def test_has_narrative_false_for_bare_ioc_dump() -> None:
 
 def test_resolve_ttps_excludes_near_universal_platforms_from_union(
     settings: Settings,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     file_queue_with_cti: FileQueueProvider,
 ) -> None:
     # T1078 "Valid Accounts"-shaped technique: touches all ~10 ATT&CK
@@ -595,10 +702,10 @@ def test_resolve_ttps_excludes_near_universal_platforms_from_union(
         platforms=["Windows"],
         found=True,
     )
-    mock_athf.lookup_technique.side_effect = lambda technique_id, timeout_sec: (
+    mock_hecate.lookup_technique.side_effect = lambda technique_id, timeout_sec: (
         broad if technique_id == "T1078" else narrow
     )
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
 
     tactics, platforms = orch._resolve_ttps(["T1021.002", "T1078"])
 
@@ -613,7 +720,7 @@ def test_resolve_ttps_excludes_near_universal_platforms_from_union(
 
 def test_resolve_ttps_translates_pre_platform_to_a_readable_label(
     settings: Settings,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     file_queue_with_cti: FileQueueProvider,
 ) -> None:
     """Regression test: found via a live end-to-end run against T1598
@@ -627,8 +734,8 @@ def test_resolve_ttps_translates_pre_platform_to_a_readable_label(
         platforms=["PRE"],
         found=True,
     )
-    mock_athf.lookup_technique.return_value = pre_compromise
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    mock_hecate.lookup_technique.return_value = pre_compromise
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
 
     _, platforms = orch._resolve_ttps(["T1598"])
 
@@ -637,7 +744,7 @@ def test_resolve_ttps_translates_pre_platform_to_a_readable_label(
 
 def test_resolve_ttps_falls_back_to_empty_platforms_when_all_techniques_are_broad(
     settings: Settings,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     file_queue_with_cti: FileQueueProvider,
 ) -> None:
     # hunt_writer's `platforms or ["Unknown"]` fallback turns an empty list
@@ -658,8 +765,8 @@ def test_resolve_ttps_falls_back_to_empty_platforms_when_all_techniques_are_broa
         ],
         found=True,
     )
-    mock_athf.lookup_technique.return_value = broad
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    mock_hecate.lookup_technique.return_value = broad
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
 
     _, platforms = orch._resolve_ttps(["T1078"])
 
@@ -669,11 +776,11 @@ def test_resolve_ttps_falls_back_to_empty_platforms_when_all_techniques_are_broa
 def test_notify_called_on_draft_created(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
     notify = MagicMock()
     orch = Orchestrator(
-        settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti, notify=notify
+        settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti, notify=notify
     )
     result = orch.run_once()
 
@@ -686,12 +793,12 @@ def test_notify_called_on_draft_created(
 def test_notify_not_called_when_no_cti(
     settings: Settings,
     workspace: Path,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
     notify = MagicMock()
     provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
     provider.ensure_dirs()
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider, notify=notify)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider, notify=notify)
     orch.run_once()
 
     notify.assert_not_called()
@@ -700,11 +807,11 @@ def test_notify_not_called_when_no_cti(
 def test_notify_not_called_on_dry_run(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
     notify = MagicMock()
     orch = Orchestrator(
-        settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti, notify=notify
+        settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti, notify=notify
     )
     orch.run_once(dry_run=True)
 
@@ -714,13 +821,16 @@ def test_notify_not_called_on_dry_run(
 def test_notify_failure_does_not_corrupt_successful_outcome(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
     def failing_notify(result: object) -> None:
         raise RuntimeError("slack is down")
 
     orch = Orchestrator(
-        settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti, notify=failing_notify
+        settings=settings,
+        hecate=mock_hecate,
+        cti_provider=file_queue_with_cti,
+        notify=failing_notify,
     )
     result = orch.run_once()
 
@@ -732,9 +842,9 @@ def test_notify_failure_does_not_corrupt_successful_outcome(
 def test_orchestrator_without_notify_arg_defaults_to_noop(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
     result = orch.run_once()
     assert result.outcome == "draft_created"
 
@@ -742,12 +852,12 @@ def test_orchestrator_without_notify_arg_defaults_to_noop(
 def test_state_persists_across_runs(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     workspace: Path,
 ) -> None:
     orch = Orchestrator(
         settings=settings,
-        athf=mock_athf,
+        hecate=mock_hecate,
         cti_provider=file_queue_with_cti,
     )
     orch.run_once()
@@ -878,11 +988,11 @@ def test_attack_line_constant_matches_what_every_provider_emits() -> None:
 def test_sigma_rules_are_embedded_in_the_draft(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     workspace: Path,
 ) -> None:
-    mock_athf.sigma_generator.return_value = SigmaResult(success=True, rules=[_SIGMA_RULE])
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    mock_hecate.sigma_generator.return_value = SigmaResult(success=True, rules=[_SIGMA_RULE])
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
 
     result = orch.run_once()
     assert result.outcome == "draft_created"
@@ -896,12 +1006,12 @@ def test_sigma_rules_are_embedded_in_the_draft(
 def test_sigma_failure_leaves_the_draft_standing(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
     """A drafting failure must not cost the hunt -- the CTI has already been
     consumed and the quota already spent by this point."""
-    mock_athf.sigma_generator.side_effect = AthfError("ollama unreachable")
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    mock_hecate.sigma_generator.side_effect = HecateError("ollama unreachable")
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
 
     result = orch.run_once()
     assert result.outcome == "draft_created"
@@ -911,18 +1021,18 @@ def test_sigma_failure_leaves_the_draft_standing(
 def test_sigma_generation_can_be_disabled(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
 ) -> None:
     settings.sigma_generation_enabled = False
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
 
     assert orch.run_once().outcome == "draft_created"
-    mock_athf.sigma_generator.assert_not_called()
+    mock_hecate.sigma_generator.assert_not_called()
 
 
 def test_sigma_uses_cti_techniques_over_the_narrower_hypothesis_list(
     settings: Settings,
-    mock_athf: MagicMock,
+    mock_hecate: MagicMock,
     workspace: Path,
 ) -> None:
     """The hypothesis narrows to what it reasoned about; the source event
@@ -939,11 +1049,11 @@ def test_sigma_uses_cti_techniques_over_the_narrower_hypothesis_list(
             "indicators": {"hostname": ["api.wiresguard.com"]},
         },
     )
-    mock_athf.sigma_generator.return_value = SigmaResult(success=True, rules=[_SIGMA_RULE])
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+    mock_hecate.sigma_generator.return_value = SigmaResult(success=True, rules=[_SIGMA_RULE])
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     assert orch.run_once().outcome == "draft_created"
-    payload = mock_athf.sigma_generator.call_args.args[0]
+    payload = mock_hecate.sigma_generator.call_args.args[0]
     assert payload["techniques"] == ["T1071.001", "T1547.001", "T1005"]
     assert payload["indicators"] == {"hostname": ["api.wiresguard.com"]}
 
@@ -1004,53 +1114,53 @@ def test_derive_data_sources_handles_both_provider_spellings() -> None:
 
 
 def test_resolve_ttps_scopes_platforms_to_what_the_hypothesis_claims(
-    settings: Settings, mock_athf: MagicMock
+    settings: Settings, mock_hecate: MagicMock
 ) -> None:
-    mock_athf.lookup_technique.return_value = TechniqueMetadata(
+    mock_hecate.lookup_technique.return_value = TechniqueMetadata(
         technique_id="T1059",
         tactics=["execution"],
         platforms=["ESXi", "Linux", "macOS", "Network Devices", "Windows"],
         found=True,
     )
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=MagicMock())
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
 
     _, platforms = orch._resolve_ttps(["T1059"], scope_text="on compromised Windows systems")
     assert platforms == ["Windows"]
 
 
 def test_resolve_ttps_keeps_the_union_when_nothing_is_claimed(
-    settings: Settings, mock_athf: MagicMock
+    settings: Settings, mock_hecate: MagicMock
 ) -> None:
-    mock_athf.lookup_technique.return_value = TechniqueMetadata(
+    mock_hecate.lookup_technique.return_value = TechniqueMetadata(
         technique_id="T1059", tactics=["execution"], platforms=["Linux", "Windows"], found=True
     )
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=MagicMock())
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
     _, platforms = orch._resolve_ttps(["T1059"], scope_text="")
     assert platforms == ["Linux", "Windows"]
 
 
 def test_resolve_ttps_ignores_a_claim_no_technique_supports(
-    settings: Settings, mock_athf: MagicMock
+    settings: Settings, mock_hecate: MagicMock
 ) -> None:
     """Narrowing only. A hypothesis naming Linux must not add Linux to a
     Windows-only technique."""
-    mock_athf.lookup_technique.return_value = TechniqueMetadata(
+    mock_hecate.lookup_technique.return_value = TechniqueMetadata(
         technique_id="T1059.003", tactics=["execution"], platforms=["Windows"], found=True
     )
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=MagicMock())
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
     _, platforms = orch._resolve_ttps(["T1059.003"], scope_text="Linux servers")
     assert platforms == ["Windows"]
 
 
 def test_draft_records_cti_techniques_and_scoped_platform(
-    settings: Settings, mock_athf: MagicMock, sample_hypothesis: HypothesisResult
+    settings: Settings, mock_hecate: MagicMock, sample_hypothesis: HypothesisResult
 ) -> None:
     sample_hypothesis.hypothesis = (
         "Adversaries run obfuscated commands on compromised Windows systems"
     )
     sample_hypothesis.techniques = ["T1059"]
-    mock_athf.hypothesis_generator.return_value = sample_hypothesis
-    mock_athf.lookup_technique.return_value = TechniqueMetadata(
+    mock_hecate.hypothesis_generator.return_value = sample_hypothesis
+    mock_hecate.lookup_technique.return_value = TechniqueMetadata(
         technique_id="T1059.003", tactics=["execution"], platforms=["Windows"], found=True
     )
     provider = MagicMock()
@@ -1062,7 +1172,7 @@ def test_draft_records_cti_techniques_and_scoped_platform(
             "indicators": {"hostname": ["api.wiresguard.com"]},
         },
     )
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     result = orch.run_once()
     content = result.draft_path.read_text()
@@ -1073,16 +1183,16 @@ def test_draft_records_cti_techniques_and_scoped_platform(
 
 
 def test_draft_never_invents_a_vendor_data_source(
-    settings: Settings, mock_athf: MagicMock, sample_hypothesis: HypothesisResult
+    settings: Settings, mock_hecate: MagicMock, sample_hypothesis: HypothesisResult
 ) -> None:
     sample_hypothesis.data_sources = []
     sample_hypothesis.techniques = []
-    mock_athf.hypothesis_generator.return_value = sample_hypothesis
+    mock_hecate.hypothesis_generator.return_value = sample_hypothesis
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
         content="RSS: X\nSummary: prose", source="rss", metadata={}
     )
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     content = orch.run_once().draft_path.read_text()
     assert "CrowdStrike" not in content
@@ -1090,47 +1200,47 @@ def test_draft_never_invents_a_vendor_data_source(
 
 
 def test_research_is_linked_back_to_the_hunt(
-    settings: Settings, file_queue_with_cti: FileQueueProvider, mock_athf: MagicMock
+    settings: Settings, file_queue_with_cti: FileQueueProvider, mock_hecate: MagicMock
 ) -> None:
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
     result = orch.run_once()
-    mock_athf.link_research_to_hunt.assert_called_once()
-    args = mock_athf.link_research_to_hunt.call_args.args
+    mock_hecate.link_research_to_hunt.assert_called_once()
+    args = mock_hecate.link_research_to_hunt.call_args.args
     assert args[1] == result.hunt_id
 
 
 def test_link_failure_does_not_lose_the_hunt(
-    settings: Settings, file_queue_with_cti: FileQueueProvider, mock_athf: MagicMock
+    settings: Settings, file_queue_with_cti: FileQueueProvider, mock_hecate: MagicMock
 ) -> None:
-    mock_athf.link_research_to_hunt.side_effect = AthfError("athf exit 1")
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=file_queue_with_cti)
+    mock_hecate.link_research_to_hunt.side_effect = HecateError("hecate exit 1")
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
     assert orch.run_once().outcome == "draft_created"
 
 
 def test_technique_validity_reaches_the_grounding_audit(
-    settings: Settings, mock_athf: MagicMock, sample_hypothesis: HypothesisResult
+    settings: Settings, mock_hecate: MagicMock, sample_hypothesis: HypothesisResult
 ) -> None:
     """An invented technique ID must be reported as unsupported in the draft,
     not pass as something the hypothesis reasoned to."""
     sample_hypothesis.techniques = ["T9999"]
-    mock_athf.hypothesis_generator.return_value = sample_hypothesis
-    mock_athf.lookup_technique.return_value = TechniqueMetadata(technique_id="T9999", found=False)
+    mock_hecate.hypothesis_generator.return_value = sample_hypothesis
+    mock_hecate.lookup_technique.return_value = TechniqueMetadata(technique_id="T9999", found=False)
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
         content="RSS: X\nSummary: prose", source="rss", metadata={}
     )
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     content = orch.run_once().draft_path.read_text()
     assert "no such technique in the current ATT&CK matrix" in content
 
 
 def test_revoked_technique_is_recorded_in_the_draft(
-    settings: Settings, mock_athf: MagicMock, sample_hypothesis: HypothesisResult
+    settings: Settings, mock_hecate: MagicMock, sample_hypothesis: HypothesisResult
 ) -> None:
     sample_hypothesis.techniques = ["T1574.002"]
-    mock_athf.hypothesis_generator.return_value = sample_hypothesis
-    mock_athf.lookup_technique.return_value = TechniqueMetadata(
+    mock_hecate.hypothesis_generator.return_value = sample_hypothesis
+    mock_hecate.lookup_technique.return_value = TechniqueMetadata(
         technique_id="T1574.001",
         tactics=["defense-evasion"],
         platforms=["Windows"],
@@ -1143,7 +1253,125 @@ def test_revoked_technique_is_recorded_in_the_draft(
         source="misp",
         metadata={"techniques": ["T1574.002"]},
     )
-    orch = Orchestrator(settings=settings, athf=mock_athf, cti_provider=provider)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     content = orch.run_once().draft_path.read_text()
     assert "superseded by T1574.001" in content
+
+
+# --- Intake triage parks commentary rather than drafting it (C4) ------------
+
+_ROUNDUP = CTIItem(
+    content="RSS: The Good, the Bad and the Ugly - Week 33\nSummary: Courts sentence a Com member; advisory warns of Gunra ransomware.",
+    source="rss",
+    title="The Good, the Bad and the Ugly in Cybersecurity - Week 33 (2026)",
+    identifier="https://example-feed.test/w33",
+    metadata={"entry_tags": ["The Good, the Bad and the Ugly"]},
+)
+_REAL = CTIItem(
+    content="RSS: Lynx Ransomware\nSummary: Lynx ransomware deployed after RDP access; C2 over HTTPS.",
+    source="rss",
+    title="Cat's Got Your Files: Lynx Ransomware",
+    identifier="https://example-feed.test/lynx",
+    metadata={"entry_tags": ["Malware"]},
+)
+
+
+def test_commentary_is_parked_instead_of_drafted(
+    settings: Settings, workspace: Path, mock_hecate: MagicMock
+) -> None:
+    provider = MagicMock()
+    provider.next_item.side_effect = [_ROUNDUP, None]
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    result = orch.run_once()
+
+    assert result.outcome == "no_actionable_cti"
+    mock_hecate.hypothesis_generator.assert_not_called()
+    parked = list_parked(settings.cti_queue_dir_resolved)
+    assert len(parked) == 1
+    assert "the good, the bad and the ugly" in parked[0].reason
+
+
+def test_a_parked_item_keeps_its_content_so_it_can_be_replayed(
+    settings: Settings, workspace: Path, mock_hecate: MagicMock
+) -> None:
+    """The cursor has advanced by now, so this copy is the only one left."""
+    provider = MagicMock()
+    provider.next_item.side_effect = [_ROUNDUP, None]
+    Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
+
+    assert list_parked(settings.cti_queue_dir_resolved)[0].content == _ROUNDUP.content
+
+
+def test_parking_advances_the_cursor(
+    settings: Settings, workspace: Path, mock_hecate: MagicMock
+) -> None:
+    provider = MagicMock()
+    provider.next_item.side_effect = [_ROUNDUP, None]
+    Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
+
+    provider.acknowledge.assert_called_once()
+
+
+def test_the_cycle_moves_on_to_the_next_item_after_parking(
+    settings: Settings, workspace: Path, mock_hecate: MagicMock
+) -> None:
+    """Parking must not cost the cycle: the real item behind it still drafts."""
+    provider = MagicMock()
+    provider.next_item.side_effect = [_ROUNDUP, _REAL]
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    result = orch.run_once()
+
+    assert result.outcome == "draft_created"
+    assert len(list_parked(settings.cti_queue_dir_resolved)) == 1
+
+
+def test_parking_costs_no_draft_quota(
+    settings: Settings, workspace: Path, mock_hecate: MagicMock
+) -> None:
+    provider = MagicMock()
+    provider.next_item.side_effect = [_ROUNDUP, None]
+    Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
+
+    assert OrchestratorState.load(settings.state_file).drafts_today == 0
+
+
+def test_real_intelligence_is_not_parked(
+    settings: Settings, workspace: Path, mock_hecate: MagicMock
+) -> None:
+    provider = MagicMock()
+    provider.next_item.side_effect = [_REAL, None]
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    assert orch.run_once().outcome == "draft_created"
+    assert list_parked(settings.cti_queue_dir_resolved) == []
+
+
+def test_triage_can_be_turned_off(
+    settings: Settings, workspace: Path, mock_hecate: MagicMock
+) -> None:
+    settings.cti_triage = "off"
+    provider = MagicMock()
+    provider.next_item.side_effect = [_ROUNDUP, None]
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    assert orch.run_once().outcome == "draft_created"
+    assert list_parked(settings.cti_queue_dir_resolved) == []
+
+
+def test_an_unwritable_park_drafts_rather_than_losing_the_item(
+    settings: Settings, workspace: Path, mock_hecate: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Parking is the whole safety net. If it cannot be written, the item must
+    still not disappear."""
+    provider = MagicMock()
+    provider.next_item.side_effect = [_ROUNDUP, None]
+    monkeypatch.setattr(
+        "hecate_runner.orchestrator.park",
+        MagicMock(side_effect=OSError("read-only filesystem")),
+    )
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    assert orch.run_once().outcome == "draft_created"

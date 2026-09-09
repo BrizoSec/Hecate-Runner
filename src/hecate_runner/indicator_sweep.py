@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 
-from hecate_runner.athf_client import HypothesisResult
+from hecate_runner.hecate_client import HypothesisResult
 
 # The inventory line each provider emits: MISP's `_event_to_blurb` writes
 # "Attributes (245 total): domain (146), ip-dst|port (78), url (21)" and

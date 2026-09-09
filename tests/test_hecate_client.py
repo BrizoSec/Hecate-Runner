@@ -1,4 +1,4 @@
-"""Tests for the athf subprocess wrapper and the hypothesis-output parser."""
+"""Tests for the hecate subprocess wrapper and the hypothesis-output parser."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from hecate_runner.athf_client import AthfClient, AthfError, TechniqueMetadata
+from hecate_runner.hecate_client import HecateClient, HecateError, TechniqueMetadata
 
-# Real `athf research new --output json` prints a human-readable progress
+# Real `hecate-agent research new --output json` prints a human-readable progress
 # banner to stdout *before* the JSON payload, even in JSON mode — the parser
 # has to find and skip past it.
 SAMPLE_RESEARCH_OUTPUT = """
@@ -64,7 +64,7 @@ Evidence:
 
 
 def test_parse_full_output() -> None:
-    result = AthfClient._parse_hypothesis_output(SAMPLE_OUTPUT)
+    result = HecateClient._parse_hypothesis_output(SAMPLE_OUTPUT)
     assert "LSASS memory dumping" in result.hypothesis
     assert "EDR" in result.justification
     assert result.techniques == ["T1003.001"]
@@ -84,13 +84,13 @@ def test_parse_output_with_low_confidence_section() -> None:
         "Low Confidence Source:\n"
         "  Source is a vendor compliance announcement; no adversary behavior is described.\n"
     )
-    result = AthfClient._parse_hypothesis_output(text)
+    result = HecateClient._parse_hypothesis_output(text)
     assert result.is_threat_report is False
     assert "vendor compliance announcement" in result.low_confidence_reason
 
 
 def test_parse_full_output_includes_able_scoping() -> None:
-    result = AthfClient._parse_hypothesis_output(SAMPLE_OUTPUT)
+    result = HecateClient._parse_hypothesis_output(SAMPLE_OUTPUT)
     assert result.actor == "Generic post-exploitation toolkit"
     assert "Direct syscalls" in result.behavior
     assert result.location == "Windows domain-joined endpoints"
@@ -103,7 +103,7 @@ def test_parse_output_without_able_scoping_defaults_to_empty() -> None:
     leaves actor/behavior/location/evidence empty, same as any other
     section the CLI didn't emit."""
     text = "Hypothesis:\n  A hypothesis with no ABLE section at all.\n"
-    result = AthfClient._parse_hypothesis_output(text)
+    result = HecateClient._parse_hypothesis_output(text)
     assert result.actor == ""
     assert result.behavior == ""
     assert result.location == ""
@@ -111,16 +111,16 @@ def test_parse_output_without_able_scoping_defaults_to_empty() -> None:
 
 
 def test_hypothesis_generator_appends_indicators_only_flag(
-    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+    hecate_client: HecateClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, list[str]] = {}
 
-    def fake_run(self: AthfClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
+    def fake_run(self: HecateClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
         captured["cmd"] = cmd
         return SAMPLE_OUTPUT
 
-    monkeypatch.setattr(AthfClient, "_run", fake_run)
-    athf_client.hypothesis_generator(
+    monkeypatch.setattr(HecateClient, "_run", fake_run)
+    hecate_client.hypothesis_generator(
         threat_intel="Attributes (245 total): domain (146)", indicators_only=True
     )
 
@@ -128,16 +128,16 @@ def test_hypothesis_generator_appends_indicators_only_flag(
 
 
 def test_hypothesis_generator_omits_indicators_only_flag_by_default(
-    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+    hecate_client: HecateClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, list[str]] = {}
 
-    def fake_run(self: AthfClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
+    def fake_run(self: HecateClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
         captured["cmd"] = cmd
         return SAMPLE_OUTPUT
 
-    monkeypatch.setattr(AthfClient, "_run", fake_run)
-    athf_client.hypothesis_generator(threat_intel="A real narrative report about an actor")
+    monkeypatch.setattr(HecateClient, "_run", fake_run)
+    hecate_client.hypothesis_generator(threat_intel="A real narrative report about an actor")
 
     assert "--indicators-only" not in captured["cmd"]
 
@@ -156,7 +156,7 @@ def test_parse_output_routes_warnings_away_from_evidence() -> None:
         "  * Remapped 1 deprecated ATT&CK ID(s) to their current equivalent: T1067 -> T1542.003\n"
         "  * Removed 1 unrecognised ATT&CK ID(s): T1065.003\n"
     )
-    result = AthfClient._parse_hypothesis_output(text)
+    result = HecateClient._parse_hypothesis_output(text)
 
     assert result.evidence == "process.name (95% populated)"
     assert "Warnings" not in result.evidence
@@ -168,73 +168,73 @@ def test_parse_output_routes_warnings_away_from_evidence() -> None:
 
 
 def test_parse_empty_output() -> None:
-    result = AthfClient._parse_hypothesis_output("")
+    result = HecateClient._parse_hypothesis_output("")
     assert result.is_empty
     assert result.techniques == []
 
 
 def test_parse_output_no_lists() -> None:
     text = "Hypothesis:\n  Just a hypothesis with no lists at all.\n"
-    result = AthfClient._parse_hypothesis_output(text)
+    result = HecateClient._parse_hypothesis_output(text)
     assert "hypothesis with no lists" in result.hypothesis
     assert result.techniques == []
 
 
 def test_check_installed_missing_binary(tmp_path: Path) -> None:
-    client = AthfClient(
-        athf_bin=tmp_path / "does_not_exist",
+    client = HecateClient(
+        hecate_bin=tmp_path / "does_not_exist",
         workspace=tmp_path,
     )
-    with pytest.raises(AthfError, match="not found"):
+    with pytest.raises(HecateError, match="not found"):
         client.check_installed()
 
 
-def test_check_installed_ok(athf_client: AthfClient) -> None:
-    athf_client.check_installed()  # no raise
+def test_check_installed_ok(hecate_client: HecateClient) -> None:
+    hecate_client.check_installed()  # no raise
 
 
-def _make_fake_athf(tmp_path: Path, script: str) -> Path:
-    """Write an executable shell script that behaves like athf for one test."""
-    fake = tmp_path / "fake_athf.sh"
+def _make_fake_hecate(tmp_path: Path, script: str) -> Path:
+    """Write an executable shell script that behaves like hecate for one test."""
+    fake = tmp_path / "fake_hecate.sh"
     fake.write_text(script)
     fake.chmod(0o755)
     return fake
 
 
-def test_run_captures_stdout(athf_client: AthfClient, tmp_path: Path) -> None:
-    fake = _make_fake_athf(tmp_path, "#!/bin/sh\nprintf '%s' 'hello from athf'\n")
-    athf_client.athf_bin = fake
-    stdout = athf_client._run([str(fake), "--noop"])
-    assert stdout == "hello from athf"
+def test_run_captures_stdout(hecate_client: HecateClient, tmp_path: Path) -> None:
+    fake = _make_fake_hecate(tmp_path, "#!/bin/sh\nprintf '%s' 'hello from hecate'\n")
+    hecate_client.hecate_bin = fake
+    stdout = hecate_client._run([str(fake), "--noop"])
+    assert stdout == "hello from hecate"
 
 
-def test_run_raises_on_nonzero(athf_client: AthfClient, tmp_path: Path) -> None:
-    fake = _make_fake_athf(tmp_path, "#!/bin/sh\necho boom >&2; exit 3\n")
-    athf_client.athf_bin = fake
-    with pytest.raises(AthfError, match="exit 3"):
-        athf_client._run([str(fake)])
+def test_run_raises_on_nonzero(hecate_client: HecateClient, tmp_path: Path) -> None:
+    fake = _make_fake_hecate(tmp_path, "#!/bin/sh\necho boom >&2; exit 3\n")
+    hecate_client.hecate_bin = fake
+    with pytest.raises(HecateError, match="exit 3"):
+        hecate_client._run([str(fake)])
 
 
-def test_run_raises_on_timeout(athf_client: AthfClient, tmp_path: Path) -> None:
-    fake = _make_fake_athf(tmp_path, "#!/bin/sh\nsleep 5\n")
-    athf_client.athf_bin = fake
-    with pytest.raises(AthfError, match="timed out"):
-        athf_client._run([str(fake)], timeout_sec=1)
+def test_run_raises_on_timeout(hecate_client: HecateClient, tmp_path: Path) -> None:
+    fake = _make_fake_hecate(tmp_path, "#!/bin/sh\nsleep 5\n")
+    hecate_client.hecate_bin = fake
+    with pytest.raises(HecateError, match="timed out"):
+        hecate_client._run([str(fake)], timeout_sec=1)
 
 
-def test_hypothesis_generator_end_to_end(athf_client: AthfClient, tmp_path: Path) -> None:
-    fake = _make_fake_athf(
+def test_hypothesis_generator_end_to_end(hecate_client: HecateClient, tmp_path: Path) -> None:
+    fake = _make_fake_hecate(
         tmp_path,
         f"#!/bin/sh\ncat <<'END'\n{SAMPLE_OUTPUT}\nEND\n",
     )
-    athf_client.athf_bin = fake
-    result = athf_client.hypothesis_generator("some intel")
+    hecate_client.hecate_bin = fake
+    result = hecate_client.hypothesis_generator("some intel")
     assert result.techniques == ["T1003.001"]
     assert "LSASS" in result.hypothesis
 
 
 def test_parse_research_output_skips_progress_banner() -> None:
-    result = AthfClient._parse_research_output(SAMPLE_RESEARCH_OUTPUT)
+    result = HecateClient._parse_research_output(SAMPLE_RESEARCH_OUTPUT)
     assert result.research_id == "R-0004"
     assert "scheduled tasks" in result.recommended_hypothesis
     assert not result.is_empty
@@ -243,7 +243,7 @@ def test_parse_research_output_skips_progress_banner() -> None:
 
 def test_parse_research_output_extracts_related_hunts() -> None:
     # related_work.sources is keyed "hunts/H-XXXX.md" (see
-    # HuntResearcherAgent._skill_4_related_work in athf) -- confirm the IDs
+    # HuntResearcherAgent._skill_4_related_work in hecate) -- confirm the IDs
     # get pulled back out, and that a source with an unexpected url shape
     # (no hunt ID match) is skipped rather than raising.
     output = """
@@ -260,43 +260,43 @@ def test_parse_research_output_extracts_related_hunts() -> None:
   }
 }
 """
-    result = AthfClient._parse_research_output(output)
+    result = HecateClient._parse_research_output(output)
     assert result.related_hunts == ["H-0602", "H-0578"]
 
 
 def test_parse_research_output_empty() -> None:
-    result = AthfClient._parse_research_output("")
+    result = HecateClient._parse_research_output("")
     assert result.is_empty
     assert result.research_id == ""
     assert result.related_hunts == []
 
 
 def test_parse_research_output_malformed_json_is_non_fatal() -> None:
-    result = AthfClient._parse_research_output("Starting Research: R-0001\n{not valid json")
+    result = HecateClient._parse_research_output("Starting Research: R-0001\n{not valid json")
     assert result.is_empty
 
 
-def test_research_new_end_to_end(athf_client: AthfClient, tmp_path: Path) -> None:
-    fake = _make_fake_athf(
+def test_research_new_end_to_end(hecate_client: HecateClient, tmp_path: Path) -> None:
+    fake = _make_fake_hecate(
         tmp_path,
         f"#!/bin/sh\ncat <<'END'\n{SAMPLE_RESEARCH_OUTPUT}\nEND\n",
     )
-    athf_client.athf_bin = fake
-    result = athf_client.research_new(topic="Scheduled task abuse", technique="T1053.005")
+    hecate_client.hecate_bin = fake
+    result = hecate_client.research_new(topic="Scheduled task abuse", technique="T1053.005")
     assert result.research_id == "R-0004"
 
 
 def test_research_new_builds_expected_command(
-    athf_client: AthfClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    hecate_client: HecateClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, list[str]] = {}
 
-    def fake_run(self: AthfClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
+    def fake_run(self: HecateClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
         captured["cmd"] = cmd
         return SAMPLE_RESEARCH_OUTPUT
 
-    monkeypatch.setattr(AthfClient, "_run", fake_run)
-    athf_client.research_new(topic="Scheduled task abuse", technique="T1053.005", depth="basic")
+    monkeypatch.setattr(HecateClient, "_run", fake_run)
+    hecate_client.research_new(topic="Scheduled task abuse", technique="T1053.005", depth="basic")
 
     cmd = captured["cmd"]
     assert "research" in cmd and "new" in cmd
@@ -307,59 +307,59 @@ def test_research_new_builds_expected_command(
 
 
 def test_research_new_omits_technique_when_none(
-    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+    hecate_client: HecateClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, list[str]] = {}
 
-    def fake_run(self: AthfClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
+    def fake_run(self: HecateClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
         captured["cmd"] = cmd
         return SAMPLE_RESEARCH_OUTPUT
 
-    monkeypatch.setattr(AthfClient, "_run", fake_run)
-    athf_client.research_new(topic="Scheduled task abuse")
+    monkeypatch.setattr(HecateClient, "_run", fake_run)
+    hecate_client.research_new(topic="Scheduled task abuse")
 
     assert "--technique" not in captured["cmd"]
 
 
 def test_research_new_appends_no_web_search_flag_when_disabled(
-    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+    hecate_client: HecateClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, list[str]] = {}
 
-    def fake_run(self: AthfClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
+    def fake_run(self: HecateClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
         captured["cmd"] = cmd
         return SAMPLE_RESEARCH_OUTPUT
 
-    monkeypatch.setattr(AthfClient, "_run", fake_run)
-    athf_client.research_new(topic="ThreatFox IOCs for 2026-08-05", web_search_enabled=False)
+    monkeypatch.setattr(HecateClient, "_run", fake_run)
+    hecate_client.research_new(topic="ThreatFox IOCs for 2026-08-05", web_search_enabled=False)
 
     assert "--no-web-search" in captured["cmd"]
 
 
 def test_research_new_omits_no_web_search_flag_by_default(
-    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+    hecate_client: HecateClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, list[str]] = {}
 
-    def fake_run(self: AthfClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
+    def fake_run(self: HecateClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
         captured["cmd"] = cmd
         return SAMPLE_RESEARCH_OUTPUT
 
-    monkeypatch.setattr(AthfClient, "_run", fake_run)
-    athf_client.research_new(topic="Scheduled task abuse")
+    monkeypatch.setattr(HecateClient, "_run", fake_run)
+    hecate_client.research_new(topic="Scheduled task abuse")
 
     assert "--no-web-search" not in captured["cmd"]
 
 
-def test_lookup_technique_end_to_end(athf_client: AthfClient, tmp_path: Path) -> None:
-    fake = _make_fake_athf(
+def test_lookup_technique_end_to_end(hecate_client: HecateClient, tmp_path: Path) -> None:
+    fake = _make_fake_hecate(
         tmp_path,
         '#!/bin/sh\nprintf \'%s\' \'{"id": "T1098", "name": "Account Manipulation", '
         '"tactics": ["persistence", "privilege-escalation"], "platforms": ["Windows", "Linux"], '
         '"is_subtechnique": false, "parent_id": null}\'\n',
     )
-    athf_client.athf_bin = fake
-    result = athf_client.lookup_technique("T1098")
+    hecate_client.hecate_bin = fake
+    result = hecate_client.lookup_technique("T1098")
     assert result == TechniqueMetadata(
         technique_id="T1098",
         tactics=["persistence", "privilege-escalation"],
@@ -369,49 +369,51 @@ def test_lookup_technique_end_to_end(athf_client: AthfClient, tmp_path: Path) ->
 
 
 def test_lookup_technique_builds_expected_command(
-    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+    hecate_client: HecateClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, list[str]] = {}
 
-    def fake_run(self: AthfClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
+    def fake_run(self: HecateClient, cmd: list[str], *, timeout_sec: int | None = None) -> str:
         captured["cmd"] = cmd
         return '{"id": "T1003.001", "tactics": ["credential-access"], "platforms": ["Windows"]}'
 
-    monkeypatch.setattr(AthfClient, "_run", fake_run)
-    athf_client.lookup_technique("T1003.001")
+    monkeypatch.setattr(HecateClient, "_run", fake_run)
+    hecate_client.lookup_technique("T1003.001")
 
     cmd = captured["cmd"]
     assert cmd[-4:] == ["attack", "lookup", "T1003.001", "--json"]
 
 
 def test_lookup_technique_not_found_returns_unresolved(
-    athf_client: AthfClient, tmp_path: Path
+    hecate_client: HecateClient, tmp_path: Path
 ) -> None:
-    fake = _make_fake_athf(
+    fake = _make_fake_hecate(
         tmp_path,
         '#!/bin/sh\nprintf \'%s\' \'{"error": "not_found", "technique_id": "T9999"}\'\n',
     )
-    athf_client.athf_bin = fake
-    result = athf_client.lookup_technique("T9999")
+    hecate_client.hecate_bin = fake
+    result = hecate_client.lookup_technique("T9999")
     assert result.found is False
     assert result.tactics == []
     assert result.platforms == []
 
 
-def test_lookup_technique_athf_failure_is_non_fatal(
-    athf_client: AthfClient, tmp_path: Path
+def test_lookup_technique_hecate_failure_is_non_fatal(
+    hecate_client: HecateClient, tmp_path: Path
 ) -> None:
-    fake = _make_fake_athf(tmp_path, "#!/bin/sh\necho boom >&2; exit 1\n")
-    athf_client.athf_bin = fake
-    result = athf_client.lookup_technique("T1098")
+    fake = _make_fake_hecate(tmp_path, "#!/bin/sh\necho boom >&2; exit 1\n")
+    hecate_client.hecate_bin = fake
+    result = hecate_client.lookup_technique("T1098")
     assert result.found is False
 
 
 def test_lookup_technique_malformed_json_is_non_fatal(
-    athf_client: AthfClient, monkeypatch: pytest.MonkeyPatch
+    hecate_client: HecateClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(AthfClient, "_run", lambda self, cmd, *, timeout_sec=None: "not valid json")
-    result = athf_client.lookup_technique("T1098")
+    monkeypatch.setattr(
+        HecateClient, "_run", lambda self, cmd, *, timeout_sec=None: "not valid json"
+    )
+    result = hecate_client.lookup_technique("T1098")
     assert result.found is False
 
 
@@ -425,7 +427,7 @@ def test_parse_output_captures_indicator_only_self_assessment() -> None:
         "Indicator-Only Source:\n"
         "  Source is a bare indicator list with no narrative.\n"
     )
-    result = AthfClient._parse_hypothesis_output(text)
+    result = HecateClient._parse_hypothesis_output(text)
 
     assert result.is_indicator_only is True
     assert result.evidence == "network_logs.dest_ip"
@@ -433,4 +435,4 @@ def test_parse_output_captures_indicator_only_self_assessment() -> None:
 
 def test_parse_output_defaults_indicator_only_to_false() -> None:
     text = "Hypothesis:\n  A real behavioral hypothesis.\n"
-    assert AthfClient._parse_hypothesis_output(text).is_indicator_only is False
+    assert HecateClient._parse_hypothesis_output(text).is_indicator_only is False

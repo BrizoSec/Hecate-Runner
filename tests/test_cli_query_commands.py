@@ -23,12 +23,12 @@ runner = CliRunner()
 def cli_env(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the CLI's own Settings() at the fake workspace, like `settings` does."""
     for var in [
-        "ATHF_WORKSPACE",
+        "HECATE_WORKSPACE",
         "HECATE_RUNNER_QUERY_PROVIDER",
         "HECATE_RUNNER_MAX_DRAFTS_PER_DAY",
     ]:
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("ATHF_WORKSPACE", str(workspace))
+    monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))
     monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "4")
     return workspace
 

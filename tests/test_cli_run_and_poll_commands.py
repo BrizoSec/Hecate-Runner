@@ -25,9 +25,9 @@ runner = CliRunner()
 
 @pytest.fixture
 def cli_env(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    for var in ["ATHF_WORKSPACE", "HECATE_RUNNER_MAX_DRAFTS_PER_DAY"]:
+    for var in ["HECATE_WORKSPACE", "HECATE_RUNNER_MAX_DRAFTS_PER_DAY"]:
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("ATHF_WORKSPACE", str(workspace))
+    monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))
     monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "4")
     return workspace
 
@@ -69,13 +69,15 @@ class TestRunCommand:
         assert result.exit_code == 0
         assert "no_cti" in result.stdout
 
-    def test_athf_error_exits_nonzero(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_hecate_error_exits_nonzero(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         fake_orch = type(
             "FakeOrch",
             (),
             {
                 "run_once": lambda self, dry_run=False: RunResult(
-                    outcome="athf_error", detail="boom"
+                    outcome="hecate_error", detail="boom"
                 )
             },
         )()

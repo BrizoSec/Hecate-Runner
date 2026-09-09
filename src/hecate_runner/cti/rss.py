@@ -12,6 +12,31 @@ to seed research topics) so it can ride along as structured metadata, but
 its absence doesn't exclude an entry — plenty of good tradecraft writeups
 describe TTPs in prose without citing a T-code.
 
+No structured indicators, deliberately. MISP and OTX both populate
+``metadata["indicators"]``; this provider does not, and that is a decision
+rather than an omission. Measured against the configured feeds: across 30
+live entries from 5 feeds, the summaries contained zero IPs, zero hashes and
+zero domains (two CVEs in total) -- a feed summary is an abstract, not an
+indicator list, so there is nothing to extract.
+
+The indicators do exist in the *linked article*, and defanging (``evil[.]com``,
+``hxxp://``) would make them cheap to extract precisely -- an author defangs a
+string exactly when they mean "this is an indicator", and no publisher defangs
+its own domain. Measured on six live articles, five carried 5-35 defanged
+indicators with no publisher-infrastructure false positives.
+
+That is not implemented because it would mean this runner making outbound
+requests to arbitrary third-party URLs that a feed points at, which is a
+network-posture decision that was taken deliberately against. Naive extraction
+without defanging is worse than nothing: one article yielded 21 "domains" that
+were mostly the publisher's own navigation and CDN links, which would have
+become Sigma rules matching the publisher.
+
+The consequence to expect: RSS-sourced hunts derive their data sources from
+ATT&CK techniques alone, and their grounding audits show fewer ``asserted``
+claims than MISP-sourced ones. That is the source being honestly poorer in
+checkable facts, not a defect in the pipeline.
+
 Cursor state (the set of already-routed entry IDs per feed URL) is
 persisted to disk so repeat polls don't re-ingest an entry, and a crash
 mid-cycle doesn't lose position. Unlike OTX's incremental "modified since"
@@ -309,6 +334,13 @@ def _entry_to_cti_item(feed_url: str, entry: dict[str, Any]) -> CTIItem:
             "entry_id": entry_id,
             "entry_title": entry.get("title", ""),
             "entry_link": entry.get("link", ""),
+            # Publisher-declared categories, structured alongside the blurb
+            # (which renders them as a "Tags:" line) so intake triage reads
+            # what the publisher said rather than re-parsing prose. 78% of
+            # live entries carry these; DFIR Report, Talos, Unit42,
+            # CrowdStrike, SentinelOne, Elastic and Red Canary all do, while
+            # Huntress and SANS publish none.
+            "entry_tags": [t.get("term", "") for t in entry.get("tags", []) if t.get("term")],
         },
         title=str(entry.get("title") or ""),
         source_url=str(entry.get("link") or ""),

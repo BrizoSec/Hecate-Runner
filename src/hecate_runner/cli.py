@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -29,10 +30,22 @@ from rich.console import Console
 from rich.table import Table
 
 from hecate_runner import __version__
+from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.config import Settings
+from hecate_runner.grounding import TechniqueFact, render_grounding_section
+from hecate_runner.hecate_client import HecateClient
+from hecate_runner.hunt_audit import (
+    HuntFacts,
+    audit_hunt_text,
+    parse_hunt_file,
+    replace_grounding_section,
+    research_text_for,
+)
+from hecate_runner.log_rotation import rotate_log_if_needed
 from hecate_runner.misp_poller import run_misp_poll
 from hecate_runner.orchestrator import build_default_orchestrator
 from hecate_runner.otx_poller import run_otx_poll
+from hecate_runner.parked_store import get_parked, list_parked, parked_dir, restore
 from hecate_runner.query_execution import ProposedQuery, get_provider, validate_guardrails
 from hecate_runner.query_store import PendingQueryStore
 from hecate_runner.rss_poller import run_rss_poll
@@ -40,10 +53,14 @@ from hecate_runner.state import OrchestratorState
 
 app = typer.Typer(
     name="hecate-runner",
-    help="Autonomous hunt draft orchestrator for ATHF.",
+    help="Autonomous hunt draft orchestrator for Hecate.",
     no_args_is_help=True,
     add_completion=False,
 )
+#: Technique IDs anywhere in a draft, so --check-attack validates the ones the
+#: hunt actually records rather than only those its CTI named.
+_DRAFT_TECHNIQUE_RE = re.compile(r"\bT\d{4}(?:\.\d{3})?\b")
+
 console = Console()
 
 
@@ -69,6 +86,14 @@ def _stdout_already_targets(path: Path) -> bool:
 
 def _configure_logging(settings: Settings, *, to_stdout: bool = True) -> None:
     settings.log_dir.mkdir(parents=True, exist_ok=True)
+    # Rotate before any handler opens the file. The orchestrator is a oneshot
+    # unit, so "at startup" is the only moment both writers -- this process and
+    # systemd's append: redirection -- are between writes.
+    rotate_log_if_needed(
+        settings.log_file,
+        max_bytes=settings.log_max_bytes,
+        backup_count=settings.log_backup_count,
+    )
     handlers: list[logging.Handler] = [logging.FileHandler(settings.log_file)]
     if to_stdout and not _stdout_already_targets(settings.log_file):
         handlers.append(logging.StreamHandler(sys.stdout))
@@ -87,7 +112,7 @@ def _configure_logging(settings: Settings, *, to_stdout: bool = True) -> None:
 def run(
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Show what would happen without calling athf."),
+        typer.Option("--dry-run", help="Show what would happen without calling hecate."),
     ] = False,
 ) -> None:
     """Execute one orchestrator cycle."""
@@ -224,6 +249,132 @@ def propose(
 
 
 @app.command()
+def audit(
+    hunt_ids: Annotated[
+        list[str] | None,
+        typer.Argument(help="Hunt IDs to audit (e.g. H-0616). Omit to audit every hunt on disk."),
+    ] = None,
+    update: Annotated[
+        bool,
+        typer.Option(
+            "--update", help="Rewrite each hunt's Grounding section with the fresh result."
+        ),
+    ] = False,
+    strict: Annotated[
+        bool,
+        typer.Option(
+            "--strict", help="Exit non-zero if any hunt carries a claim that traces to no source."
+        ),
+    ] = False,
+    check_attack: Annotated[
+        bool,
+        typer.Option(
+            "--check-attack",
+            help=(
+                "Validate technique IDs against the live ATT&CK matrix. Off by "
+                "default because it costs one hecate subprocess per technique."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Re-grade hunts already on disk against the evidence behind them.
+
+    The audit normally runs while a hunt is drafted, so every hunt written
+    before a given version of it was graded by an older one -- or, for drafts
+    predating the audit, not at all. This re-runs it after the fact.
+    """
+    settings = Settings()
+    _configure_logging(settings, to_stdout=False)
+
+    paths = _hunt_paths(settings, hunt_ids)
+    if not paths:
+        console.print("[yellow]No hunt files matched.[/yellow]")
+        raise typer.Exit(code=1 if hunt_ids else 0)
+
+    hecate = HecateClient(
+        workspace=settings.hecate_workspace,
+        hecate_bin=settings.hecate_bin_resolved,
+        env_overrides=settings.env_for_hecate(),
+    )
+
+    table = Table(title="Grounding audit", show_header=True, header_style="bold cyan")
+    for column in ("Hunt", "CTI", "Asserted", "Research-only", "Inferred", "Unsupported"):
+        table.add_column(column)
+
+    total_unsupported = 0
+    findings: list[tuple[str, list[str]]] = []
+
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        facts = parse_hunt_file(text)
+        technique_facts = _attack_facts(hecate, settings, facts, text) if check_attack else None
+        _, report = audit_hunt_text(
+            text,
+            research_text=research_text_for(settings.hecate_workspace, facts.research_id),
+            technique_facts=technique_facts,
+        )
+        counts = report.counts
+        total_unsupported += counts["unsupported"]
+        if report.unsupported:
+            findings.append((facts.hunt_id or path.stem, [c.value for c in report.unsupported]))
+
+        table.add_row(
+            facts.hunt_id or path.stem,
+            # A hunt whose CTI could not be recovered is called out rather than
+            # scored: every claim would grade unsupported for want of evidence,
+            # which reads as a fabrication finding and is not one.
+            "[green]ok[/green]" if facts.has_cti else "[yellow]not found[/yellow]",
+            str(counts["asserted"]),
+            str(counts["corroborated"]),
+            str(counts["derived"]),
+            f"[red]{counts['unsupported']}[/red]" if counts["unsupported"] else "0",
+        )
+
+        if update:
+            refreshed = replace_grounding_section(text, render_grounding_section(report))
+            if refreshed != text:
+                atomic_write_text(path, refreshed)
+
+    console.print(table)
+    for hunt_id, values in findings:
+        console.print(f"[red]{hunt_id}[/red]: {', '.join(values)}")
+    if update:
+        console.print(f"\n[dim]Grounding sections rewritten for {len(paths)} hunt(s).[/dim]")
+
+    if strict and total_unsupported:
+        raise typer.Exit(code=1)
+
+
+def _hunt_paths(settings: Settings, hunt_ids: list[str] | None) -> list[Path]:
+    """Resolve hunt IDs to files, or every hunt when none are named."""
+    root = settings.hunts_root
+    if not hunt_ids:
+        return sorted(root.rglob("H-*.md"))
+    resolved: list[Path] = []
+    for hunt_id in hunt_ids:
+        matches = sorted(root.rglob(f"{hunt_id}.md"))
+        if not matches:
+            console.print(f"[yellow]No file found for {hunt_id}.[/yellow]")
+            continue
+        resolved.extend(matches)
+    return resolved
+
+
+def _attack_facts(
+    hecate: HecateClient, settings: Settings, facts: HuntFacts, text: str
+) -> dict[str, TechniqueFact]:
+    """Look every technique in the draft up against the live matrix."""
+    collected: dict[str, TechniqueFact] = {}
+    for technique_id in sorted(set(_DRAFT_TECHNIQUE_RE.findall(text))):
+        meta = hecate.lookup_technique(technique_id, timeout_sec=settings.llm_timeout_sec)
+        collected[technique_id.upper()] = TechniqueFact(
+            valid=meta.found,
+            superseded_by=meta.technique_id if meta.superseded_from else "",
+        )
+    return collected
+
+
+@app.command()
 def pending() -> None:
     """List queries awaiting approval."""
     settings = Settings()
@@ -310,8 +461,8 @@ def approve(
 
     provider = get_provider(
         settings.query_provider,
-        athf_bin=settings.athf_bin_resolved,
-        workspace=settings.athf_workspace,
+        hecate_bin=settings.hecate_bin_resolved,
+        workspace=settings.hecate_workspace,
     )
     result = provider.execute(proposed)
 
@@ -364,7 +515,7 @@ def status() -> None:
     table.add_column("value")
 
     table.add_row("Version", __version__)
-    table.add_row("ATHF workspace", str(settings.athf_workspace))
+    table.add_row("Hecate workspace", str(settings.hecate_workspace))
     table.add_row("CTI provider", settings.cti_provider)
     table.add_row("CTI queue dir", str(settings.cti_queue_dir_resolved))
     table.add_row("Model", _effective_model(settings))
@@ -375,6 +526,98 @@ def status() -> None:
     console.print(table)
 
 
+parked_app = typer.Typer(help="Inspect and restore CTI held back by intake triage.")
+app.add_typer(parked_app, name="parked")
+
+
+@parked_app.command("list")
+def parked_list() -> None:
+    """List CTI held back by triage, newest first."""
+    settings = Settings()
+    items = list_parked(settings.cti_queue_dir_resolved)
+    if not items:
+        console.print("Nothing parked.")
+        return
+
+    table = Table(title="Parked CTI")
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Parked")
+    table.add_column("Source")
+    table.add_column("Title")
+    table.add_column("Why it was held back")
+    for item in items:
+        table.add_row(
+            item.park_id,
+            item.parked_at[:16].replace("T", " "),
+            item.source,
+            (item.title or "(untitled)")[:44],
+            item.reason[:52],
+        )
+    console.print(table)
+    console.print(
+        f"\n{len(items)} item(s) in {parked_dir(settings.cti_queue_dir_resolved)}. "
+        "Restore one with [bold]hecate-runner parked restore <id>[/bold]."
+    )
+
+
+@parked_app.command("show")
+def parked_show(
+    park_id: Annotated[str, typer.Argument(help="Parked item id, or an unambiguous prefix.")],
+) -> None:
+    """Print a parked item in full."""
+    settings = Settings()
+    item = get_parked(settings.cti_queue_dir_resolved, park_id)
+    if item is None:
+        console.print(f"[red]No parked item matching {park_id!r}.[/red]")
+        raise typer.Exit(1)
+    console.print(
+        f"[bold]{item.park_id}[/bold]  ({item.source}, parked {item.parked_at[:16].replace('T', ' ')})"
+    )
+    console.print(f"[bold]Held back because:[/bold] {item.reason}")
+    if item.source_url:
+        console.print(f"[bold]Link:[/bold] {item.source_url}")
+    console.print("")
+    console.print(item.content)
+
+
+@parked_app.command("restore")
+def parked_restore(
+    park_id: Annotated[str, typer.Argument(help="Parked item id, or an unambiguous prefix.")],
+) -> None:
+    """Put a parked item back on the file queue so a cycle picks it up."""
+    settings = Settings()
+    item = get_parked(settings.cti_queue_dir_resolved, park_id)
+    if item is None:
+        console.print(f"[red]No parked item matching {park_id!r}.[/red]")
+        raise typer.Exit(1)
+
+    next_file = settings.cti_next_file
+    if next_file.exists() and next_file.read_text().strip():
+        console.print(
+            f"[red]{next_file} already holds CTI.[/red] The file queue takes one item at a "
+            "time; restoring now would overwrite it. Let the next cycle consume it first."
+        )
+        raise typer.Exit(1)
+
+    restore(settings.cti_queue_dir_resolved, item)
+    console.print(f"Restored [cyan]{item.park_id}[/cyan] to {next_file}.")
+
+    # The restored item only gets picked up if the file provider is actually
+    # in the rotation, which it is not in a default multi-provider setup.
+    configured = (
+        settings.cti_multi_provider_names
+        if settings.cti_provider == "multi"
+        else [settings.cti_provider]
+    )
+    if "file" not in configured:
+        console.print(
+            "\n[yellow]Note:[/yellow] the file queue is not in your CTI rotation "
+            f"(currently: {', '.join(configured)}), so nothing will read it. Add "
+            "[bold]file[/bold] to HECATE_RUNNER_CTI_MULTI_PROVIDERS to have the next "
+            "cycle pick this up."
+        )
+
+
 @app.command()
 def config() -> None:
     """Dump effective settings as JSON (safe for pasting into an issue)."""
@@ -382,7 +625,7 @@ def config() -> None:
     dumped = settings.redacted_dict()
     # Add derived paths for clarity
     dumped["_derived"] = {
-        "athf_bin_resolved": str(settings.athf_bin_resolved),
+        "hecate_bin_resolved": str(settings.hecate_bin_resolved),
         "cti_queue_dir_resolved": str(settings.cti_queue_dir_resolved),
         "hunts_root": str(settings.hunts_root),
         "log_file": str(settings.log_file),
@@ -412,19 +655,19 @@ def doctor() -> None:
             console.print(f"    [yellow]note:[/yellow] {remediation}")
 
     check(
-        settings.athf_workspace.exists(),
-        f"ATHF workspace exists: {settings.athf_workspace}",
-        "Set ATHF_WORKSPACE or run `athf init`",
+        settings.hecate_workspace.exists(),
+        f"Hecate workspace exists: {settings.hecate_workspace}",
+        "Set HECATE_WORKSPACE or run `hecate init`",
     )
     check(
-        settings.athf_bin_resolved.exists(),
-        f"athf CLI at {settings.athf_bin_resolved}",
-        "Install ATHF inside a venv and set ATHF_BIN if not at default location",
+        settings.hecate_bin_resolved.exists(),
+        f"hecate-agent CLI at {settings.hecate_bin_resolved}",
+        "Install Hecate inside a venv and set HECATE_BIN if not at default location",
     )
     check(
-        settings.hunts_root.exists() or settings.athf_workspace.exists(),
+        settings.hunts_root.exists() or settings.hecate_workspace.exists(),
         f"Hunts root writable: {settings.hunts_root}",
-        "Run `athf init` inside the workspace",
+        "Run `hecate init` inside the workspace",
     )
     check(
         _has_write(settings.log_dir),
@@ -474,7 +717,7 @@ def doctor() -> None:
             _tavily_key_available(settings),
             "TAVILY_API_KEY set (research grounding is mandatory-when-enabled)",
             "Research will still run without it, but skips the adversary-tradecraft "
-            "web-search skill — set TAVILY_API_KEY in the ATHF workspace .env for full "
+            "web-search skill — set TAVILY_API_KEY in the Hecate workspace .env for full "
             "grounding. Get a free-tier key at https://tavily.com",
         )
     warn(
@@ -487,7 +730,7 @@ def doctor() -> None:
             _env_key_available(settings, "SPLUNK_HOST")
             and _env_key_available(settings, "SPLUNK_TOKEN"),
             "SPLUNK_HOST / SPLUNK_TOKEN set (required for HECATE_RUNNER_QUERY_PROVIDER=splunk)",
-            "Set both in the ATHF workspace .env — see `athf splunk test` to verify connectivity "
+            "Set both in the Hecate workspace .env — see `hecate-agent splunk test` to verify connectivity "
             "before running `hecate-runner approve` against it.",
         )
     else:
@@ -506,42 +749,44 @@ def doctor() -> None:
 
 
 def _effective_model(settings: Settings) -> str:
-    """Render the LLM the athf subprocess will actually use.
+    """Render the LLM the hecate subprocess will actually use.
 
     Unset here means the workspace's own .env supplies it, so resolve from
     there rather than printing a placeholder -- the point of the row is to
     show what will run, and "(workspace)" answers a different question.
     """
-    provider = settings.athf_llm_provider or _workspace_env_value(settings, "ATHF_LLM_PROVIDER")
-    model = settings.athf_llm_model or _workspace_env_value(settings, "ATHF_LLM_MODEL")
+    provider = settings.hecate_llm_provider or _workspace_env_value(settings, "HECATE_LLM_PROVIDER")
+    model = settings.hecate_llm_model or _workspace_env_value(settings, "HECATE_LLM_MODEL")
     if not provider and not model:
-        return "(athf autodetects — none set here or in the workspace .env)"
-    suffix = "" if (settings.athf_llm_provider or settings.athf_llm_model) else "  (from workspace)"
+        return "(hecate autodetects — none set here or in the workspace .env)"
+    suffix = (
+        "" if (settings.hecate_llm_provider or settings.hecate_llm_model) else "  (from workspace)"
+    )
     return f"{provider or '?'}:{model or '?'}{suffix}"
 
 
 def _workspace_env_value(settings: Settings, key_name: str) -> str:
-    """Read one key from the ATHF workspace's own .env, or "" if absent."""
+    """Read one key from the Hecate workspace's own .env, or "" if absent."""
     if os.getenv(key_name):
         return os.environ[key_name]
-    workspace_env = settings.athf_workspace / ".env"
+    workspace_env = settings.hecate_workspace / ".env"
     if workspace_env.exists():
         return dotenv_values(workspace_env).get(key_name) or ""
     return ""
 
 
 def _env_key_available(settings: Settings, key_name: str) -> bool:
-    """Check both places an ATHF-subprocess-only env var could actually be set.
+    """Check both places an Hecate-subprocess-only env var could actually be set.
 
-    ``athf``'s own CLI calls ``load_dotenv()`` from its cwd (the ATHF
+    ``hecate-agent``'s own CLI calls ``load_dotenv()`` from its cwd (the Hecate
     workspace) independently of whatever env hecate-runner was started with — so
-    a key being absent from hecate-runner's own process env doesn't mean the athf
+    a key being absent from hecate-runner's own process env doesn't mean the hecate
     subprocess won't see it; it may already be set in the workspace's own
     .env file.
     """
     if os.getenv(key_name):
         return True
-    workspace_env = settings.athf_workspace / ".env"
+    workspace_env = settings.hecate_workspace / ".env"
     if workspace_env.exists():
         return bool(dotenv_values(workspace_env).get(key_name))
     return False

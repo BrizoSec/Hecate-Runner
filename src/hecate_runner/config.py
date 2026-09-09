@@ -18,33 +18,33 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore",  # ATHF_* and TAVILY_* pass-through env vars are fine to ignore
+        extra="ignore",  # HECATE_* and TAVILY_* pass-through env vars are fine to ignore
     )
 
-    # --- ATHF workspace -----------------------------------------------------
-    athf_workspace: Path = Field(
-        # The ATHF workspace is Hecate-Core. This used to default to
+    # --- Hecate workspace -----------------------------------------------------
+    hecate_workspace: Path = Field(
+        # The Hecate workspace is Hecate-Core. This used to default to
         # ~/agentic-threat-hunting-framework, which no longer exists -- so a
-        # deployment with no ATHF_WORKSPACE set resolved athf_bin and
+        # deployment with no HECATE_WORKSPACE set resolved hecate_bin and
         # cti_queue_dir under a missing directory instead of failing clearly.
         default=Path.home() / "betas" / "Hecate-Core",
-        description="Path to the ATHF workspace directory (Hecate-Core)",
+        description="Path to the Hecate workspace directory (Hecate-Core)",
     )
-    athf_bin: Path | None = Field(
+    hecate_bin: Path | None = Field(
         default=None,
-        description="Path to the athf CLI. Defaults to <workspace>/.venv/bin/athf",
+        description="Path to the hecate-agent CLI. Defaults to <workspace>/.venv/bin/hecate-agent",
     )
 
-    # --- LLM provider (passed through to athf via env) ---------------------
-    # Unset by default so the ATHF workspace's own .env owns LLM choice. These
-    # used to default to ollama/qwen2.5:7b and were force-passed on every athf
+    # --- LLM provider (passed through to hecate via env) ---------------------
+    # Unset by default so the Hecate workspace's own .env owns LLM choice. These
+    # used to default to ollama/qwen2.5:7b and were force-passed on every hecate
     # call, which silently overrode whatever the workspace had configured --
     # the same two keys were therefore duplicated in both .env files, and
     # editing the workspace copy did nothing while looking like it worked.
     # Set either here only to deliberately override the workspace for
     # orchestrated runs.
-    athf_llm_provider: str | None = Field(default=None)
-    athf_llm_model: str | None = Field(default=None)
+    hecate_llm_provider: str | None = Field(default=None)
+    hecate_llm_model: str | None = Field(default=None)
 
     # --- Orchestrator guardrails -------------------------------------------
     max_drafts_per_day: int = Field(
@@ -59,9 +59,9 @@ class Settings(BaseSettings):
         le=3600,
         alias="HECATE_RUNNER_LLM_TIMEOUT_SEC",
         description=(
-            "Per-subprocess-call timeout for each `athf` invocation (research, "
+            "Per-subprocess-call timeout for each `hecate-agent` invocation (research, "
             "hypothesis-generator, technique lookup). Must comfortably exceed "
-            "research_depth's own ceiling (advanced: ~15-20 min) or `athf "
+            "research_depth's own ceiling (advanced: ~15-20 min) or `hecate "
             "research new` gets killed mid-run and the cycle refunds its quota "
             "instead of producing a draft. 1500s (25 min) leaves headroom above "
             "advanced depth's stated ceiling; the systemd unit's own "
@@ -88,6 +88,27 @@ class Settings(BaseSettings):
             "automatically so one high-volume source can't crowd out the others."
         ),
     )
+    log_max_bytes: int = Field(
+        default=5 * 1024 * 1024,
+        ge=0,
+        alias="HECATE_RUNNER_LOG_MAX_BYTES",
+        description=(
+            "Rotate the orchestrator log once it exceeds this size, checked at "
+            "the start of every run. 0 disables rotation. Rotation copies the "
+            "file aside and truncates it in place rather than renaming it, "
+            "because systemd also holds this file open (StandardOutput=append:) "
+            "and a rename would leave it writing to the archive."
+        ),
+    )
+    log_backup_count: int = Field(
+        default=5,
+        ge=0,
+        alias="HECATE_RUNNER_LOG_BACKUP_COUNT",
+        description=(
+            "How many rotated logs to keep (orchestrator.log.1 … .N). 0 keeps "
+            "none, truncating without history."
+        ),
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO",
         alias="HECATE_RUNNER_LOG_LEVEL",
@@ -103,12 +124,12 @@ class Settings(BaseSettings):
         default=True,
         alias="HECATE_RUNNER_RESEARCH_ENABLED",
         description=(
-            "Run `athf research new` (web-grounded 5-skill research) before "
+            "Run `hecate-agent research new` (web-grounded 5-skill research) before "
             "hypothesis generation. When enabled, a research failure aborts "
             "the cycle (refunds the quota, leaves the CTI queued for retry) "
             "rather than falling back to an ungrounded hypothesis — cold "
             "generation measured ~30% accuracy on known-answer fixtures "
-            "(`athf eval`). Set to false to explicitly opt out of research "
+            "(`hecate-agent eval`). Set to false to explicitly opt out of research "
             "and always generate ungrounded, e.g. for offline testing."
         ),
     )
@@ -126,13 +147,15 @@ class Settings(BaseSettings):
         ),
     )
     sigma_timeout_sec: int = Field(
-        default=900,
+        default=1800,
         ge=30,
         alias="HECATE_RUNNER_SIGMA_TIMEOUT_SEC",
         description=(
-            "Per-call timeout for Sigma drafting. Generous by default: one "
-            "call writes a rule for every applicable log source, which on a "
-            "local 14B model is several minutes of generation."
+            "Timeout for the whole Sigma drafting subprocess. Generous because "
+            "drafting makes one LLM call per applicable log source, and a hunt "
+            "can apply to six -- so the worst case is six model timeouts back "
+            "to back, not one. Each individual call is bounded by "
+            "HECATE_OLLAMA_TIMEOUT_SEC in the workspace .env."
         ),
     )
     research_depth: Literal["basic", "advanced"] = Field(
@@ -140,7 +163,7 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_RESEARCH_DEPTH",
         description=(
             "basic (~5 min) or advanced (~15-20 min, full 5-skill methodology "
-            "-- ATHF's own documented default). advanced is the default here "
+            "-- Hecate's own documented default). advanced is the default here "
             "too, on the condition that llm_timeout_sec (this file) and the "
             "systemd unit's TimeoutStartSec (systemd/hecate-runner-orchestrator."
             "service) are both raised to comfortably exceed it -- both have "
@@ -329,6 +352,22 @@ class Settings(BaseSettings):
     # an API key.
     _SENSITIVE_FIELDS: ClassVar[set[str]] = {"otx_api_key", "slack_webhook_url", "misp_api_key"}
 
+    # --- CTI intake triage ----------------------------------------------------
+    cti_triage: Literal["park", "off"] = Field(
+        default="park",
+        alias="HECATE_RUNNER_CTI_TRIAGE",
+        description=(
+            "Hold back CTI that is commentary rather than intelligence -- a "
+            "conference recap, a weekly news roundup, a product post. 'park' "
+            "writes such items whole to <cti_queue>/parked/ with the reason "
+            "attached, where `hecate-runner parked` lists them and "
+            "`hecate-runner parked restore <id>` puts one back; nothing is "
+            "ever discarded, which is what makes gating on a heuristic "
+            "acceptable. 'off' drafts from everything, the behaviour before "
+            "this existed."
+        ),
+    )
+
     # --- Query execution ("propose, don't run") --------------------------------
     query_provider: Literal["mock", "splunk"] = Field(
         default="mock",
@@ -336,8 +375,8 @@ class Settings(BaseSettings):
         description=(
             "Backend for `hecate-runner approve`. 'mock' touches nothing real — the "
             "default until real data-source access is configured. 'splunk' "
-            "shells out to `athf splunk search` (requires SPLUNK_HOST/SPLUNK_TOKEN "
-            "in the ATHF workspace)."
+            "shells out to `hecate-agent splunk search` (requires SPLUNK_HOST/SPLUNK_TOKEN "
+            "in the Hecate workspace)."
         ),
     )
     max_query_time_range_days: int = Field(
@@ -358,12 +397,12 @@ class Settings(BaseSettings):
     # --- Derived paths ------------------------------------------------------
 
     @property
-    def athf_bin_resolved(self) -> Path:
-        return self.athf_bin or (self.athf_workspace / ".venv" / "bin" / "athf")
+    def hecate_bin_resolved(self) -> Path:
+        return self.hecate_bin or (self.hecate_workspace / ".venv" / "bin" / "hecate-agent")
 
     @property
     def cti_queue_dir_resolved(self) -> Path:
-        return self.cti_queue_dir or (self.athf_workspace / "cti_queue")
+        return self.cti_queue_dir or (self.hecate_workspace / "cti_queue")
 
     @property
     def cti_next_file(self) -> Path:
@@ -375,7 +414,7 @@ class Settings(BaseSettings):
 
     @property
     def log_dir(self) -> Path:
-        return self.athf_workspace / "logs"
+        return self.hecate_workspace / "logs"
 
     @property
     def log_file(self) -> Path:
@@ -383,15 +422,15 @@ class Settings(BaseSettings):
 
     @property
     def state_file(self) -> Path:
-        return self.athf_workspace / ".orchestrator_state.json"
+        return self.hecate_workspace / ".orchestrator_state.json"
 
     @property
     def otx_cursor_file(self) -> Path:
-        return self.athf_workspace / ".otx_cursor_state.json"
+        return self.hecate_workspace / ".otx_cursor_state.json"
 
     @property
     def rss_cursor_file(self) -> Path:
-        return self.athf_workspace / ".rss_cursor_state.json"
+        return self.hecate_workspace / ".rss_cursor_state.json"
 
     @property
     def rss_feed_urls(self) -> list[str]:
@@ -400,7 +439,7 @@ class Settings(BaseSettings):
 
     @property
     def misp_cursor_file(self) -> Path:
-        return self.athf_workspace / ".misp_cursor_state.json"
+        return self.hecate_workspace / ".misp_cursor_state.json"
 
     @property
     def misp_org_allowlist(self) -> list[str]:
@@ -414,36 +453,36 @@ class Settings(BaseSettings):
 
     @property
     def multi_cursor_file(self) -> Path:
-        return self.athf_workspace / ".multi_cti_cursor_state.json"
+        return self.hecate_workspace / ".multi_cti_cursor_state.json"
 
     @property
     def hunts_root(self) -> Path:
-        return self.athf_workspace / "hunts"
+        return self.hecate_workspace / "hunts"
 
     @property
     def pending_queries_dir(self) -> Path:
-        return self.athf_workspace / ".pending_queries"
+        return self.hecate_workspace / ".pending_queries"
 
     # --- Validators ---------------------------------------------------------
 
-    @field_validator("athf_workspace")
+    @field_validator("hecate_workspace")
     @classmethod
     def _expand_workspace(cls, v: Path) -> Path:
         return v.expanduser().resolve()
 
-    def env_for_athf(self) -> dict[str, str]:
-        """Env vars to pass through when subprocessing the athf CLI.
+    def env_for_hecate(self) -> dict[str, str]:
+        """Env vars to pass through when subprocessing the hecate-agent CLI.
 
-        LLM keys are included only when explicitly set. athf calls
+        LLM keys are included only when explicitly set. hecate calls
         load_dotenv() from the workspace with override=False, so anything
         passed here wins over the workspace's own .env -- omitting the unset
         ones is what lets that file stay authoritative.
         """
-        env = {"ATHF_WORKSPACE": str(self.athf_workspace)}
-        if self.athf_llm_provider:
-            env["ATHF_LLM_PROVIDER"] = self.athf_llm_provider
-        if self.athf_llm_model:
-            env["ATHF_LLM_MODEL"] = self.athf_llm_model
+        env = {"HECATE_WORKSPACE": str(self.hecate_workspace)}
+        if self.hecate_llm_provider:
+            env["HECATE_LLM_PROVIDER"] = self.hecate_llm_provider
+        if self.hecate_llm_model:
+            env["HECATE_LLM_MODEL"] = self.hecate_llm_model
         return env
 
     def redacted_dict(self) -> dict[str, Any]:

@@ -132,18 +132,129 @@ _FILE_SUFFIXES = frozenset(
 #: Overlord RAT") that then propagated into a hunt file as if reported.
 _ACTOR_DESIGNATOR_RE = re.compile(r"\b(?:APT|UNC|FIN|TA|TEMP)[-\s]?\d{2,5}\b", re.IGNORECASE)
 
+#: Malware-category nouns, shared by the collocation pattern and the
+#: all-caps sentence scan so the two cannot drift apart.
+_MALWARE_CATEGORY = (
+    "backdoor|ransomware|stealer|loader|trojan|implant|botnet|dropper|wiper|webshell|rat"
+)
+
 #: "<Name> backdoor", "<Name> ransomware" -- a capitalised token immediately
 #: before a malware-category noun is a claim about a specific family.
+#:
+#: The capitalisation anchor is load-bearing, and must not sit under a global
+#: ``re.IGNORECASE``: with one, ``[A-Z]`` matches lowercase too, and the OTX
+#: tag "chrome rat" was captured as a malware family named `chrome`. Only the
+#: category noun is case-insensitive.
 _MALWARE_COLLOCATION_RE = re.compile(
-    r"\b([A-Z][A-Za-z0-9._-]{2,30})\s+"
-    r"(?:backdoor|ransomware|stealer|loader|trojan|implant|botnet|dropper|wiper|webshell|rat)\b",
-    re.IGNORECASE,
+    r"\b([A-Z][A-Za-z0-9._-]{2,30})\s+(?i:" + _MALWARE_CATEGORY + r")s?\b"
 )
 
 #: CamelCase family names that carry their own category suffix ("PureRAT").
 #: The lowercase run before the suffix is what keeps ordinary all-caps words
 #: like "GREAT" out.
 _CAMEL_MALWARE_RE = re.compile(r"\b[A-Z][a-z0-9]+(?:RAT|Bot|Loader|Stealer|Locker)\b")
+
+#: Families written in all caps ("PEEP", "SNOWLIGHT") are missed by both
+#: patterns above: the collocation pattern yields whatever token precedes the
+#: category noun -- on H-0003 the generic "Browser" -- and _CAMEL_MALWARE_RE
+#: needs a lowercase run. This scan is deliberately bounded twice over: only
+#: inside a sentence that already names a malware category, and only tokens of
+#: four characters or more, which excludes the bulk of ordinary acronyms
+#: (CVE, DNS, API, RAT) without needing to list them.
+#:
+#: Measured against 50 live OTX pulses before being added: 11 distinct
+#: candidates, of which 7 were real names and 4 were the protocol acronyms
+#: denied below.
+_ALLCAPS_FAMILY_RE = re.compile(r"\b[A-Z][A-Z0-9]{3,14}\b")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n")
+_CATEGORY_NOUN_RE = re.compile(r"\b(?:" + _MALWARE_CATEGORY + r")s?\b", re.IGNORECASE)
+
+#: All-caps tokens that are vocabulary rather than names. Protocols, formats
+#: and technique nouns -- the false positives the measurement above found,
+#: plus the near neighbours of each.
+_ACRONYM_STOPWORDS = frozenset(
+    {
+        "http",
+        "https",
+        "html",
+        "xhtml",
+        "json",
+        "yaml",
+        "xml",
+        "csv",
+        "socks",
+        "socks4",
+        "socks5",
+        "hvnc",
+        "vnc",
+        "smtp",
+        "imap",
+        "pop3",
+        "ldap",
+        "ntlm",
+        "lsass",
+        "dcom",
+        "wmic",
+        "icmp",
+        "dhcp",
+        "snmp",
+        "tls",
+        "ssl",
+        "ssh",
+        "sftp",
+        "webdav",
+        "uefi",
+        "bios",
+        "ntfs",
+        "mitre",
+        "attck",
+        "osint",
+        "dfir",
+        "cisa",
+        "nist",
+        "siem",
+        "soar",
+        "ueba",
+        "iocs",
+        "ttps",
+        "cves",
+        "urls",
+        "apis",
+        "dlls",
+        "exes",
+        "powershell",
+        "cmdline",
+        "base64",
+        "utf8",
+        "ascii",
+        "sha256",
+        "sha1",
+        "md5",
+        "aes256",
+        "hmac",
+        "rsa2048",
+        "curl",
+        "wget",
+        # Our own scaffolding and provider labels, not intelligence. The hunt
+        # template's "DRAFT" marker sits in a title line that also names a
+        # category ("... Ransomware Variant ..."), so it was reported as an
+        # UNSUPPORTED malware name -- a false fabrication alarm on every draft.
+        "draft",
+        "misp",
+        "hunt",
+        "lock",
+        "todo",
+        "note",
+        "none",
+        "null",
+        "true",
+        "false",
+        "info",
+        "warn",
+        "error",
+        "rss",
+    }
+)
 
 #: Capitalised words that precede a category noun without naming anything --
 #: sentence openers, determiners and the generic subject the hypothesis
@@ -189,10 +300,94 @@ _ENTITY_STOPWORDS = frozenset(
         "using",
         "detects",
         "detecting",
+        # Generic technology and platform nouns. These are capitalised and do
+        # sit before a category noun -- "Browser RAT", "Windows loader" -- but
+        # name a platform, not a family. "Browser" was graded an asserted
+        # malware name on H-0003.
+        "browser",
+        "chrome",
+        "chromium",
+        "edge",
+        "firefox",
+        "safari",
+        "windows",
+        "linux",
+        "macos",
+        "android",
+        "ios",
+        "office",
+        "outlook",
+        "extension",
+        "banking",
+        "mobile",
+        "remote",
+        "native",
+        "persistent",
+        "generic",
+        "modular",
+        "commodity",
+        # Languages, runtimes and Microsoft features that sit before a
+        # category noun ("JavaScript loader", "IoT botnet"). Found by running
+        # the extractor over 50 live OTX pulses, not guessed.
+        "javascript",
+        "powershell",
+        "vbscript",
+        "typescript",
+        "bitlocker",
+        "net",
+        "iot",
+        "multiple",
+        "several",
+        "various",
+        "python",
+        "golang",
+        "rust",
+        "java",
     }
 )
 
+
+def _is_generic_entity(cleaned: str) -> bool:
+    """Reject the shapes that name a technology rather than a family.
+
+    A "-based" token is always a description of implementation, never a name:
+    the live corpus produced "Rust-based" from "Rust-based loader".
+    """
+    lowered = cleaned.lower()
+    return lowered in _ENTITY_STOPWORDS or lowered.endswith("-based")
+
+
 _YAML_BLOCK_RE = re.compile(r"```yaml\n(.*?)```", re.DOTALL)
+
+
+def _detection_section(rule_body: str) -> str:
+    """The `detection:` mapping of a Sigma rule, or "" if it has none.
+
+    Indicator claims are scoped to this rather than the whole rule because
+    this is the only part that would actually be run. The surrounding
+    metadata legitimately carries hostnames that are not indicators at all:
+    `references:` cites the article the hunt came from, so auditing the whole
+    block reported the *publisher's* domain -- `unit42.paloaltonetworks.com`,
+    `socradar.io` -- as an indicator "asserted by CTI". It is asserted by the
+    CTI, because the citation really is in the source; it is simply not an
+    indicator, and on a hunt whose real IOCs were dropped it was the only
+    indicator row, which made an evidence-free draft look evidenced.
+
+    A fabricated C2 domain still lands in `detection:`, so narrowing here
+    costs the fabrication check nothing.
+    """
+    lines = rule_body.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.rstrip() == "detection:")
+    except StopIteration:
+        return ""
+    collected: list[str] = []
+    for line in lines[start + 1 :]:
+        # A non-indented, non-blank line is the next top-level Sigma key.
+        if line.strip() and not line[:1].isspace():
+            break
+        collected.append(line)
+    return "\n".join(collected)
 
 
 @dataclass
@@ -200,7 +395,7 @@ class TechniqueFact:
     """What the live ATT&CK matrix says about one technique ID.
 
     Supplied by the caller rather than looked up here: the orchestrator
-    already resolves every technique through ``athf attack lookup`` to derive
+    already resolves every technique through ``hecate-agent attack lookup`` to derive
     tactics and platforms, and each of those is a subprocess call. Re-running
     them inside the audit would double the cost of a draft to re-learn what
     the caller just found out.
@@ -256,7 +451,7 @@ def _named_entities(prose: str) -> list[str]:
 
     def keep(value: str) -> None:
         cleaned = value.strip(".,;:'\"")
-        if not cleaned or cleaned.lower() in _ENTITY_STOPWORDS:
+        if not cleaned or _is_generic_entity(cleaned):
             return
         if cleaned.lower() not in {f.lower() for f in found}:
             found.append(cleaned)
@@ -267,6 +462,15 @@ def _named_entities(prose: str) -> list[str]:
         keep(match)
     for match in _CAMEL_MALWARE_RE.findall(prose):
         keep(match)
+
+    # All-caps families, scoped to sentences that already name a category.
+    for sentence in _SENTENCE_SPLIT_RE.split(prose):
+        if not _CATEGORY_NOUN_RE.search(sentence):
+            continue
+        for token in _ALLCAPS_FAMILY_RE.findall(sentence):
+            if token.lower() in _ACRONYM_STOPWORDS:
+                continue
+            keep(token)
     return found
 
 
@@ -371,11 +575,17 @@ def audit_draft(
         add("entity", entity, status, f"actor/malware name {note}")
 
     # --- Indicators inside generated rules --------------------------------
-    # Scoped to the rule bodies because that is what would actually be run,
-    # and because prose legitimately paraphrases.
+    # Scoped to each rule's `detection:` section because that is what would
+    # actually be run. Prose legitimately paraphrases, and a rule's own
+    # metadata legitimately cites sources -- see _detection_section.
     for block in _YAML_BLOCK_RE.findall(draft_text):
+        # A block with no `detection:` key is not a runnable rule. Audit the
+        # whole of it rather than skipping it: over-reporting on a malformed
+        # rule is the safe error for an audit, and the Sigma validator
+        # rejects those before they are ever attached to a hunt.
+        detection = _detection_section(block) or block
         for pattern, label in ((_IPV4_RE, "ip"), (_DOMAIN_RE, "domain"), (_HASH_RE, "hash")):
-            for value in pattern.findall(block):
+            for value in pattern.findall(detection):
                 if _scaffolding(value):
                     continue
                 if label == "domain" and _looks_like_a_filename(value):

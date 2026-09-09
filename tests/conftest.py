@@ -9,21 +9,21 @@ from typing import Any
 
 import pytest
 
-from hecate_runner.athf_client import AthfClient, HypothesisResult, ResearchResult
 from hecate_runner.config import Settings
 from hecate_runner.cti import FileQueueProvider
+from hecate_runner.hecate_client import HecateClient, HypothesisResult, ResearchResult
 
 
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
-    """A fake ATHF workspace with the standard directory layout."""
-    ws = tmp_path / "athf"
+    """A fake Hecate workspace with the standard directory layout."""
+    ws = tmp_path / "hecate"
     (ws / ".venv" / "bin").mkdir(parents=True)
     (ws / "hunts" / "2026" / "Q3").mkdir(parents=True)
     (ws / "cti_queue" / "processed").mkdir(parents=True)
     (ws / "logs").mkdir()
-    # Fake athf binary — an executable no-op
-    bin_path = ws / ".venv" / "bin" / "athf"
+    # Fake hecate-agent binary — an executable no-op
+    bin_path = ws / ".venv" / "bin" / "hecate-agent"
     bin_path.write_text("#!/bin/sh\nexit 0\n")
     bin_path.chmod(0o755)
     return ws
@@ -34,8 +34,8 @@ def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Setti
     """Settings pointing at the fake workspace."""
     # Wipe any leaked env vars so tests are deterministic
     for var in [
-        "ATHF_WORKSPACE",
-        "ATHF_BIN",
+        "HECATE_WORKSPACE",
+        "HECATE_BIN",
         "HECATE_RUNNER_MAX_DRAFTS_PER_DAY",
         "HECATE_RUNNER_LLM_TIMEOUT_SEC",
         "HECATE_RUNNER_CTI_PROVIDER",
@@ -59,7 +59,7 @@ def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Setti
     ]:
         monkeypatch.delenv(var, raising=False)
 
-    monkeypatch.setenv("ATHF_WORKSPACE", str(workspace))
+    monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))
     monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "4")
 
     yield Settings(_env_file=None)  # type: ignore[call-arg]
@@ -130,9 +130,9 @@ def file_queue_with_cti(workspace: Path) -> FileQueueProvider:
 
 
 @pytest.fixture
-def athf_client(workspace: Path) -> AthfClient:
-    return AthfClient(
-        athf_bin=workspace / ".venv" / "bin" / "athf",
+def hecate_client(workspace: Path) -> HecateClient:
+    return HecateClient(
+        hecate_bin=workspace / ".venv" / "bin" / "hecate-agent",
         workspace=workspace,
-        env_overrides={"ATHF_LLM_PROVIDER": "ollama"},
+        env_overrides={"HECATE_LLM_PROVIDER": "ollama"},
     )

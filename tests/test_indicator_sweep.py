@@ -85,7 +85,7 @@ class TestBuildIndicatorSweep:
     def test_technique_list_is_empty(self) -> None:
         """An indicator list evidences no ATT&CK technique. Empty is the
         correct answer -- and now renders as an explicit reviewer-facing gap
-        rather than a "TXXXX" placeholder that failed `athf hunt validate`."""
+        rather than a "TXXXX" placeholder that failed `hecate-agent hunt validate`."""
         assert build_indicator_sweep(THREATFOX_BLURB).techniques == []
 
     def test_telemetry_is_derived_from_indicator_types_present(self) -> None:

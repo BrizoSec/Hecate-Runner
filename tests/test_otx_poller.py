@@ -79,3 +79,70 @@ def test_otx_error_is_captured(
     assert result.error == "boom"
     assert not result.ok
     mock_otx_provider.return_value.close.assert_called_once()
+
+
+# --- Indicator values reach the blurb (G8) ---------------------------------
+
+from hecate_runner.cti.otx import _indicator_detail_lines, _pulse_to_blurb  # noqa: E402
+
+
+def _pulse(indicators, **extra):
+    base = {"name": "PEEP: A Browser RAT", "description": "A toolkit.", "indicators": indicators}
+    base.update(extra)
+    return base
+
+
+def _hashes(n):
+    return [{"type": "FileHash-SHA256", "indicator": f"{i:064x}"} for i in range(n)]
+
+
+def test_concrete_values_reach_the_blurb():
+    """The counts line said 13 hashes existed without naming one, so the
+    hunt built from it contained none of them."""
+    blurb = _pulse_to_blurb(_pulse(_hashes(3)))
+    assert "Key indicators:" in blurb
+    assert f"{0:064x}" in blurb
+
+
+def test_the_counts_line_survives_alongside_the_values():
+    blurb = _pulse_to_blurb(_pulse(_hashes(3)))
+    assert "Indicators (3 total): FileHash-SHA256 (3)" in blurb
+
+
+def test_a_bulk_dump_is_still_summarised_as_counts_only():
+    """Past the ceiling the list is a feed, not tradecraft."""
+    blurb = _pulse_to_blurb(_pulse(_hashes(41)))
+    assert "Indicators (41 total)" in blurb
+    assert "Key indicators:" not in blurb
+
+
+def test_values_are_capped_per_type_and_the_elision_is_reported():
+    lines = _indicator_detail_lines(_pulse(_hashes(12)))
+    rendered = "\n".join(lines)
+    assert "(+2 more)" in rendered
+
+
+def test_cves_are_named_even_though_sigma_cannot_match_them():
+    """Naming the CVE the source cited is what lets the audit tell it from
+    an invented one."""
+    blurb = _pulse_to_blurb(_pulse([{"type": "CVE", "indicator": "CVE-2026-4021"}, *_hashes(1)]))
+    assert "CVE-2026-4021" in blurb
+
+
+def test_the_rendered_shape_matches_the_misp_provider():
+    """hunt_audit and the grounding audit already parse the MISP shape."""
+    lines = _indicator_detail_lines(_pulse([{"type": "domain", "indicator": "api.wiresguard.com"}]))
+    assert lines[0] == "Key indicators:"
+    assert lines[1] == "  domain: api.wiresguard.com"
+
+
+def test_a_pulse_with_no_indicators_adds_no_section():
+    assert _indicator_detail_lines(_pulse([])) == []
+    assert "Key indicators:" not in _pulse_to_blurb(_pulse([]))
+
+
+def test_malformed_indicator_entries_are_skipped_not_fatal():
+    lines = _indicator_detail_lines(
+        _pulse(["not-a-dict", {"type": "", "indicator": "x"}, {"type": "domain", "indicator": ""}])
+    )
+    assert lines == []

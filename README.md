@@ -1,22 +1,22 @@
 # hecate-runner
 
-Autonomous hunt draft orchestrator for the Agentic Threat Hunting Framework (ATHF), whose workspace lives in [Hecate-Core](https://github.com/BrizoSec/Hecate-Core).
+Autonomous hunt draft orchestrator for the Agentic Threat Hunting Framework (Hecate), whose workspace lives in [Hecate-Core](https://github.com/BrizoSec/Hecate-Core).
 
-`hecate-runner` sits on top of ATHF and turns it into a persistent, 24/7 hunting loop:
+`hecate-runner` sits on top of Hecate and turns it into a persistent, 24/7 hunting loop:
 
 1. Pulls fresh CTI from a configured source (file queue, AlienVault OTX, RSS/Atom feeds, or MISP)
-2. Calls the ATHF `hypothesis-generator` agent (which uses a local Ollama-served LLM)
-3. Writes structured draft hunt records into your ATHF workspace
+2. Calls the Hecate `hypothesis-generator` agent (which uses a local Ollama-served LLM)
+3. Writes structured draft hunt records into your Hecate workspace
 4. Never auto-executes queries — a human proposes a bounded query and separately approves running it (see [Query execution](#query-execution-propose-dont-run) below); nothing runs unattended
 
 Runs as a systemd timer on a hunting host, or manually via `hecate-runner run`.
 
 ## Design principles
 
-- **Read-context, not hard dependency on ATHF.** `hecate-runner` shells out to the `athf` CLI; it does not import ATHF as a library. ATHF and `hecate-runner` version independently.
+- **Read-context, not hard dependency on Hecate.** `hecate-runner` shells out to the `hecate-agent` CLI; it does not import Hecate as a library. Hecate and `hecate-runner` version independently.
 - **Human-in-the-loop by default.** Every generated hunt is `status: planning` with a "review required" banner. Nothing auto-executes.
 - **Guardrails first.** Daily draft quotas, hard timeouts on LLM calls, structured logs, per-run state persistence.
-- **Testable in isolation.** No network, no LLM, no ATHF required to run unit tests locally.
+- **Testable in isolation.** No network, no LLM, no Hecate required to run unit tests locally.
 
 ## Architecture
 
@@ -26,7 +26,7 @@ Runs as a systemd timer on a hunting host, or manually via `hecate-runner run`.
                                 |
                                 v
 +------------------+     +---------------+     +-----------------------+     +----------------+
-| systemd timer    | --> | hecate-runner | --> | athf research new     | --> | Ollama (local) |
+| systemd timer    | --> | hecate-runner | --> | hecate-agent research new     | --> | Ollama (local) |
 | hourly + 2m boot |     | run           |     | (5-skill, web-search  |     | qwen2.5:14b    |
 +------------------+     +---------------+     |  grounded via Tavily) |     +----------------+
                                 |              +-----------------------+
@@ -34,7 +34,7 @@ Runs as a systemd timer on a hunting host, or manually via `hecate-runner run`.
                                 |                 research_id (R-XXXX)
                                 v                        |
                      +---------------------------+       |
-                     | athf hypothesis-generator | <-----+
+                     | hecate hypothesis-generator | <-----+
                      +---------------------------+
                                 |
                                 v
@@ -44,7 +44,7 @@ Runs as a systemd timer on a hunting host, or manually via `hecate-runner run`.
                      .orchestrator_state.json
 ```
 
-Research grounding runs before hypothesis generation on every cycle by default (`HECATE_RUNNER_RESEARCH_ENABLED=true`). **A research failure aborts the cycle** (refunds the quota, leaves the CTI queued for retry) rather than falling back to an ungrounded hypothesis: `athf eval` measured ungrounded generation at ~30% accuracy on known-answer MITRE technique fixtures, so an ungrounded draft isn't a degraded-but-useful fallback, it's an unreliable one. Set `HECATE_RUNNER_RESEARCH_ENABLED=false` to explicitly opt out of research and always generate ungrounded (e.g. for offline testing) — that's a deliberate choice, different from a research call failing mid-cycle.
+Research grounding runs before hypothesis generation on every cycle by default (`HECATE_RUNNER_RESEARCH_ENABLED=true`). **A research failure aborts the cycle** (refunds the quota, leaves the CTI queued for retry) rather than falling back to an ungrounded hypothesis: `hecate-agent eval` measured ungrounded generation at ~30% accuracy on known-answer MITRE technique fixtures, so an ungrounded draft isn't a degraded-but-useful fallback, it's an unreliable one. Set `HECATE_RUNNER_RESEARCH_ENABLED=false` to explicitly opt out of research and always generate ungrounded (e.g. for offline testing) — that's a deliberate choice, different from a research call failing mid-cycle.
 
 One exception is automatic: when the CTI is a bare indicator dump with a parseable inventory (a ThreatFox-style feed event), the draft is built deterministically from the indicator list with no LLM call, and research is skipped along with it. There is no behavior described for research to ground, and running it anyway produced documents whose every section said so.
 
@@ -65,6 +65,8 @@ A generated hunt is only worth acting on if its claims trace back to evidence. T
 | `derived` | In no source text but legitimately inferable — a technique the hypothesis reasoned to |
 | `unsupported` | Specific, checkable, and absent from every source — the fabrication class, including ATT&CK IDs that do not exist |
 
+**Expect RSS-sourced hunts to score lower, by design.** MISP and OTX items carry structured indicators; RSS entries do not — measured across 30 live entries, feed summaries contained no IPs, hashes or domains at all. Those indicators live in the linked article, and fetching it is deliberately not done: it would mean making outbound requests to arbitrary third-party URLs. So an RSS hunt derives its data sources from ATT&CK techniques alone and shows fewer `asserted` claims. That is the source being poorer in checkable facts, not the audit misfiring.
+
 Evidence is ranked because it is not equally trustworthy. Treating a research document as proof lets a fabrication launder itself: a CVE invented during research and written into `R-0611` came back as "asserted" in any hunt built from that research, which is circular. The CTI exists independently of this pipeline; the research does not.
 
 What gets checked: ATT&CK technique IDs (including whether they exist in the current matrix), CVEs, indicators inside generated Sigma rules, and named entities in prose — actor designators like `APT41`, `<Name> backdoor`-style collocations, and CamelCase families like `PureRAT`. Entity checking is precision-first: "adversaries deploy a backdoor" names nothing and is ignored, because a section full of false alarms is one a reviewer learns to skip.
@@ -77,13 +79,32 @@ Two separate things live here, and the distinction is the whole design: **detect
 
 ### Sigma drafting (automatic, before review)
 
-After the hypothesis lands, the orchestrator runs `athf agent run sigma-generator` and writes one Sigma rule per applicable log source into `$ATHF_WORKSPACE/queries/H-XXXX/`, embedding them in the draft's CHECK section. An operator therefore reviews a hunt that already has candidate detection logic rather than an empty query block.
+After the hypothesis lands, the orchestrator runs `hecate-agent agent run sigma-generator` and writes one Sigma rule per applicable log source into `$HECATE_WORKSPACE/queries/H-XXXX/`, embedding them in the draft's CHECK section. An operator therefore reviews a hunt that already has candidate detection logic rather than an empty query block.
 
 Sigma rather than SPL or KQL because this program has no committed query platform. `sigma convert -t <backend>` retargets a rule to Splunk, Elastic, CrowdStrike or Defender later, so drafting now commits to nothing — and correspondingly, **a Sigma rule cannot be executed by the propose/approve path below.** It is review material, not a runnable query.
 
 Which log sources are "applicable" is derived deterministically from the hunt's ATT&CK techniques and the indicator types the CTI actually carried, not asked of the model — a backdoor whose event carries nine C2 URLs gets network and DNS rules whether or not the prose mentioned them. The model returns JSON and this code renders the YAML, so a malformed rule is impossible by construction; rules whose `condition` names an undefined selection are rejected rather than emitted, because pySigma would only reject them much later, after the hunt had been reviewed around them.
 
 Generation failing leaves the draft standing with its placeholder query section — the CTI has already been consumed and the quota already spent by that point, so losing the hunt over it would be the wrong trade. Disable with `HECATE_RUNNER_SIGMA_GENERATION_ENABLED=false`.
+
+### Re-auditing hunts already on disk
+
+The grounding audit runs while a hunt is drafted, so a hunt written before a
+given version of it was graded by an older one. `hecate-runner audit` re-grades
+finished hunts:
+
+```
+hecate-runner audit                 # every hunt on disk
+hecate-runner audit H-0616          # one
+hecate-runner audit --update        # rewrite each hunt's Grounding section
+hecate-runner audit --strict        # exit 1 if any claim traces to no source
+hecate-runner audit --check-attack  # also validate technique IDs against ATT&CK
+```
+
+`--check-attack` is opt-in because it costs one `hecate-agent` subprocess per technique.
+A hunt whose CTI cannot be recovered is reported as such rather than scored —
+every claim would grade unsupported for want of evidence, which reads like a
+fabrication finding and is not one.
 
 ### Query execution (human-initiated, unchanged)
 
@@ -101,12 +122,12 @@ hecate-runner propose H-0016 --query '...' --data-source splunk \
     v   hecate-runner reject H-0016    (discard without running)
     |
     v
-QueryProvider.execute()  -->  mock (default) | splunk (shells out to `athf splunk search`)
+QueryProvider.execute()  -->  mock (default) | splunk (shells out to `hecate-agent splunk search`)
 ```
 
-Guardrails (`HECATE_RUNNER_MAX_QUERY_TIME_RANGE_DAYS`, default 7; `HECATE_RUNNER_MAX_QUERY_LIMIT`, default 1000) mirror ATHF's own `AGENTS.md` Query Guardrails section, and are re-checked at `approve` time, not just at `propose` time — if the staged file was hand-edited or the ceilings changed in between, `approve` refuses rather than trusting the earlier check.
+Guardrails (`HECATE_RUNNER_MAX_QUERY_TIME_RANGE_DAYS`, default 7; `HECATE_RUNNER_MAX_QUERY_LIMIT`, default 1000) mirror Hecate's own `AGENTS.md` Query Guardrails section, and are re-checked at `approve` time, not just at `propose` time — if the staged file was hand-edited or the ceilings changed in between, `approve` refuses rather than trusting the earlier check.
 
-**`HECATE_RUNNER_QUERY_PROVIDER=mock` is the default and, as of this writing, the only backend that's actually been run.** There is no live Splunk instance in this environment to validate `SplunkQueryProvider` against yet — it shells out to `athf splunk search` (same subprocess pattern as `AthfClient`) and is unit-tested against a fake `athf` binary, but nothing here has touched a real SIEM. Treat it as ready-to-wire, not proven, until it has. Switching from mock to a real backend is meant to be a config change (`HECATE_RUNNER_QUERY_PROVIDER=splunk` + `SPLUNK_HOST`/`SPLUNK_TOKEN` in the ATHF workspace `.env`), not new code — `hecate-runner doctor` checks for both when the provider is set to `splunk`.
+**`HECATE_RUNNER_QUERY_PROVIDER=mock` is the default and, as of this writing, the only backend that's actually been run.** There is no live Splunk instance in this environment to validate `SplunkQueryProvider` against yet — it shells out to `hecate-agent splunk search` (same subprocess pattern as `HecateClient`) and is unit-tested against a fake `hecate-agent` binary, but nothing here has touched a real SIEM. Treat it as ready-to-wire, not proven, until it has. Switching from mock to a real backend is meant to be a config change (`HECATE_RUNNER_QUERY_PROVIDER=splunk` + `SPLUNK_HOST`/`SPLUNK_TOKEN` in the Hecate workspace `.env`), not new code — `hecate-runner doctor` checks for both when the provider is set to `splunk`.
 
 ## Quickstart (local dev)
 
@@ -120,15 +141,15 @@ uv sync --dev
 
 # Copy env template and edit
 cp .env.example .env
-# edit .env to point ATHF_WORKSPACE at wherever your ATHF workspace lives
+# edit .env to point HECATE_WORKSPACE at wherever your Hecate workspace lives
 
 # Run tests
 uv run pytest
 
-# Preview an orchestrator cycle (uses your local ATHF workspace)
+# Preview an orchestrator cycle (uses your local Hecate workspace)
 uv run hecate-runner run --dry-run
 
-# Real run (invokes athf hypothesis-generator + writes a draft hunt)
+# Real run (invokes hecate hypothesis-generator + writes a draft hunt)
 uv run hecate-runner run
 ```
 
@@ -154,7 +175,7 @@ $EDITOR .env
 sudo ./scripts/install-systemd.sh
 
 # Prime a CTI blurb and force a run
-echo "APT actor X observed using T1053.005 scheduled tasks" > $ATHF_WORKSPACE/cti_queue/next.txt
+echo "APT actor X observed using T1053.005 scheduled tasks" > $HECATE_WORKSPACE/cti_queue/next.txt
 sudo systemctl start hecate-runner-orchestrator.service
 
 # Enable persistent scheduling
@@ -174,7 +195,7 @@ echo 'OTX_API_KEY=your-key-here' >> .env
 uv run hecate-runner otx-poll
 ```
 
-The poller filters for high-signal pulses (TLP white/green, has a MITRE ATT&CK mapping, not older than `HECATE_RUNNER_OTX_MAX_PULSE_AGE_DAYS`) and routes the oldest unrouted one into `cti_queue/next.txt`, so the existing orchestrator picks it up on its normal schedule — OTX polling frequency and hypothesis-generation frequency stay decoupled. A cursor file (`.otx_cursor_state.json` in the ATHF workspace) tracks the last pulse routed so nothing is re-ingested.
+The poller filters for high-signal pulses (TLP white/green, has a MITRE ATT&CK mapping, not older than `HECATE_RUNNER_OTX_MAX_PULSE_AGE_DAYS`) and routes the oldest unrouted one into `cti_queue/next.txt`, so the existing orchestrator picks it up on its normal schedule — OTX polling frequency and hypothesis-generation frequency stay decoupled. A cursor file (`.otx_cursor_state.json` in the Hecate workspace) tracks the last pulse routed so nothing is re-ingested.
 
 You can also skip the file queue entirely and have the orchestrator pull directly from OTX every cycle by setting `HECATE_RUNNER_CTI_PROVIDER=otx`, or by including `otx` in `HECATE_RUNNER_CTI_MULTI_PROVIDERS` under `multi` — which is how this deployment runs, and why there are no poller timers to install.
 
@@ -227,17 +248,17 @@ Used alone each is a trap: requiring galaxies on a dump-heavy recent window star
 
 All config comes from environment variables (or a `.env` file in the working directory). See [.env.example](.env.example) for the full list.
 
-**Two `.env` files, different jobs.** This repo's `.env` configures the orchestrator. The ATHF workspace has its own, which `athf` loads itself — that is where `TAVILY_API_KEY`, `ATHF_LLM_PROVIDER` and `ATHF_LLM_MODEL` belong, so manual `athf` runs and orchestrated ones use the same model. `hecate-runner` passes only `ATHF_WORKSPACE` through by default. No variable appears in both `.env.example` files, so there is never a question of which copy wins — the settings still exist to override `ATHF_LLM_*` from here, but they are deliberately absent from the example, since setting them splits manual and orchestrated runs onto different models.
+**Two `.env` files, different jobs.** This repo's `.env` configures the orchestrator. The Hecate workspace has its own, which `hecate-agent` loads itself — that is where `TAVILY_API_KEY`, `HECATE_LLM_PROVIDER` and `HECATE_LLM_MODEL` belong, so manual `hecate-agent` runs and orchestrated ones use the same model. `hecate-runner` passes only `HECATE_WORKSPACE` through by default. No variable appears in both `.env.example` files, so there is never a question of which copy wins — the settings still exist to override `HECATE_LLM_*` from here, but they are deliberately absent from the example, since setting them splits manual and orchestrated runs onto different models.
 
 Key ones:
 
 | Var | Purpose | Default |
 |-----|---------|---------|
-| `ATHF_WORKSPACE` | Path to the ATHF workspace (Hecate-Core) | `~/betas/Hecate-Core` |
-| `ATHF_BIN` | Path to the `athf` CLI | `<workspace>/.venv/bin/athf` |
+| `HECATE_WORKSPACE` | Path to the Hecate workspace (Hecate-Core) | `~/betas/Hecate-Core` |
+| `HECATE_BIN` | Path to the `hecate-agent` CLI | `<workspace>/.venv/bin/hecate-agent` |
 | `HECATE_RUNNER_MAX_DRAFTS_PER_DAY` | Cap on drafts per 24h | `4` |
-| `HECATE_RUNNER_LLM_TIMEOUT_SEC` | Hard timeout on any single `athf` invocation (research call and hypothesis call each get their own budget) | `1500` |
-| `HECATE_RUNNER_RESEARCH_ENABLED` | Run `athf research new` (web-grounded) before hypothesis generation | `true` |
+| `HECATE_RUNNER_LLM_TIMEOUT_SEC` | Hard timeout on any single `hecate-agent` invocation (research call and hypothesis call each get their own budget) | `1500` |
+| `HECATE_RUNNER_RESEARCH_ENABLED` | Run `hecate-agent research new` (web-grounded) before hypothesis generation | `true` |
 | `HECATE_RUNNER_RESEARCH_DEPTH` | `basic` (~5 min) or `advanced` (~15-20 min) research depth | `advanced` |
 | `HECATE_RUNNER_CTI_PROVIDER` | Which CTI source to use (`file`, `otx`, `rss`, `misp`, or `multi`) | `file` |
 | `HECATE_RUNNER_CTI_MULTI_PROVIDERS` | Sub-providers to rotate through when `CTI_PROVIDER=multi` | `rss,otx,misp` |
@@ -247,8 +268,10 @@ Key ones:
 | `MISP_BASE_URL` / `MISP_API_KEY` | MISP instance + dedicated automation Auth key — required for `cti_provider=misp` and `hecate-runner misp-poll` | — |
 | `HECATE_RUNNER_MISP_VERIFY_SSL` | Set false only for self-signed dev/test MISP instances | `true` |
 | `HECATE_RUNNER_MISP_REQUIRE_GALAXY` | Only route MISP events carrying a galaxy cluster — keeps bulk indicator dumps (ThreatFox-style) out, since they describe no behavior | `true` |
+| `HECATE_RUNNER_LOG_MAX_BYTES` | Rotate the orchestrator log past this size (copy-and-truncate, since systemd co-writes the file) | `5242880` |
+| `HECATE_RUNNER_LOG_BACKUP_COUNT` | Rotated logs to keep | `5` |
 | `HECATE_RUNNER_SIGMA_GENERATION_ENABLED` | Draft Sigma rules per applicable log source before operator review | `true` |
-| `HECATE_RUNNER_SIGMA_TIMEOUT_SEC` | Per-call timeout for Sigma drafting | `900` |
+| `HECATE_RUNNER_SIGMA_TIMEOUT_SEC` | Timeout for the Sigma drafting subprocess (one LLM call per log source) | `1800` |
 | `HECATE_RUNNER_MISP_REQUIRE_ATTACK_TECHNIQUE` | Only route MISP events that map to an ATT&CK technique — stricter than the galaxy check, which any cluster satisfies | `false` |
 | `HECATE_RUNNER_MISP_ORG_ALLOWLIST` | Comma-separated MISP org names; only these are routable. Empty = every org. Keeps one high-volume feed from burying the rest | _(empty)_ |
 | `HECATE_RUNNER_MISP_BACKFILL` | Ignore the freshness floor and walk the MISP archive oldest-first. Reset the cursor file to start from the beginning | `false` |
@@ -279,7 +302,7 @@ Done:
 - **4d** MISP provider, live-verified against a real instance, with galaxy filtering and archive backfill
 - **5b** Slack webhook on draft creation (email still open)
 - **6a** web-search grounding via Tavily, mandatory when enabled — a research failure aborts the cycle rather than falling back to ungrounded
-- **6b** eval harness (`athf eval`), which is what measured ungrounded generation at ~30% MITRE technique recall and made grounding mandatory rather than a soft fallback
+- **6b** eval harness (`hecate-agent eval`), which is what measured ungrounded generation at ~30% MITRE technique recall and made grounding mandatory rather than a soft fallback
 - **6c** ATT&CK STIX grounding fed into the research skills instead of asking the model to recall technique metadata — closed that ~30% to 100% on the same model
 
 In progress:

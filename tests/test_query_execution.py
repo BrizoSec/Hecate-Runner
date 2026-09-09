@@ -94,12 +94,12 @@ class TestGetProvider:
         provider = get_provider("mock")
         assert isinstance(provider, MockQueryProvider)
 
-    def test_splunk_provider_requires_athf_bin_and_workspace(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="requires athf_bin"):
+    def test_splunk_provider_requires_hecate_bin_and_workspace(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="requires hecate_bin"):
             get_provider("splunk")
 
     def test_splunk_provider_constructs_with_args(self, tmp_path: Path) -> None:
-        provider = get_provider("splunk", athf_bin=tmp_path / "athf", workspace=tmp_path)
+        provider = get_provider("splunk", hecate_bin=tmp_path / "hecate", workspace=tmp_path)
         assert isinstance(provider, SplunkQueryProvider)
 
     def test_unknown_provider_raises(self) -> None:
@@ -108,14 +108,14 @@ class TestGetProvider:
 
 
 class TestSplunkQueryProvider:
-    def _make_fake_athf(self, tmp_path: Path, script: str) -> Path:
-        fake = tmp_path / "fake_athf.sh"
+    def _make_fake_hecate(self, tmp_path: Path, script: str) -> Path:
+        fake = tmp_path / "fake_hecate.sh"
         fake.write_text(script)
         fake.chmod(0o755)
         return fake
 
     def test_parses_json_array_after_banner(self, tmp_path: Path) -> None:
-        # Mirrors real `athf splunk search --format json` output: a
+        # Mirrors real `hecate-agent splunk search --format json` output: a
         # human-readable banner precedes the JSON array even in JSON mode.
         script = (
             "#!/bin/sh\n"
@@ -123,38 +123,38 @@ class TestSplunkQueryProvider:
             "printf 'Time range: -7d to now\\n\\n'\n"
             'printf \'[{"user": "alice"}, {"user": "bob"}]\'\n'
         )
-        fake = self._make_fake_athf(tmp_path, script)
-        provider = SplunkQueryProvider(athf_bin=fake, workspace=tmp_path)
+        fake = self._make_fake_hecate(tmp_path, script)
+        provider = SplunkQueryProvider(hecate_bin=fake, workspace=tmp_path)
 
         result = provider.execute(_query())
         assert result.ok
         assert result.row_count == 2
 
     def test_nonzero_exit_is_an_error(self, tmp_path: Path) -> None:
-        fake = self._make_fake_athf(tmp_path, "#!/bin/sh\necho 'auth failed' >&2\nexit 1\n")
-        provider = SplunkQueryProvider(athf_bin=fake, workspace=tmp_path)
+        fake = self._make_fake_hecate(tmp_path, "#!/bin/sh\necho 'auth failed' >&2\nexit 1\n")
+        provider = SplunkQueryProvider(hecate_bin=fake, workspace=tmp_path)
 
         result = provider.execute(_query())
         assert not result.ok
         assert "auth failed" in result.detail
 
     def test_no_json_array_in_output_is_an_error(self, tmp_path: Path) -> None:
-        fake = self._make_fake_athf(tmp_path, "#!/bin/sh\necho 'No results found'\n")
-        provider = SplunkQueryProvider(athf_bin=fake, workspace=tmp_path)
+        fake = self._make_fake_hecate(tmp_path, "#!/bin/sh\necho 'No results found'\n")
+        provider = SplunkQueryProvider(hecate_bin=fake, workspace=tmp_path)
 
         result = provider.execute(_query())
         assert not result.ok
 
     def test_timeout_is_an_error(self, tmp_path: Path) -> None:
-        fake = self._make_fake_athf(tmp_path, "#!/bin/sh\nsleep 5\n")
-        provider = SplunkQueryProvider(athf_bin=fake, workspace=tmp_path, timeout_sec=1)
+        fake = self._make_fake_hecate(tmp_path, "#!/bin/sh\nsleep 5\n")
+        provider = SplunkQueryProvider(hecate_bin=fake, workspace=tmp_path, timeout_sec=1)
 
         result = provider.execute(_query())
         assert not result.ok
         assert "timed out" in result.detail
 
     def test_missing_binary_is_an_error(self, tmp_path: Path) -> None:
-        provider = SplunkQueryProvider(athf_bin=tmp_path / "does_not_exist", workspace=tmp_path)
+        provider = SplunkQueryProvider(hecate_bin=tmp_path / "does_not_exist", workspace=tmp_path)
 
         result = provider.execute(_query())
         assert not result.ok

@@ -1,6 +1,6 @@
 """Main orchestrator loop.
 
-One run == one cycle: pick up CTI, call athf, write a draft. Composable so
+One run == one cycle: pick up CTI, call hecate, write a draft. Composable so
 tests can drive it with fakes and so a future long-running loop could reuse
 the same ``run_once`` primitive.
 """
@@ -15,11 +15,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from hecate_runner.athf_client import AthfClient, AthfError
 from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.config import Settings
 from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider, get_provider
+from hecate_runner.cti_triage import triage
 from hecate_runner.grounding import TechniqueFact, audit_draft, render_grounding_section
+from hecate_runner.hecate_client import HecateClient, HecateError
 from hecate_runner.hunt_writer import (
     DraftHuntRequest,
     hunt_id_lock,
@@ -29,6 +30,7 @@ from hecate_runner.hunt_writer import (
 )
 from hecate_runner.indicator_sweep import build_indicator_sweep, parse_indicator_inventory
 from hecate_runner.notifications import notify_draft_created
+from hecate_runner.parked_store import park
 from hecate_runner.state import OrchestratorState
 
 log = logging.getLogger(__name__)
@@ -36,7 +38,7 @@ log = logging.getLogger(__name__)
 # MITRE technique IDs embedded in raw CTI text, e.g. "T1003.001" or "T1053.005".
 _TECHNIQUE_RE = re.compile(r"\bT\d{4}(?:\.\d{3})?\b")
 
-# `athf research new --topic` expects a short label, not a raw CTI paragraph.
+# `hecate-agent research new --topic` expects a short label, not a raw CTI paragraph.
 _TOPIC_MAX_LEN = 100
 
 # A technique whose ATT&CK platform list is this broad (of the ~10 platforms
@@ -224,7 +226,7 @@ def derive_research_topic(cti_content: str, title: str | None = None) -> tuple[s
     under a near-identical title every week), the bare title alone doesn't
     disambiguate *which* edition the CTI item actually is -- the resulting
     ``topic`` can cause the research skills' web search (see
-    search_system_internals/search_adversary_tradecraft in athf's
+    search_system_internals/search_adversary_tradecraft in hecate's
     web_search.py) to ground against a *different* edition of the same
     series than the one this CTI item is actually about, since none of
     ``cti_content``'s more specific/disambiguating text (a summary
@@ -294,12 +296,89 @@ def has_narrative(cti_content: str) -> bool:
       to name a behavior, so against a list of domains it invented one --
       "phishing emails" as the delivery vector, "stolen credentials ...
       lateral movement" as follow-on activity, plus an unsupported ATT&CK
-      technique. See `AthfClient.hypothesis_generator`'s indicators_only.
+      technique. See `HecateClient.hypothesis_generator`'s indicators_only.
     """
     return (
         "Description:" in cti_content
         or "Summary:" in cti_content
         or ATTACK_TECHNIQUE_LINE in cti_content
+    )
+
+
+#: How many non-actionable items one cycle may walk past before giving up.
+#: A feed of nothing but vendor blog posts should cost a single cycle, not an
+#: unbounded walk through the archive.
+_MAX_SKIPS_PER_CYCLE = 5
+
+
+#: Field prefixes the providers emit. Everything a blurb says about itself
+#: rather than about the threat.
+_BLURB_FIELD_PREFIXES = (
+    "RSS:",
+    "OTX Pulse:",
+    "MISP Event:",
+    "Source:",
+    "Link:",
+    "Tags:",
+    "Org:",
+    "TLP:",
+    "Threat Level:",
+    "Adversary/Attribution:",
+    "References:",
+    "Indicators (",
+    "Key indicators:",
+    ATTACK_TECHNIQUE_LINE,
+)
+
+
+def _carries_free_text(cti_content: str) -> bool:
+    """Whether anything here is prose rather than a provider metadata field.
+
+    This is what separates "the blurb had no narrative field" from "there is
+    no narrative". The file queue takes free-form text a human wrote --
+    "APT actor X observed dumping LSASS via comsvcs.dll" -- which carries no
+    `Summary:` marker and would otherwise read as empty.
+    """
+    for line in cti_content.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Indented lines continue the field above them (values under
+        # "Key indicators:").
+        if line[:1].isspace():
+            continue
+        if stripped.startswith(_BLURB_FIELD_PREFIXES):
+            continue
+        return True
+    return False
+
+
+def is_actionable(cti_content: str) -> bool:
+    """Whether there is anything here to build a hunt from.
+
+    Three ways to qualify, and an item needs only one: a narrative field a
+    hypothesis can be grounded in, a parseable indicator inventory a sweep can
+    be built from, or free-form prose that is not provider metadata.
+
+    The third clause is load-bearing. ``has_narrative`` recognises the
+    *markers* provider blurbs use, so its absence is not evidence that no
+    narrative exists -- and treating it as such discarded the file queue's
+    hand-written CTI outright when this gate was first written.
+
+    What is left over is the case this exists for: a blurb that is nothing but
+    its own metadata. H-0630 was four lines -- title, source, tags, link --
+    off a vendor marketing post, and became "Indicators published in Teaching
+    AI to Reason Through Detection Triage appear in telemetry", a sweep for
+    indicators that do not exist.
+
+    This is a floor, not a quality bar. It does not ask whether the prose is
+    *about* a specific threat; a conference write-up passes. That is the
+    harder half of C4 and is deliberately still open.
+    """
+    return (
+        has_narrative(cti_content)
+        or bool(parse_indicator_inventory(cti_content))
+        or _carries_free_text(cti_content)
     )
 
 
@@ -315,7 +394,7 @@ class RunResult:
 
     @property
     def ok(self) -> bool:
-        return self.outcome in {"draft_created", "no_cti", "quota_reached"}
+        return self.outcome in {"draft_created", "no_cti", "no_actionable_cti", "quota_reached"}
 
 
 class Orchestrator:
@@ -324,12 +403,12 @@ class Orchestrator:
     def __init__(
         self,
         settings: Settings,
-        athf: AthfClient,
+        hecate: HecateClient,
         cti_provider: CTIProvider,
         notify: Callable[[RunResult], None] | None = None,
     ):
         self.settings = settings
-        self.athf = athf
+        self.hecate = hecate
         self.cti = cti_provider
         # Defaults to a no-op so tests and callers that don't care about
         # notifications don't have to pass one.
@@ -403,7 +482,7 @@ class Orchestrator:
         grounding for a claim the CTI itself did not make."""
         if not research_id:
             return ""
-        path = self.settings.athf_workspace / "research" / f"{research_id}.md"
+        path = self.settings.hecate_workspace / "research" / f"{research_id}.md"
         try:
             return path.read_text(encoding="utf-8")
         except OSError:
@@ -426,7 +505,7 @@ class Orchestrator:
         """
         techniques = list(item.metadata.get("techniques") or []) or list(req.hypothesis.techniques)
         indicators = dict(item.metadata.get("indicators") or {})
-        out_dir = self.settings.athf_workspace / "queries" / req.hunt_id
+        out_dir = self.settings.hecate_workspace / "queries" / req.hunt_id
 
         payload = {
             "hunt_id": req.hunt_id,
@@ -439,10 +518,10 @@ class Orchestrator:
         }
 
         try:
-            result = self.athf.sigma_generator(
+            result = self.hecate.sigma_generator(
                 payload, out_dir, timeout_sec=self.settings.sigma_timeout_sec
             )
-        except AthfError as exc:
+        except HecateError as exc:
             log.warning(
                 "Sigma drafting failed for %s (%s); draft keeps its placeholder query section.",
                 req.hunt_id,
@@ -463,7 +542,7 @@ class Orchestrator:
 
         req.sigma_rules = result.rules
         try:
-            req.sigma_rule_dir = str(out_dir.relative_to(self.settings.athf_workspace))
+            req.sigma_rule_dir = str(out_dir.relative_to(self.settings.hecate_workspace))
         except ValueError:  # out_dir outside the workspace -- show it whole
             req.sigma_rule_dir = str(out_dir)
 
@@ -519,7 +598,7 @@ class Orchestrator:
         tactics: list[str] = []
         platforms: list[str] = []
         for technique_id in techniques:
-            meta = self.athf.lookup_technique(
+            meta = self.hecate.lookup_technique(
                 technique_id, timeout_sec=self.settings.llm_timeout_sec
             )
             # Record what the matrix said so the grounding audit can call out
@@ -553,9 +632,83 @@ class Orchestrator:
                 return tactics, scoped
         return tactics, platforms
 
+    def _advance_past(self, item: CTIItem) -> bool:
+        """Acknowledge an item so the cursor moves; False if it could not.
+
+        Without the advance the same item is returned by the next call, so a
+        caller that keeps looping would spin on it forever.
+        """
+        try:
+            self.cti.acknowledge(item)
+        except Exception as exc:  # provider-specific cursor failures
+            log.warning("Could not advance past CTI item (%s); stopping this cycle.", exc)
+            return False
+        return True
+
+    def _next_actionable_item(self) -> tuple[CTIItem | None, int]:
+        """The next CTI item worth drafting, and how many were walked past.
+
+        An item with neither narrative nor a parseable indicator inventory
+        offers nothing to hunt. Drafted anyway it produced H-0630 --
+        "Indicators published in Teaching AI to Reason Through Detection
+        Triage appear in telemetry", a sweep for indicators that do not
+        exist, off a vendor marketing post.
+
+        Skipped items are acknowledged so the cursor advances past them
+        instead of the same item being re-offered every cycle. This runs
+        before the quota is reserved: walking past an item is not a draft and
+        must not cost one.
+        """
+        skipped = 0
+        for _ in range(_MAX_SKIPS_PER_CYCLE + 1):
+            item = self.cti.next_item()
+            if item is None:
+                return None, skipped
+            if is_actionable(item.content):
+                verdict = triage(item) if self.settings.cti_triage == "park" else None
+                if verdict is None or not verdict.park:
+                    return item, skipped
+                # Held back, not dropped: the cursor has already moved past
+                # this item, so the copy written here is the only one left.
+                skipped += 1
+                log.info(
+                    "Parking CTI item from %s (%s): %s",
+                    item.source,
+                    item.title[:60] or "untitled",
+                    verdict.reason,
+                )
+                try:
+                    park(self.settings.cti_queue_dir_resolved, item, verdict.reason)
+                except OSError as exc:
+                    # Parking is the whole safety net. If it cannot be written,
+                    # draft the item rather than losing it.
+                    log.warning("Could not park CTI item (%s); drafting it instead.", exc)
+                    return item, skipped - 1
+                if not self._advance_past(item):
+                    return None, skipped
+                continue
+
+            # Counted where the decision is made, not after the cursor moves:
+            # an item we could not advance past was still found and rejected,
+            # and reporting "no CTI in queue" for it would be untrue.
+            skipped += 1
+            log.info(
+                "Skipping CTI item from %s: no narrative, no parseable indicator "
+                "inventory and no free-form prose, so there is nothing to hunt.",
+                item.source,
+            )
+            if not self._advance_past(item):
+                return None, skipped
+
+        log.info("Found %d non-actionable CTI items; stopping this cycle.", skipped)
+        return None, skipped
+
     def _run_body(self, state: OrchestratorState, *, dry_run: bool) -> RunResult:
-        item = self.cti.next_item()
+        item, skipped = self._next_actionable_item()
         if item is None:
+            if skipped:
+                log.info("No actionable CTI this cycle; %d item(s) had nothing to hunt.", skipped)
+                return RunResult(outcome="no_actionable_cti", detail=f"skipped {skipped}")
             log.info("No CTI in queue; nothing to do this cycle.")
             return RunResult(outcome="no_cti")
 
@@ -572,7 +725,7 @@ class Orchestrator:
             )
 
         if dry_run:
-            log.info("[dry-run] Would call athf and write a draft; leaving CTI in queue.")
+            log.info("[dry-run] Would call hecate and write a draft; leaving CTI in queue.")
             state.drafts_today -= 1  # reverse the reservation in dry-run
             state.total_drafts_ever -= 1
             return RunResult(outcome="dry_run", detail=item.content[:100])
@@ -608,7 +761,7 @@ class Orchestrator:
         research_id: str | None = None
         related_hunts: list[str] = []
         if sweep_inventory:
-            # `athf research new` on a bare indicator dump spends four skills
+            # `hecate-agent research new` on a bare indicator dump spends four skills
             # producing "insufficient information" boilerplate -- measured
             # across R-0604/R-0608/R-0610 at ~2 minutes and 4 LLM calls each
             # for a document with no findings, no telemetry mapping and no
@@ -624,20 +777,20 @@ class Orchestrator:
         elif self.settings.research_enabled:
             topic, technique = derive_research_topic(item.content, title=item.title or None)
             try:
-                research_result = self.athf.research_new(
+                research_result = self.hecate.research_new(
                     topic=topic,
                     technique=technique,
                     depth=self.settings.research_depth,
                     timeout_sec=self.settings.llm_timeout_sec,
                     web_search_enabled=intel_has_narrative,
                 )
-            except AthfError as exc:
+            except HecateError as exc:
                 # Cold (ungrounded) generation measured ~30% accuracy on known-
-                # answer fixtures (see `athf eval`) — a research failure is
+                # answer fixtures (see `hecate-agent eval`) — a research failure is
                 # refused rather than silently falling back to that. Refund
                 # the quota; the CTI stays in the queue for the next cycle.
                 log.error(
-                    "athf research new failed (%s); refusing to generate an ungrounded hypothesis",
+                    "hecate-agent research new failed (%s); refusing to generate an ungrounded hypothesis",
                     exc,
                 )
                 state.drafts_today -= 1
@@ -646,7 +799,7 @@ class Orchestrator:
 
             if research_result.is_empty:
                 log.error(
-                    "athf research new produced no research_id; refusing to generate an ungrounded hypothesis"
+                    "hecate-agent research new produced no research_id; refusing to generate an ungrounded hypothesis"
                 )
                 state.drafts_today -= 1
                 state.total_drafts_ever -= 1
@@ -666,18 +819,18 @@ class Orchestrator:
             hypothesis = build_indicator_sweep(item.content, title=item.title or None)
         else:
             try:
-                hypothesis = self.athf.hypothesis_generator(
+                hypothesis = self.hecate.hypothesis_generator(
                     threat_intel=item.content,
                     research_id=research_id,
                     timeout_sec=self.settings.llm_timeout_sec,
                     indicators_only=not intel_has_narrative,
                 )
-            except AthfError as exc:
-                log.error("athf hypothesis-generator failed: %s", exc)
+            except HecateError as exc:
+                log.error("hecate hypothesis-generator failed: %s", exc)
                 # Refund the quota — the CTI stays in the queue.
                 state.drafts_today -= 1
                 state.total_drafts_ever -= 1
-                return RunResult(outcome="athf_error", detail=str(exc))
+                return RunResult(outcome="hecate_error", detail=str(exc))
 
         repaired = _fill_empty_source_slot(hypothesis.hypothesis, item.title)
         if repaired != hypothesis.hypothesis:
@@ -685,7 +838,7 @@ class Orchestrator:
             hypothesis.hypothesis = repaired
 
         if hypothesis.is_empty:
-            log.warning("athf returned empty hypothesis; refunding quota and leaving CTI.")
+            log.warning("hecate returned empty hypothesis; refunding quota and leaving CTI.")
             state.drafts_today -= 1
             state.total_drafts_ever -= 1
             return RunResult(outcome="empty_hypothesis")
@@ -739,10 +892,10 @@ class Orchestrator:
         # already spent, so a link failure is a warning, not a lost hunt.
         if research_id:
             try:
-                self.athf.link_research_to_hunt(
+                self.hecate.link_research_to_hunt(
                     research_id, hunt_id, timeout_sec=self.settings.llm_timeout_sec
                 )
-            except AthfError as exc:
+            except HecateError as exc:
                 log.warning(
                     "Could not link %s back to %s (%s); the hunt still records "
                     "spawned_from, so the forward reference is intact.",
@@ -812,12 +965,12 @@ class Orchestrator:
 
 def build_default_orchestrator(settings: Settings) -> Orchestrator:
     """Wire up the standard orchestrator from settings alone."""
-    athf = AthfClient(
-        athf_bin=settings.athf_bin_resolved,
-        workspace=settings.athf_workspace,
-        env_overrides=settings.env_for_athf(),
+    hecate = HecateClient(
+        hecate_bin=settings.hecate_bin_resolved,
+        workspace=settings.hecate_workspace,
+        env_overrides=settings.env_for_hecate(),
         default_timeout_sec=settings.llm_timeout_sec,
     )
     cti = get_provider(settings.cti_provider, settings=settings)
     notify = functools.partial(notify_draft_created, settings)
-    return Orchestrator(settings=settings, athf=athf, cti_provider=cti, notify=notify)
+    return Orchestrator(settings=settings, hecate=hecate, cti_provider=cti, notify=notify)
