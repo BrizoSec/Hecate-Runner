@@ -49,6 +49,35 @@ class DraftHuntRequest:
     grounding_section: str = ""
 
 
+#: Ceiling on the CTI blurb embedded in a draft. Generous on purpose: the
+#: providers already bound what they emit (MISP inlines at most 40 attributes,
+#: OTX 40 indicators, both at 120 chars each), so their worst case is ~8k and
+#: this should never bite in practice.
+#:
+#: It used to be 2,000, which was below both. The blurb was then silently cut
+#: mid-indicator-list, and because `hunt_audit` re-derives the CTI from this
+#: embedded copy, every indicator past the cut was re-graded UNSUPPORTED --
+#: real C2 domains reported as fabrications on H-0007 and H-0010. A false
+#: fabrication alarm is the one thing the grounding audit must not produce,
+#: so if this ever does truncate it says so in the text rather than leaving
+#: the audit to draw the wrong conclusion from silence.
+_MAX_EMBEDDED_CTI = 10_000
+
+
+def embedded_cti(threat_intel: str) -> str:
+    """The CTI blurb as it is quoted into a draft."""
+    text = (threat_intel or "").strip()
+    if len(text) <= _MAX_EMBEDDED_CTI:
+        return text
+    omitted = len(text) - _MAX_EMBEDDED_CTI
+    return (
+        text[:_MAX_EMBEDDED_CTI].rstrip()
+        + f"\n[... {omitted} characters of CTI omitted from this draft. "
+        "Indicators below this point were available to drafting but are not "
+        "quoted here, so a grounding audit cannot confirm them.]"
+    )
+
+
 @contextmanager
 def hunt_id_lock(hunts_root: Path) -> Iterator[None]:
     """Serialize the "compute next hunt ID, then write that file" critical
@@ -421,7 +450,7 @@ def render_draft(req: DraftHuntRequest) -> str:
 
 Source CTI:
 
-> {req.threat_intel[:2000].strip()}
+> {embedded_cti(req.threat_intel)}
 
 ### Justification
 

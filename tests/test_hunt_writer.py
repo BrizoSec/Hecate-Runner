@@ -15,6 +15,7 @@ from hecate_runner.hunt_writer import (
     _draft_tags,
     _short_title,
     draft_hunt_path,
+    embedded_cti,
     hunt_id_lock,
     next_hunt_id,
     render_draft,
@@ -576,3 +577,39 @@ def test_research_doc_is_linked_when_one_exists() -> None:
     md = render_draft(req)
     assert "See [R-0042](" in md
     assert "for detailed pre-hunt research" in md
+
+
+# --- The embedded CTI must not silently lose evidence ----------------------
+
+
+class TestEmbeddedCti:
+    """`hunt_audit` re-derives a hunt's CTI from the copy embedded in the
+    draft, so anything cut here is re-graded UNSUPPORTED later. At the old
+    2,000-char cap that turned real C2 domains into reported fabrications on
+    H-0007 and H-0010."""
+
+    def test_a_normal_blurb_is_embedded_whole(self) -> None:
+        blurb = "OTX Pulse: X\nDescription: prose\nKey indicators:\n  domain: evil-c2.test"
+        assert embedded_cti(blurb) == blurb
+
+    def test_a_rich_provider_blurb_survives_intact(self) -> None:
+        """The providers cap themselves at ~8k; the embed ceiling is above
+        that, so in practice nothing is cut."""
+        blurb = "OTX Pulse: X\nKey indicators:\n" + "\n".join(
+            f"  domain: host{i}.example-c2.test" for i in range(200)
+        )
+        assert 2000 < len(blurb) < 10_000
+        assert embedded_cti(blurb) == blurb.strip()
+
+    def test_truncation_says_so_rather_than_going_quiet(self) -> None:
+        """A silent cut leaves the audit to conclude the missing indicators
+        were invented."""
+        result = embedded_cti("x" * 12_000)
+        assert "characters of CTI omitted" in result
+        assert "cannot confirm" in result
+
+    def test_truncation_reports_how_much_was_lost(self) -> None:
+        assert "2000 characters" in embedded_cti("x" * 12_000)
+
+    def test_empty_cti_is_handled(self) -> None:
+        assert embedded_cti("") == ""
