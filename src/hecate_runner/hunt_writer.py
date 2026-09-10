@@ -233,6 +233,28 @@ def _short_title(hypothesis: str) -> str:
     return truncated + "..."
 
 
+def _title_scalar(hypothesis: str) -> str:
+    """The `title:` value, quoted so it is always a valid YAML scalar.
+
+    Every list field here goes through ``json.dumps`` for exactly this
+    reason; the title was the one interpolated bare, and a hypothesis
+    carrying a colon broke the frontmatter of the whole hunt. H-0002 was
+    drafted from an ESET event titled "MoustachedBouncer: Espionage against
+    foreign diplomats" and came out as::
+
+        title: DRAFT - Indicators published in MoustachedBouncer: Espionage ...
+
+    which YAML reads as a second mapping value and rejects. `hecate-agent
+    hunt validate` then failed on the file, so the draft was unparseable by
+    the very tooling meant to check it.
+
+    A JSON string is a valid YAML double-quoted scalar, so this also covers
+    embedded quotes and backslashes. ``ensure_ascii=False`` keeps non-ASCII
+    titles readable rather than escaping them to \\uXXXX.
+    """
+    return json.dumps(f"DRAFT - {_short_title(hypothesis)}", ensure_ascii=False)
+
+
 def _able_cell(value: str) -> str:
     """Render one ABLE Scoping table cell.
 
@@ -387,7 +409,7 @@ def render_draft(req: DraftHuntRequest) -> str:
     frontmatter = (
         "---\n"
         f"hunt_id: {req.hunt_id}\n"
-        f"title: DRAFT - {_short_title(hyp.hypothesis)}\n"
+        f"title: {_title_scalar(hyp.hypothesis)}\n"
         "status: planning\n"
         f"date: {req.generated_at.strftime('%Y-%m-%d')}\n"
         "hunter: hecate-runner orchestrator (draft)\n"

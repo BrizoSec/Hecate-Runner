@@ -9,11 +9,15 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+import yaml
+
 from hecate_runner.hecate_client import HypothesisResult
 from hecate_runner.hunt_writer import (
     DraftHuntRequest,
     _draft_tags,
     _short_title,
+    _title_scalar,
     draft_hunt_path,
     embedded_cti,
     hunt_id_lock,
@@ -613,3 +617,52 @@ class TestEmbeddedCti:
 
     def test_empty_cti_is_handled(self) -> None:
         assert embedded_cti("") == ""
+
+
+# --- Frontmatter must always be parseable YAML -----------------------------
+
+
+class TestTitleScalar:
+    """H-0002 was drafted from an ESET event titled "MoustachedBouncer:
+    Espionage against foreign diplomats". The colon made the frontmatter
+    invalid YAML, and `hecate-agent hunt validate` failed on the file -- the
+    draft was unreadable by the tooling meant to check it."""
+
+    BREAKER = (
+        "Indicators published in MoustachedBouncer: Espionage against foreign "
+        "diplomats in Belarus appear in environment telemetry"
+    )
+
+    @staticmethod
+    def _parse(title_line: str) -> dict:
+        return yaml.safe_load("hunt_id: H-0001\n" + title_line + "\nstatus: planning\n")
+
+    def test_a_colon_in_the_hypothesis_stays_valid_yaml(self) -> None:
+        parsed = self._parse("title: " + _title_scalar(self.BREAKER))
+        assert parsed["title"].startswith("DRAFT - Indicators published in MoustachedBouncer:")
+
+    def test_the_unquoted_form_really_was_broken(self) -> None:
+        """Guards the guard: if a bare scalar parsed fine the fix would be
+        pointless and this suite would quietly stop meaning anything."""
+        with pytest.raises(yaml.YAMLError):
+            self._parse("title: DRAFT - " + self.BREAKER)
+
+    def test_embedded_quotes_survive(self) -> None:
+        title = 'a "quoted" threat'
+        assert self._parse("title: " + _title_scalar(title))["title"].endswith(title)
+
+    def test_a_windows_path_with_backslashes_survives(self) -> None:
+        title = "dropped to C:" + chr(92) + "temp" + chr(92)
+        assert title in self._parse("title: " + _title_scalar(title))["title"]
+
+    def test_non_ascii_is_not_escaped_away(self) -> None:
+        """json.dumps defaults to ensure_ascii=True, which would render a
+        title as caf\\u00e9 -- valid YAML, unreadable to a person."""
+        title = "caf\u00e9 campaign"
+        rendered = _title_scalar(title)
+        assert title in rendered
+        assert "\\u00e9" not in rendered
+        assert self._parse("title: " + rendered)["title"].endswith(title)
+
+    def test_an_empty_hypothesis_still_yields_valid_yaml(self) -> None:
+        assert self._parse("title: " + _title_scalar(""))["title"].startswith("DRAFT -")

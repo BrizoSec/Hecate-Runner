@@ -32,6 +32,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    # Frontmatter correctness is asserted by parsing it; the runtime
+    # itself writes YAML by hand and needs no parser.
+    "pyyaml>=6.0",
     "pytest-cov>=4.1",
     "pytest-mock>=3.12",
     "ruff>=0.4",
@@ -60,6 +63,9 @@ packages = ["src/hecate_runner"]
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    # Frontmatter correctness is asserted by parsing it; the runtime
+    # itself writes YAML by hand and needs no parser.
+    "pyyaml>=6.0",
     "pytest-cov>=4.1",
     "pytest-mock>=3.12",
     "ruff>=0.4",
