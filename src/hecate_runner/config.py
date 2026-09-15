@@ -218,9 +218,10 @@ class Settings(BaseSettings):
         ),
         alias="HECATE_RUNNER_RSS_FEED_URLS",
         description=(
-            "Comma-separated RSS/Atom feed URLs. Defaults to verified, "
+            "Comma-separated RSS/Atom feed URLs. Defaults to nine verified, "
             "reputable security research blogs (The DFIR Report, Talos, Unit42, "
-            "Microsoft Security Blog) — a curation choice, not a technical "
+            "Microsoft Security Blog, Google TAG, Mandiant, Sekoia, Volexity, "
+            "WeLiveSecurity) — a curation choice, not a technical "
             "requirement; swap freely. CISA's advisory feed was tried and "
             "excluded: it 403s on automated requests regardless of path."
         ),
