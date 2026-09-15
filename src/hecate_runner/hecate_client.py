@@ -1,110 +1,58 @@
-"""Subprocess wrapper around the ``hecate-agent`` CLI.
-
-Everything that touches Hecate flows through here so we can mock it in tests
-and swap out the transport later (e.g., MCP or direct import) without
-touching the orchestrator.
-"""
-
+"""Python API client wrapping the hecate_agent package."""
 from __future__ import annotations
 
-import json
 import logging
 import os
-import re
-import subprocess
-import tempfile
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
 
-
 @dataclass
 class ResearchResult:
-    """Parsed output of ``hecate-agent research new --output json``."""
-
     research_id: str = ""
     recommended_hypothesis: str = ""
     related_hunts: list[str] = field(default_factory=list)
     raw_output: str = ""
-
     @property
     def is_empty(self) -> bool:
         return not self.research_id.strip()
 
-
 @dataclass
 class HypothesisResult:
-    """Parsed output of ``hecate-agent agent run hypothesis-generator``."""
-
     hypothesis: str = ""
     justification: str = ""
     techniques: list[str] = field(default_factory=list)
     data_sources: list[str] = field(default_factory=list)
     observables: list[str] = field(default_factory=list)
     false_positives: list[str] = field(default_factory=list)
-    # ABLE scoping (see Hecate's templates/HUNT_LOCK.md). Empty when the CLI
-    # didn't emit a section for one -- the agent leaves these blank rather
-    # than invent specifics not grounded in the CTI it was given, and
-    # hunt_writer falls back to the same "[Review CTI and populate]"
-    # placeholder it always has for an empty one.
     actor: str = ""
     behavior: str = ""
     location: str = ""
     evidence: str = ""
-    # Self-assessed grounding: False means the agent judged the source CTI
-    # doesn't actually describe observed/reported adversary behavior (e.g.
-    # a vendor/product announcement) and produced a speculative hypothesis
-    # anyway rather than refusing outright. Defaults to True (assumed
-    # legitimate) -- absence of the "Low Confidence Source:" section in the
-    # CLI output (older CLI, or a model that didn't follow the instruction)
-    # must not retroactively flag every hunt as low-confidence.
     is_threat_report: bool = True
     low_confidence_reason: str = ""
-    # Set when the CLI reports the agent self-assessed its input as a bare
-    # indicator list (hecate's `is_indicator_only`). This is the backstop path:
-    # the orchestrator normally recognises feed dumps itself and builds a
-    # sweep draft without an LLM at all, so this only fires when its
-    # heuristic missed one and the model caught it.
     is_indicator_only: bool = False
-    # ATT&CK-validation notes the CLI prints under a "Warnings:" heading
-    # (deprecated IDs remapped, fabricated ones removed). Captured into a
-    # field of their own because the section-routing parser below assigns
-    # every unrecognised heading's lines to whatever section preceded it --
-    # in practice "Evidence:", so these diagnostics were being appended verbatim
-    # into the drafted hunt's ABLE Evidence cell.
     warnings: list[str] = field(default_factory=list)
     raw_output: str = ""
-
     @property
     def is_empty(self) -> bool:
         return not self.hypothesis.strip()
 
-
 @dataclass
 class TechniqueMetadata:
-    """Parsed output of ``hecate-agent attack lookup <id> --json``."""
-
     technique_id: str = ""
     tactics: list[str] = field(default_factory=list)
     platforms: list[str] = field(default_factory=list)
     found: bool = False
-    #: Set when the requested ID was revoked by ATT&CK and resolved to its
-    #: replacement -- ``technique_id`` is then the live one, and this is what
-    #: the CTI actually said. Kept so a draft can record the stale identifier
-    #: its source used rather than appearing to have invented a different one.
     superseded_from: str = ""
 
-
 class HecateError(RuntimeError):
-    """Raised when the hecate-agent CLI fails or returns unexpected output."""
-
+    pass
 
 @dataclass
 class SigmaResult:
-    """Outcome of one sigma-generator run."""
-
     success: bool
     error: str | None = None
     warnings: list[str] = field(default_factory=list)
@@ -113,10 +61,7 @@ class SigmaResult:
     files: list[Path] = field(default_factory=list)
     rules: list[dict[str, Any]] = field(default_factory=list)
 
-
 class HecateClient:
-    """Thin wrapper: locate the hecate-agent binary, run subprocesses, parse output."""
-
     def __init__(
         self,
         hecate_bin: Path,
@@ -130,13 +75,32 @@ class HecateClient:
         self.default_timeout_sec = default_timeout_sec
 
     def check_installed(self) -> None:
-        """Raise if the hecate-agent binary is missing or not executable."""
-        if not self.hecate_bin.exists():
-            raise HecateError(f"hecate-agent binary not found at {self.hecate_bin}")
-        if not os.access(self.hecate_bin, os.X_OK):
-            raise HecateError(f"hecate-agent binary at {self.hecate_bin} is not executable")
+        try:
+            import hecate_agent
+        except ImportError:
+            raise HecateError("hecate_agent Python package not found.")
 
-    # --- Public API --------------------------------------------------------
+    def _with_context(self, func, *args, **kwargs):
+        original_cwd = os.getcwd()
+        original_env = os.environ.copy()
+        try:
+            os.chdir(self.workspace)
+            # 1. Load the workspace's .env so we pick up HECATE_LLM_MODEL, etc.
+            # just like the subprocess CLI used to do.
+            from dotenv import load_dotenv
+            load_dotenv(self.workspace / ".env")
+            
+            # 2. Apply runner overrides on top
+            os.environ.update(self.env_overrides)
+            
+            return func(*args, **kwargs)
+        except Exception as exc:
+            log.exception(f"Hecate API call failed: {exc}")
+            raise HecateError(f"Hecate API error: {exc}") from exc
+        finally:
+            os.chdir(original_cwd)
+            os.environ.clear()
+            os.environ.update(original_env)
 
     def research_new(
         self,
@@ -146,41 +110,25 @@ class HecateClient:
         timeout_sec: int | None = None,
         web_search_enabled: bool = True,
     ) -> ResearchResult:
-        """Run ``hecate-agent research new`` and parse the resulting research ID.
-
-        Grounds the downstream hypothesis in the 5-skill research pipeline
-        (system research, adversary tradecraft via web search, telemetry
-        mapping, related-work correlation, synthesis) instead of asking the
-        model to generate a hypothesis from the raw CTI blob alone.
-
-        web_search_enabled should be set to False for narrative-free CTI
-        (e.g. a bare IOC-count blurb with no Description/Summary text) --
-        without real narrative to search for, web search grounds against
-        whatever else shares the topic's generic/templated title (e.g. other
-        days' instances of the same recurring feed digest) and has been
-        observed to fabricate malware family names that then propagate into
-        the hunt.
-        """
-        cmd = [
-            str(self.hecate_bin),
-            "research",
-            "new",
-            "--topic",
-            topic,
-            "--depth",
-            depth,
-            "--output",
-            "json",
-        ]
-        if technique:
-            cmd.extend(["--technique", technique])
-        if not web_search_enabled:
-            cmd.append("--no-web-search")
-
-        stdout = self._run(cmd, timeout_sec=timeout_sec)
-        parsed = self._parse_research_output(stdout)
-        parsed.raw_output = stdout
-        return parsed
+        from hecate_agent.api import generate_research
+        output, _ = self._with_context(
+            generate_research,
+            topic=topic,
+            technique=technique,
+            depth=depth,
+            web_search_enabled=web_search_enabled,
+            workspace=self.workspace,
+        )
+        related_hunts = []
+        for source in output.related_work.sources:
+            if "url" in source and source["url"].startswith("hunts/H-") and source["url"].endswith(".md"):
+                related_hunts.append(source["url"].replace("hunts/", "").replace(".md", ""))
+        return ResearchResult(
+            research_id=output.research_id,
+            recommended_hypothesis=output.recommended_hypothesis or "",
+            related_hunts=related_hunts,
+            raw_output="", 
+        )
 
     def hypothesis_generator(
         self,
@@ -189,32 +137,31 @@ class HecateClient:
         timeout_sec: int | None = None,
         indicators_only: bool = False,
     ) -> HypothesisResult:
-        """Run ``hecate-agent agent run hypothesis-generator`` and parse the output.
-
-        indicators_only should be set for narrative-free CTI (see
-        `has_narrative`). Without it the agent's hypothesis template obliges
-        the model to name a behavior, and against a bare list of domains it
-        invents one -- observed producing "phishing emails" as the delivery
-        vector and "stolen credentials ... lateral movement" as follow-on
-        activity for feed dumps that described neither.
-        """
-        cmd = [
-            str(self.hecate_bin),
-            "agent",
-            "run",
-            "hypothesis-generator",
-            "--threat-intel",
-            threat_intel,
-        ]
-        if research_id:
-            cmd.extend(["--research", research_id])
-        if indicators_only:
-            cmd.append("--indicators-only")
-
-        stdout = self._run(cmd, timeout_sec=timeout_sec)
-        parsed = self._parse_hypothesis_output(stdout)
-        parsed.raw_output = stdout
-        return parsed
+        from hecate_agent.api import generate_hypothesis
+        output = self._with_context(
+            generate_hypothesis,
+            threat_intel=threat_intel,
+            research_id=research_id,
+            indicators_only=indicators_only,
+            workspace=self.workspace,
+        )
+        return HypothesisResult(
+            hypothesis=output.hypothesis,
+            justification=output.justification,
+            techniques=output.mitre_techniques,
+            data_sources=output.data_sources,
+            observables=output.expected_observables,
+            false_positives=output.known_false_positives,
+            actor=output.actor or "",
+            behavior=output.behavior or "",
+            location=output.location or "",
+            evidence=output.evidence or "",
+            is_threat_report=output.is_threat_report,
+            low_confidence_reason=output.low_confidence_reason or "",
+            is_indicator_only=output.is_indicator_only,
+            warnings=[],
+            raw_output="",
+        )
 
     def sigma_generator(
         self,
@@ -222,297 +169,60 @@ class HecateClient:
         out_dir: Path,
         timeout_sec: int | None = None,
     ) -> SigmaResult:
-        """Run ``hecate-agent agent run sigma-generator`` and parse its JSON output.
-
-        The input goes through a temp file rather than flags: the indicator
-        map is nested and can carry long C2 URLs, and an argv-borne blob is
-        both fragile to quote and visible in the process table.
-
-        Rules are written by hecate into ``out_dir`` (inside the workspace) so
-        the files an operator reviews are the same files `sigma convert`
-        would later read -- no copy to keep in sync.
-        """
-        out_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".json", delete=False, encoding="utf-8"
-        ) as handle:
-            json.dump(payload, handle)
-            input_path = Path(handle.name)
-
-        try:
-            stdout = self._run(
-                [
-                    str(self.hecate_bin),
-                    "agent",
-                    "run",
-                    "sigma-generator",
-                    "--input-json",
-                    str(input_path),
-                    "--out-dir",
-                    str(out_dir),
-                    "--output-format",
-                    "json",
-                ],
-                timeout_sec=timeout_sec,
-            )
-        finally:
-            input_path.unlink(missing_ok=True)
-
-        return self._parse_sigma_output(stdout)
-
-    @staticmethod
-    def _parse_sigma_output(text: str) -> SigmaResult:
-        """Parse the agent's JSON payload out of rich-rendered stdout.
-
-        `console.print_json` pretty-prints, so the payload spans many lines
-        and cannot be read line-wise like the hypothesis output. Slicing from
-        the first brace to the last is enough here because the command emits
-        exactly one JSON document and nothing else on stdout.
-        """
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise HecateError(f"sigma-generator returned no JSON payload: {text[:300]}")
-        try:
-            data = json.loads(text[start : end + 1])
-        except ValueError as exc:
-            raise HecateError(f"sigma-generator returned malformed JSON: {exc}") from exc
-
+        from hecate_agent.api import generate_sigma
+        output, files = self._with_context(
+            generate_sigma,
+            payload=payload,
+            out_dir=out_dir,
+            hunt_id=payload.get("hunt_id"),
+        )
+        rules = [
+            {
+                "logsource_category": r.logsource_category,
+                "title": r.title,
+                "level": r.level,
+                "techniques": r.techniques,
+                "rule_yaml": r.rule_yaml,
+            }
+            for r in output.rules
+        ]
         return SigmaResult(
-            success=bool(data.get("success")),
-            error=data.get("error"),
-            warnings=list(data.get("warnings") or []),
-            logsources_considered=list(data.get("logsources_considered") or []),
-            rejected=list(data.get("rejected") or []),
-            files=[Path(f) for f in (data.get("files") or [])],
-            rules=list(data.get("rules") or []),
+            success=True,
+            error=None,
+            warnings=[],
+            logsources_considered=output.logsources_considered,
+            rejected=output.rejected,
+            files=files,
+            rules=rules,
+        )
+
+    def lookup_technique(
+        self,
+        technique_id: str,
+        timeout_sec: int | None = None,
+    ) -> TechniqueMetadata:
+        from hecate_agent.api import lookup_technique
+        try:
+            data = self._with_context(lookup_technique, technique_id=technique_id)
+        except RuntimeError as exc:
+            if "stix_unavailable" in str(exc):
+                return TechniqueMetadata()
+            raise HecateError(f"lookup failed: {exc}")
+        return TechniqueMetadata(
+            technique_id=data.get("technique_id", ""),
+            tactics=data.get("tactics", []),
+            platforms=data.get("platforms", []),
+            found=data.get("found", False),
+            superseded_from=data.get("superseded_from", ""),
         )
 
     def link_research_to_hunt(
         self, research_id: str, hunt_id: str, timeout_sec: int | None = None
     ) -> None:
-        """Record the hunt on its source research document's ``linked_hunts``.
-
-        Goes through the CLI rather than editing the research file directly:
-        Hecate treats its own commands as the only sanctioned writer of hunt and
-        research frontmatter, and this runner writes hunt files itself only
-        because it needs the ID-allocation lock.
-
-        `hecate-agent hunt new --research` already does this for hunts it creates; a
-        runner-written hunt otherwise leaves the research doc reporting
-        `linked_hunts: []` while the hunt names it in `spawned_from`.
-        """
-        self._run(
-            [str(self.hecate_bin), "research", "link", research_id, "--hunt", hunt_id],
-            timeout_sec=timeout_sec,
+        from hecate_agent.api import link_research_to_hunt
+        self._with_context(
+            link_research_to_hunt,
+            research_id=research_id,
+            hunt_id=hunt_id,
+            workspace=self.workspace,
         )
-
-    def lookup_technique(
-        self, technique_id: str, timeout_sec: int | None = None
-    ) -> TechniqueMetadata:
-        """Resolve a technique's real tactic(s)/platform(s) via ``hecate-agent attack lookup --json``.
-
-        Best-effort and never raises: STIX data may not be installed, the
-        technique ID may be unknown/malformed (e.g. a hypothesis-generator
-        placeholder), or the call may time out. Any of those just yields a
-        not-``found`` result so callers leave the field empty instead of
-        guessing — or, as before this existed, hardcoding a tactic that has
-        nothing to do with the actual technique.
-        """
-        cmd = [str(self.hecate_bin), "attack", "lookup", technique_id, "--json"]
-        try:
-            stdout = self._run(cmd, timeout_sec=timeout_sec)
-        except HecateError as exc:
-            log.warning("hecate-agent attack lookup %s failed: %s", technique_id, exc)
-            return TechniqueMetadata(technique_id=technique_id)
-
-        try:
-            data = json.loads(stdout.strip())
-        except json.JSONDecodeError:
-            log.warning("hecate-agent attack lookup %s produced non-JSON output", technique_id)
-            return TechniqueMetadata(technique_id=technique_id)
-
-        if "error" in data:
-            # Silent until now: this is the branch a missing/unreadable STIX
-            # cache lands in, and it degrades every draft to empty tactics and
-            # platforms -- losing the only signal that would flag a technique
-            # ID as a poor fit for the hypothesis. Worth a warning, since the
-            # resulting draft otherwise looks entirely normal.
-            log.warning(
-                "hecate-agent attack lookup %s returned no metadata (%s); "
-                "draft will have empty tactics/platforms",
-                technique_id,
-                data.get("error"),
-            )
-            return TechniqueMetadata(technique_id=technique_id)
-
-        superseded_from = str(data.get("superseded_from") or "")
-        if superseded_from:
-            log.info(
-                "ATT&CK revoked %s; using its replacement %s. The source CTI's "
-                "technique list is stale, not wrong.",
-                superseded_from,
-                data.get("id"),
-            )
-
-        return TechniqueMetadata(
-            technique_id=data.get("id") or technique_id,
-            tactics=list(data.get("tactics", [])),
-            platforms=list(data.get("platforms", [])),
-            found=True,
-            superseded_from=superseded_from,
-        )
-
-    # --- Internal ----------------------------------------------------------
-
-    @staticmethod
-    def _parse_research_output(text: str) -> ResearchResult:
-        """Extract the JSON object from ``hecate-agent research new --output json``.
-
-        The CLI prints a human-readable progress banner ("Starting Research:
-        R-000X ...") to stdout *before* the JSON payload even in JSON mode,
-        so we can't ``json.loads`` the whole thing directly — find where the
-        JSON object starts and parse from there.
-        """
-        start = text.find("{")
-        if start == -1:
-            log.warning("hecate-agent research new produced no JSON object in output")
-            return ResearchResult()
-
-        try:
-            data = json.loads(text[start:])
-        except json.JSONDecodeError as exc:
-            log.warning("Failed to parse hecate-agent research new JSON output: %s", exc)
-            return ResearchResult()
-
-        related_hunts = []
-        for source in data.get("related_work", {}).get("sources", []):
-            match = re.match(r"hunts/(H-\d+)\.md$", source.get("url", ""))
-            if match:
-                related_hunts.append(match.group(1))
-
-        return ResearchResult(
-            research_id=data.get("research_id", "") or "",
-            recommended_hypothesis=data.get("recommended_hypothesis", "") or "",
-            related_hunts=related_hunts,
-        )
-
-    def _run(self, cmd: list[str], *, timeout_sec: int | None = None) -> str:
-        timeout = timeout_sec or self.default_timeout_sec
-
-        env = {**os.environ, **self.env_overrides}
-        env["PATH"] = f"{self.hecate_bin.parent}{os.pathsep}{env.get('PATH', '')}"
-
-        preview = " ".join(cmd[:5]) + (" ..." if len(cmd) > 5 else "")
-        log.info("hecate-agent exec: %s (timeout=%ds)", preview, timeout)
-
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=str(self.workspace),
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise HecateError(f"hecate call timed out after {timeout}s: {preview}") from exc
-        except FileNotFoundError as exc:
-            raise HecateError(f"hecate-agent binary missing at {self.hecate_bin}") from exc
-
-        if result.returncode != 0:
-            log.error(
-                "hecate failed rc=%d stderr=%s",
-                result.returncode,
-                result.stderr[:500],
-            )
-            raise HecateError(f"hecate exit {result.returncode}: {result.stderr.strip()[:500]}")
-
-        return result.stdout
-
-    @staticmethod
-    def _parse_hypothesis_output(text: str) -> HypothesisResult:
-        """Best-effort parse of the human-readable hypothesis-generator output.
-
-        The CLI prints sections like:
-            Hypothesis:
-              <text>
-            Justification:
-              <text>
-            MITRE ATT&CK Techniques:
-              • T1003.001
-        We walk line-by-line and route content into the current section.
-        """
-        result = HypothesisResult()
-        section: str | None = None
-        list_targets = {
-            "techniques": result.techniques,
-            "data_sources": result.data_sources,
-            "observables": result.observables,
-            "false_positives": result.false_positives,
-            "warnings": result.warnings,
-        }
-        prose_targets: dict[str, str] = {
-            "hypothesis": "",
-            "justification": "",
-            "actor": "",
-            "behavior": "",
-            "location": "",
-            "evidence": "",
-            "low_confidence_reason": "",
-            "indicator_only_marker": "",
-        }
-
-        section_headers = {
-            "hypothesis:": "hypothesis",
-            "justification:": "justification",
-            "mitre att&ck techniques:": "techniques",
-            "data sources:": "data_sources",
-            "expected observables:": "observables",
-            "known false positives:": "false_positives",
-            "actor:": "actor",
-            "behavior:": "behavior",
-            "location:": "location",
-            "evidence:": "evidence",
-            "low confidence source:": "low_confidence_reason",
-            "indicator-only source:": "indicator_only_marker",
-            "warnings:": "warnings",
-        }
-
-        for raw_line in text.splitlines():
-            stripped = raw_line.strip()
-
-            # Section switch?
-            lowered = stripped.lower()
-            if lowered in section_headers:
-                section = section_headers[lowered]
-                continue
-
-            if not stripped or section is None:
-                continue
-
-            if section in list_targets:
-                if stripped.startswith(("-", "*", "•")):
-                    list_targets[section].append(stripped.lstrip("-*• ").strip())
-            elif section in prose_targets:
-                prose_targets[section] = (prose_targets[section] + " " + stripped).strip()
-
-        result.hypothesis = prose_targets["hypothesis"]
-        result.justification = prose_targets["justification"]
-        result.actor = prose_targets["actor"]
-        result.behavior = prose_targets["behavior"]
-        result.location = prose_targets["location"]
-        result.evidence = prose_targets["evidence"]
-        # The CLI only prints a "Low Confidence Source:" section at all when
-        # is_threat_report is False (see _display_hypothesis_generator_result)
-        # -- its mere presence with non-empty content is the signal, same as
-        # how absence must leave HypothesisResult's True default untouched.
-        if prose_targets["low_confidence_reason"]:
-            result.is_threat_report = False
-            result.low_confidence_reason = prose_targets["low_confidence_reason"]
-        # Same convention: the CLI prints this section only when the agent
-        # self-assessed the source as indicator-only, so its presence is the
-        # signal and its absence must leave the False default alone.
-        result.is_indicator_only = bool(prose_targets["indicator_only_marker"])
-        return result
