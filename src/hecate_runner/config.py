@@ -69,7 +69,7 @@ class Settings(BaseSettings):
             "hecate-runner-orchestrator.service) since that's an outer, harder cap."
         ),
     )
-    cti_provider: Literal["file", "otx", "rss", "misp", "multi"] = Field(
+    cti_provider: Literal["file", "otx", "rss", "misp", "cisa_kev", "multi"] = Field(
         default="file",
         alias="HECATE_RUNNER_CTI_PROVIDER",
         description=(
@@ -209,11 +209,16 @@ class Settings(BaseSettings):
             "https://thedfirreport.com/feed/,"
             "https://blog.talosintelligence.com/rss/,"
             "https://unit42.paloaltonetworks.com/feed/,"
-            "https://www.microsoft.com/en-us/security/blog/feed/"
+            "https://www.microsoft.com/en-us/security/blog/feed/,"
+            "https://blog.google/threat-analysis-group/rss/,"
+            "https://www.mandiant.com/resources/blog/rss.xml,"
+            "https://blog.sekoia.io/feed/,"
+            "https://www.volexity.com/blog/feed/,"
+            "https://www.welivesecurity.com/feed/"
         ),
         alias="HECATE_RUNNER_RSS_FEED_URLS",
         description=(
-            "Comma-separated RSS/Atom feed URLs. Defaults to four verified, "
+            "Comma-separated RSS/Atom feed URLs. Defaults to verified, "
             "reputable security research blogs (The DFIR Report, Talos, Unit42, "
             "Microsoft Security Blog) — a curation choice, not a technical "
             "requirement; swap freely. CISA's advisory feed was tried and "

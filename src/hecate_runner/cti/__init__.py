@@ -9,11 +9,13 @@ from hecate_runner.cti.misp import MispProvider
 from hecate_runner.cti.multi import MultiProvider
 from hecate_runner.cti.otx import OtxProvider
 from hecate_runner.cti.rss import RssProvider
+from hecate_runner.cti.cisa_kev import CisaKevProvider
 
 __all__ = [
     "ATTACK_TECHNIQUE_LINE",
     "CTIItem",
     "CTIProvider",
+    "CisaKevProvider",
     "FileQueueProvider",
     "MispProvider",
     "MultiProvider",
@@ -58,6 +60,8 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             backfill=settings.misp_backfill,
             max_pages_per_poll=settings.misp_max_pages_per_poll,
         )
+    if name == "cisa_kev":
+        return CisaKevProvider(workspace=settings.hecate_workspace_resolved)
     if name == "multi":
         sub_names = settings.cti_multi_provider_names
         if not sub_names:
