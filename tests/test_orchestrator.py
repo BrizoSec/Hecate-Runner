@@ -1217,11 +1217,10 @@ def test_link_failure_does_not_lose_the_hunt(
     assert orch.run_once().outcome == "draft_created"
 
 
-def test_technique_validity_reaches_the_grounding_audit(
+def test_invalid_technique_is_dropped_from_draft(
     settings: Settings, mock_hecate: MagicMock, sample_hypothesis: HypothesisResult
 ) -> None:
-    """An invented technique ID must be reported as unsupported in the draft,
-    not pass as something the hypothesis reasoned to."""
+    """An invented technique ID must be dropped so it doesn't break frontmatter validation."""
     sample_hypothesis.techniques = ["T9999"]
     mock_hecate.hypothesis_generator.return_value = sample_hypothesis
     mock_hecate.lookup_technique.return_value = TechniqueMetadata(technique_id="T9999", found=False)
@@ -1232,7 +1231,8 @@ def test_technique_validity_reaches_the_grounding_audit(
     orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     content = orch.run_once().draft_path.read_text()
-    assert "no such technique in the current ATT&CK matrix" in content
+    assert "T9999" not in content
+    assert "none mapped - human to populate" in content
 
 
 def test_revoked_technique_is_recorded_in_the_draft(

@@ -475,6 +475,8 @@ def _named_entities(prose: str) -> list[str]:
 
 
 def _looks_like_a_filename(value: str) -> bool:
+    if "/" in value or "\\" in value:
+        return True
     return value.rsplit(".", 1)[-1].lower() in _FILE_SUFFIXES
 
 
