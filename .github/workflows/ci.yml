@@ -16,6 +16,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # pyproject.toml pulls in `hecate-agent` as an editable path dependency
+      # at ../Hecate-Core, which only exists locally because the two repos
+      # are checked out as siblings. Recreate that layout here by checking
+      # out the (public) Hecate-Core repo one directory above this checkout.
+      - name: Checkout Hecate-Core (sibling dependency for hecate-agent)
+        uses: actions/checkout@v4
+        with:
+          repository: BrizoSec/Hecate-Core
+          path: ../Hecate-Core
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
