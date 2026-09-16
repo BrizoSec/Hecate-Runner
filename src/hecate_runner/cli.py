@@ -523,8 +523,9 @@ def status() -> None:
     table.add_row("Total drafts ever", str(state.total_drafts_ever))
     table.add_row("Last run", state.last_run_iso or "(never)")
     table.add_row("Consecutive failures", str(state.consecutive_failures))
-    
+
     from hecate_runner.parked_store import list_parked
+
     parked_count = len(list_parked(settings.cti_queue_dir_resolved))
     table.add_row("Parked drafts", str(parked_count))
     console.print(table)
@@ -816,32 +817,35 @@ def _has_write(path: Path) -> bool:
 sources_app = typer.Typer(help="Manage CTI sources (list, enable, disable, reset).")
 app.add_typer(sources_app, name="sources")
 
+
 @sources_app.command("list")
 def list_sources() -> None:
     """List all CTI sources, their configuration status, and active state."""
-    from hecate_runner.config import Settings
-    from rich.table import Table
     from rich.console import Console
+    from rich.table import Table
+
+    from hecate_runner.config import Settings
 
     settings = Settings()
     console = Console()
-    
+
     table = Table(title="CTI Sources Configuration")
     table.add_column("Provider", style="cyan")
     table.add_column("Status", style="bold")
     table.add_column("Credentials / Configured", style="dim")
     table.add_column("Cursor State")
-    
+
     is_multi = settings.cti_provider == "multi"
     active_sources = settings.cti_multi_provider_names if is_multi else [settings.cti_provider]
-    
+
     def format_active(name: str) -> str:
         return "[green]Active[/green]" if name in active_sources else "[dim]Disabled[/dim]"
-        
+
     def cursor_status(path: Path) -> str:
         if path.exists():
             import datetime
             import os
+
             mtime = os.path.getmtime(path)
             dt = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
             return f"Exists (last updated {dt})"
@@ -850,66 +854,86 @@ def list_sources() -> None:
     # OTX
     otx_cred = "API Key present" if settings.otx_api_key else "Missing API Key"
     table.add_row("otx", format_active("otx"), otx_cred, cursor_status(settings.otx_cursor_file))
-    
+
     # MISP
-    misp_cred = "Configured" if settings.misp_base_url and settings.misp_api_key else "Missing Config"
-    table.add_row("misp", format_active("misp"), misp_cred, cursor_status(settings.misp_cursor_file))
-    
+    misp_cred = (
+        "Configured" if settings.misp_base_url and settings.misp_api_key else "Missing Config"
+    )
+    table.add_row(
+        "misp", format_active("misp"), misp_cred, cursor_status(settings.misp_cursor_file)
+    )
+
     # RSS
     rss_cred = f"{len(settings.rss_feed_urls)} feeds" if settings.rss_feed_urls else "No feeds"
     table.add_row("rss", format_active("rss"), rss_cred, cursor_status(settings.rss_cursor_file))
-    
+
     # CISA KEV
     cisa_cursor = settings.hecate_workspace / ".cursors" / "cisa_kev_cursor.json"
-    table.add_row("cisa_kev", format_active("cisa_kev"), "Built-in (Public)", cursor_status(cisa_cursor))
-    
+    table.add_row(
+        "cisa_kev", format_active("cisa_kev"), "Built-in (Public)", cursor_status(cisa_cursor)
+    )
+
     # File Queue
     file_queue_dir = settings.cti_queue_dir_resolved
-    file_status = f"{len(list(file_queue_dir.glob('*.txt')))} items" if file_queue_dir.exists() else "Missing dir"
+    file_status = (
+        f"{len(list(file_queue_dir.glob('*.txt')))} items"
+        if file_queue_dir.exists()
+        else "Missing dir"
+    )
     table.add_row("file", format_active("file"), file_status, "N/A")
-    
+
     console.print(table)
-    
+
     if is_multi:
-        console.print(f"\n[dim]Multi-provider round-robin cursor:[/dim] {cursor_status(settings.multi_cursor_file)}\n")
+        console.print(
+            f"\n[dim]Multi-provider round-robin cursor:[/dim] {cursor_status(settings.multi_cursor_file)}\n"
+        )
 
 
 def _update_env_key(key: str, value: str) -> None:
-    from dotenv import set_key
-    from hecate_runner.config import Settings
     import os
-    settings = Settings()
+
+    from dotenv import set_key
+
     env_path = ".env"
     if not os.path.exists(env_path):
-        with open(env_path, "w") as f:
+        with open(env_path, "w"):
             pass
     set_key(env_path, key, value)
-    
+
 
 @sources_app.command("enable")
 def enable_source(name: str) -> None:
     """Enable a CTI source in the .env configuration."""
-    from hecate_runner.config import Settings
     from rich.console import Console
+
+    from hecate_runner.config import Settings
+
     settings = Settings()
     console = Console()
-    
+
     valid = {"otx", "rss", "misp", "cisa_kev", "file"}
     if name not in valid:
-        console.print(f"[red]Error:[/red] Unknown source '{name}'. Valid sources are: {', '.join(valid)}")
+        console.print(
+            f"[red]Error:[/red] Unknown source '{name}'. Valid sources are: {', '.join(valid)}"
+        )
         raise typer.Exit(1)
-        
-    active = settings.cti_multi_provider_names if settings.cti_provider == "multi" else [settings.cti_provider]
+
+    active = (
+        settings.cti_multi_provider_names
+        if settings.cti_provider == "multi"
+        else [settings.cti_provider]
+    )
     if name in active:
         console.print(f"Source [cyan]{name}[/cyan] is already enabled.")
         return
-        
+
     if settings.cti_provider == "file" and name != "file":
         # Usually want to switch to multi if enabling a real feed while on file queue
-        new_active = [name] if settings.cti_provider == "file" else active + [name]
+        new_active = [name] if settings.cti_provider == "file" else [*active, name]
     else:
-        new_active = active + [name]
-        
+        new_active = [*active, name]
+
     # If more than one active, must be 'multi'
     if len(new_active) > 1:
         _update_env_key("HECATE_RUNNER_CTI_PROVIDER", "multi")
@@ -924,29 +948,35 @@ def enable_source(name: str) -> None:
 @sources_app.command("disable")
 def disable_source(name: str) -> None:
     """Disable a CTI source in the .env configuration."""
-    from hecate_runner.config import Settings
     from rich.console import Console
+
+    from hecate_runner.config import Settings
+
     settings = Settings()
     console = Console()
-    
+
     if settings.cti_provider != "multi":
         if settings.cti_provider == name:
-            console.print(f"[yellow]Cannot disable the only active source.[/yellow] Set a new primary source first, or enable another.")
+            console.print(
+                "[yellow]Cannot disable the only active source.[/yellow] Set a new primary source first, or enable another."
+            )
             raise typer.Exit(1)
         else:
             console.print(f"Source [cyan]{name}[/cyan] is already disabled.")
             return
-            
+
     active = settings.cti_multi_provider_names
     if name not in active:
         console.print(f"Source [cyan]{name}[/cyan] is already disabled.")
         return
-        
+
     new_active = [a for a in active if a != name]
-    
+
     if len(new_active) == 1:
         _update_env_key("HECATE_RUNNER_CTI_PROVIDER", new_active[0])
-        console.print(f"Disabled [cyan]{name}[/cyan]. Reverted to single provider mode: {new_active[0]}")
+        console.print(
+            f"Disabled [cyan]{name}[/cyan]. Reverted to single provider mode: {new_active[0]}"
+        )
     else:
         _update_env_key("HECATE_RUNNER_CTI_MULTI_PROVIDERS", ",".join(new_active))
         console.print(f"Disabled [cyan]{name}[/cyan]. Remaining active: {','.join(new_active)}")
@@ -955,12 +985,15 @@ def disable_source(name: str) -> None:
 @sources_app.command("reset")
 def reset_cursor(name: str) -> None:
     """Reset a CTI source's cursor to force re-ingestion."""
-    from hecate_runner.config import Settings
-    from rich.console import Console
     import os
+
+    from rich.console import Console
+
+    from hecate_runner.config import Settings
+
     settings = Settings()
     console = Console()
-    
+
     cursors = {
         "otx": settings.otx_cursor_file,
         "misp": settings.misp_cursor_file,
@@ -968,11 +1001,11 @@ def reset_cursor(name: str) -> None:
         "multi": settings.multi_cursor_file,
         "cisa_kev": settings.hecate_workspace / ".cursors" / "cisa_kev_cursor.json",
     }
-    
+
     if name not in cursors:
         console.print(f"[red]Error:[/red] Unknown source or source without cursor '{name}'.")
         raise typer.Exit(1)
-        
+
     cursor_path = cursors[name]
     if cursor_path.exists():
         try:
@@ -980,9 +1013,10 @@ def reset_cursor(name: str) -> None:
             console.print(f"[green]Successfully reset cursor for {name}.[/green]")
         except Exception as e:
             console.print(f"[red]Failed to delete cursor:[/red] {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
     else:
         console.print(f"No cursor found for [cyan]{name}[/cyan] at {cursor_path}")
+
 
 if __name__ == "__main__":
     app()

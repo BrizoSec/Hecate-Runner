@@ -117,6 +117,11 @@ disallow_untyped_defs = false
 module = "feedparser"
 ignore_missing_imports = true
 
+# hecate-agent ships no py.typed marker, so mypy cannot see into it.
+[[tool.mypy.overrides]]
+module = "hecate_agent.*"
+ignore_missing_imports = true
+
 # --- pytest --------------------------------------------------------------
 [tool.pytest.ini_options]
 minversion = "8.0"

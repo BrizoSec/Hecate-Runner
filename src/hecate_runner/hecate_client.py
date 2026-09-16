@@ -1,13 +1,17 @@
 """Python API client wrapping the hecate_agent package."""
+
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
+
 
 @dataclass
 class ResearchResult:
@@ -15,9 +19,11 @@ class ResearchResult:
     recommended_hypothesis: str = ""
     related_hunts: list[str] = field(default_factory=list)
     raw_output: str = ""
+
     @property
     def is_empty(self) -> bool:
         return not self.research_id.strip()
+
 
 @dataclass
 class HypothesisResult:
@@ -36,9 +42,11 @@ class HypothesisResult:
     is_indicator_only: bool = False
     warnings: list[str] = field(default_factory=list)
     raw_output: str = ""
+
     @property
     def is_empty(self) -> bool:
         return not self.hypothesis.strip()
+
 
 @dataclass
 class TechniqueMetadata:
@@ -48,8 +56,10 @@ class TechniqueMetadata:
     found: bool = False
     superseded_from: str = ""
 
+
 class HecateError(RuntimeError):
     pass
+
 
 @dataclass
 class SigmaResult:
@@ -60,6 +70,7 @@ class SigmaResult:
     rejected: list[str] = field(default_factory=list)
     files: list[Path] = field(default_factory=list)
     rules: list[dict[str, Any]] = field(default_factory=list)
+
 
 class HecateClient:
     def __init__(
@@ -75,12 +86,10 @@ class HecateClient:
         self.default_timeout_sec = default_timeout_sec
 
     def check_installed(self) -> None:
-        try:
-            import hecate_agent
-        except ImportError:
+        if importlib.util.find_spec("hecate_agent") is None:
             raise HecateError("hecate_agent Python package not found.")
 
-    def _with_context(self, func, *args, **kwargs):
+    def _with_context(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         original_cwd = os.getcwd()
         original_env = os.environ.copy()
         try:
@@ -88,11 +97,12 @@ class HecateClient:
             # 1. Load the workspace's .env so we pick up HECATE_LLM_MODEL, etc.
             # just like the subprocess CLI used to do.
             from dotenv import load_dotenv
+
             load_dotenv(self.workspace / ".env")
-            
+
             # 2. Apply runner overrides on top
             os.environ.update(self.env_overrides)
-            
+
             return func(*args, **kwargs)
         except Exception as exc:
             log.exception(f"Hecate API call failed: {exc}")
@@ -111,6 +121,7 @@ class HecateClient:
         web_search_enabled: bool = True,
     ) -> ResearchResult:
         from hecate_agent.api import generate_research
+
         output, _ = self._with_context(
             generate_research,
             topic=topic,
@@ -121,13 +132,17 @@ class HecateClient:
         )
         related_hunts = []
         for source in output.related_work.sources:
-            if "url" in source and source["url"].startswith("hunts/H-") and source["url"].endswith(".md"):
+            if (
+                "url" in source
+                and source["url"].startswith("hunts/H-")
+                and source["url"].endswith(".md")
+            ):
                 related_hunts.append(source["url"].replace("hunts/", "").replace(".md", ""))
         return ResearchResult(
             research_id=output.research_id,
             recommended_hypothesis=output.recommended_hypothesis or "",
             related_hunts=related_hunts,
-            raw_output="", 
+            raw_output="",
         )
 
     def hypothesis_generator(
@@ -138,6 +153,7 @@ class HecateClient:
         indicators_only: bool = False,
     ) -> HypothesisResult:
         from hecate_agent.api import generate_hypothesis
+
         output = self._with_context(
             generate_hypothesis,
             threat_intel=threat_intel,
@@ -170,6 +186,7 @@ class HecateClient:
         timeout_sec: int | None = None,
     ) -> SigmaResult:
         from hecate_agent.api import generate_sigma
+
         output, files = self._with_context(
             generate_sigma,
             payload=payload,
@@ -202,12 +219,13 @@ class HecateClient:
         timeout_sec: int | None = None,
     ) -> TechniqueMetadata:
         from hecate_agent.api import lookup_technique
+
         try:
             data = self._with_context(lookup_technique, technique_id=technique_id)
         except RuntimeError as exc:
             if "stix_unavailable" in str(exc):
                 return TechniqueMetadata()
-            raise HecateError(f"lookup failed: {exc}")
+            raise HecateError(f"lookup failed: {exc}") from exc
         return TechniqueMetadata(
             technique_id=data.get("technique_id", ""),
             tactics=data.get("tactics", []),
@@ -220,6 +238,7 @@ class HecateClient:
         self, research_id: str, hunt_id: str, timeout_sec: int | None = None
     ) -> None:
         from hecate_agent.api import link_research_to_hunt
+
         self._with_context(
             link_research_to_hunt,
             research_id=research_id,

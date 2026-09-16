@@ -862,11 +862,12 @@ class Orchestrator:
             scope_text=" ".join([hypothesis.hypothesis, hypothesis.location]),
             facts=technique_facts,
         )
-        
-        # 4.2 Drop unresolvable technique IDs from the draft so they don't 
+
+        # 4.2 Drop unresolvable technique IDs from the draft so they don't
         # reach the frontmatter and break `hunt validate` downstream.
         hypothesis.techniques = [
-            t for t in hypothesis.techniques
+            t
+            for t in hypothesis.techniques
             if t.upper() not in technique_facts or technique_facts[t.upper()].valid
         ]
 
