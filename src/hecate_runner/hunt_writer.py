@@ -185,6 +185,33 @@ def _read_counter(counter_path: Path) -> int:
         return 0
 
 
+def _max_hunt_id_in_queries(hunts_root: Path) -> int:
+    """Highest H-XXXX with Sigma rules still on disk under queries/, or 0.
+
+    Query artifacts are keyed by hunt ID with no lifecycle tie to the hunt
+    document, so deleting a hunt leaves its rules behind. Without this floor a
+    reallocated ID silently adopts them: after a counter reset the new H-0001
+    inherited the deleted H-0001's rule about Redis exploitation on Windows
+    servers, and its draft pointed a reviewer at a directory holding two
+    unrelated detections.
+
+    Treated as a floor rather than cleaned up, because deleting someone's
+    detection content to free an ID is the more destructive of the two
+    answers, and a gap in the numbering costs nothing.
+    """
+    max_id = 0
+    queries_root = hunts_root.parent / "queries"
+    if not queries_root.is_dir():
+        return 0
+    for entry in queries_root.iterdir():
+        if not entry.is_dir():
+            continue
+        m = re.match(r"H-(\d+)$", entry.name)
+        if m:
+            max_id = max(max_id, int(m.group(1)))
+    return max_id
+
+
 def next_hunt_id(hunts_root: Path) -> str:
     """Allocate the next hunt ID and persist it as the new high-water mark.
 
@@ -195,11 +222,15 @@ def next_hunt_id(hunts_root: Path) -> str:
     The ID is burned at allocation time, before the draft is written -- a
     cycle that dies between the two leaves a gap in the numbering rather
     than handing the same ID to the next cycle.
+
+    Leftover query artifacts count as a floor too, so an ID whose Sigma rules
+    are still on disk is never handed out again even if its hunt document and
+    the counter are both gone.
     """
     counter_path = hunts_root / _COUNTER_FILENAME
     # The on-disk max is always a floor, so drafts added by hand or by an
     # older hecate-runner since the last allocation still can not be clobbered.
-    high_water = _max_hunt_id_on_disk(hunts_root)
+    high_water = max(_max_hunt_id_on_disk(hunts_root), _max_hunt_id_in_queries(hunts_root))
     if counter_path.exists():
         high_water = max(high_water, _read_counter(counter_path))
     else:

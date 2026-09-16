@@ -51,6 +51,10 @@ def cli_env(workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     # doctor's RSS check is unconditional; keep it satisfied unless a test
     # explicitly needs it empty.
     monkeypatch.setenv("HECATE_RUNNER_RSS_FEED_URLS", "https://example.com/feed")
+    # Research grounding is a hard check when research is enabled, so the
+    # healthy baseline has to carry a key. Tests that care about its absence
+    # delete it themselves.
+    monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")
     return workspace
 
 
@@ -165,15 +169,70 @@ class TestDoctorCommand:
         assert result.exit_code == 1
         assert "RSS feed URLs" in result.stdout
 
-    def test_research_enabled_without_tavily_key_warns_not_fails(
+    def test_research_enabled_without_tavily_key_fails(
         self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Promoted from a warning deliberately.
+
+        doctor already labelled grounding "mandatory-when-enabled" while
+        letting it pass, so a deployment could report healthy while every
+        research run went ungrounded. Turning research off is the supported
+        way to run without a key.
+        """
         monkeypatch.setenv("HECATE_RUNNER_RESEARCH_ENABLED", "true")
+        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+        result = runner.invoke(app, ["doctor"])
+
+        assert result.exit_code == 1
+        assert "TAVILY_API_KEY" in result.stdout
+
+    def test_research_disabled_without_tavily_key_passes(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HECATE_RUNNER_RESEARCH_ENABLED", "false")
+        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
         result = runner.invoke(app, ["doctor"])
 
         assert result.exit_code == 0
-        assert "TAVILY_API_KEY" in result.stdout
+        assert "All checks passed" in result.stdout
+
+    def test_missing_agent_capability_fails(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The runner drives hecate_agent in-process, so a capability missing
+        from *this* environment silently disables it. doctor reported healthy
+        through exactly that, which is why these are hard checks."""
+        import hecate_runner.cli as cli_mod
+
+        real = cli_mod._module_available
+        monkeypatch.setattr(
+            cli_mod,
+            "_module_available",
+            lambda name: False if name == "sklearn" else real(name),
+        )
+
+        result = runner.invoke(app, ["doctor"])
+
+        assert result.exit_code == 1
+        assert "scikit-learn importable" in result.stdout
+
+    def test_stix_package_without_data_fails(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The package alone is not enough. Without the downloaded bundle every
+        technique ID resolves to nothing and drafts ship with empty
+        `techniques:` frontmatter, so this is checked separately."""
+        import hecate_runner.cli as cli_mod
+
+        monkeypatch.setattr(cli_mod, "_stix_data_available", lambda: False)
+
+        result = runner.invoke(app, ["doctor"])
+
+        assert result.exit_code == 1
+        assert "ATT&CK STIX data present" in result.stdout
+        assert "attack update" in result.stdout
 
     def test_slack_webhook_absent_warns_not_fails(self, cli_env: Path) -> None:
         result = runner.invoke(app, ["doctor"])

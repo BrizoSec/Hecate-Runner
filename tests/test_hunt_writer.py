@@ -42,6 +42,51 @@ def test_next_hunt_id_finds_max(tmp_path: Path) -> None:
     assert next_hunt_id(root) == "H-0013"
 
 
+def test_next_hunt_id_skips_ids_with_orphaned_query_artifacts(tmp_path: Path) -> None:
+    """A deleted hunt leaves its Sigma rules behind under queries/, keyed by
+    hunt ID. Without this floor the reallocated ID silently adopts them: after
+    a counter reset the new H-0001 inherited the deleted H-0001's rule about
+    Redis exploitation, and the draft pointed a reviewer at a directory holding
+    two unrelated detections."""
+    root = tmp_path / "hunts"
+    root.mkdir(parents=True)
+    queries = tmp_path / "queries"
+    (queries / "H-0009").mkdir(parents=True)
+    (queries / "H-0009" / "file_event__old_rule.yml").write_text("title: old")
+
+    assert next_hunt_id(root) == "H-0010"
+
+
+def test_next_hunt_id_takes_the_highest_floor(tmp_path: Path) -> None:
+    """Hunt documents and query artifacts are independent floors."""
+    root = tmp_path / "hunts"
+    (root / "2026" / "Q3").mkdir(parents=True)
+    (root / "2026" / "Q3" / "H-0020.md").write_text("stub")
+    queries = tmp_path / "queries"
+    (queries / "H-0005").mkdir(parents=True)
+
+    assert next_hunt_id(root) == "H-0021"
+
+
+def test_next_hunt_id_ignores_non_hunt_entries_under_queries(tmp_path: Path) -> None:
+    root = tmp_path / "hunts"
+    root.mkdir(parents=True)
+    queries = tmp_path / "queries"
+    queries.mkdir()
+    (queries / "H-0003").mkdir()
+    (queries / "scratch").mkdir()
+    (queries / "H-bad").mkdir()
+    (queries / "H-0099.yml").write_text("a file, not a hunt directory")
+
+    assert next_hunt_id(root) == "H-0004"
+
+
+def test_next_hunt_id_unaffected_when_queries_dir_is_absent(tmp_path: Path) -> None:
+    root = tmp_path / "hunts"
+    root.mkdir(parents=True)
+    assert next_hunt_id(root) == "H-0001"
+
+
 def test_next_hunt_id_ignores_non_matches(tmp_path: Path) -> None:
     root = tmp_path / "hunts"
     (root / "2026" / "Q3").mkdir(parents=True)

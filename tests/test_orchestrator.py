@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -26,7 +27,9 @@ from hecate_runner.orchestrator import (
     derive_research_topic,
     has_narrative,
     merge_techniques,
+    platform_consistent_data_sources,
     platforms_named_in,
+    substantive_observables,
 )
 from hecate_runner.parked_store import list_parked
 from hecate_runner.state import OrchestratorState
@@ -1375,3 +1378,64 @@ def test_an_unwritable_park_drafts_rather_than_losing_the_item(
     orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     assert orch.run_once().outcome == "draft_created"
+
+
+class TestPlatformConsistentDataSources:
+    """A macOS hunt shipped asking for `registry_events`. The hypothesis agent
+    proposes its own data_sources and nothing checked them against the platform
+    the techniques resolved to."""
+
+    SOURCES: ClassVar[list[str]] = [
+        "process_execution",
+        "file_operations",
+        "network_connections",
+        "registry_events",
+    ]
+
+    def test_registry_events_dropped_on_macos(self):
+        kept = platform_consistent_data_sources(self.SOURCES, ["macOS"])
+        assert "registry_events" not in kept
+        assert kept == ["process_execution", "file_operations", "network_connections"]
+
+    def test_registry_events_kept_on_windows(self):
+        assert "registry_events" in platform_consistent_data_sources(self.SOURCES, ["Windows"])
+
+    def test_registry_events_kept_when_any_platform_supports_it(self):
+        kept = platform_consistent_data_sources(self.SOURCES, ["macOS", "Windows"])
+        assert "registry_events" in kept
+
+    def test_unknown_platform_drops_nothing(self):
+        """Empty platforms means scope is unknown, not that everything is
+        excluded. Narrowing telemetry on no evidence is worse than leaving a
+        source a reviewer can strike out."""
+        assert platform_consistent_data_sources(self.SOURCES, []) == self.SOURCES
+
+    def test_case_and_whitespace_insensitive(self):
+        assert "registry_events" not in platform_consistent_data_sources(self.SOURCES, ["  macos "])
+
+
+class TestSubstantiveObservables:
+    """ "What Suspicious Looks Like" came back as the telemetry list retitled,
+    which tells a reviewer nothing while reading as a completed section."""
+
+    def test_bare_category_names_are_dropped(self):
+        assert (
+            substantive_observables(["Process execution", "Network connections", "File operations"])
+            == []
+        )
+
+    def test_a_described_behaviour_is_kept(self):
+        observables = ["Process execution", "Unsigned binary launched from /tmp by Safari"]
+        assert substantive_observables(observables) == [
+            "Unsigned binary launched from /tmp by Safari"
+        ]
+
+    def test_specific_entries_survive_untouched(self):
+        observables = ["DNS query to a newly registered lookalike domain"]
+        assert substantive_observables(observables) == observables
+
+    def test_trailing_punctuation_and_underscores_normalise(self):
+        assert substantive_observables(["registry_events.", "Network Connections"]) == []
+
+    def test_blank_entries_are_dropped(self):
+        assert substantive_observables(["", "   "]) == []

@@ -16,6 +16,7 @@ Commands:
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 import os
@@ -717,13 +718,55 @@ def doctor() -> None:
         f"RSS feed URLs configured ({len(settings.rss_feed_urls)} feeds)",
         "Set HECATE_RUNNER_RSS_FEED_URLS to a comma-separated list of feed URLs.",
     )
+
+    # --- Agent capabilities ------------------------------------------------
+    # The runner drives hecate_agent in-process, so its optional capabilities
+    # resolve against *this* environment, not the workspace venv HECATE_BIN
+    # points at. Checking an API key without checking the client library that
+    # consumes it is what let research grounding sit switched off unnoticed:
+    # the key was set, the package was absent, and every cycle still reported
+    # success. These are hard checks -- the runner treats all of hecate_agent's
+    # optional capabilities as mandatory.
+    check(
+        _module_available("mitreattack"),
+        "mitreattack-python importable (ATT&CK technique lookup)",
+        "Reinstall the runner with `uv sync` — hecate-agent[all] carries it.",
+    )
+    # The package alone is not enough. Lookup needs the downloaded STIX bundle,
+    # and without it every technique ID resolves to nothing, so drafts ship with
+    # empty `techniques:` frontmatter and invented IDs go uncaught.
+    check(
+        _stix_data_available(),
+        "ATT&CK STIX data present (technique validation and enrichment)",
+        "Run `hecate-agent attack update` to download the STIX bundle.",
+    )
+    check(
+        _module_available("sklearn"),
+        "scikit-learn importable (related-hunt similarity)",
+        "Reinstall the runner with `uv sync` — hecate-agent[all] carries it.",
+    )
+    check(
+        _module_available("sigma"),
+        "pySigma importable (Sigma rule validation)",
+        "Reinstall the runner with `uv sync` — without it generated rules are "
+        "only structurally checked, never validated as Sigma.",
+    )
     if settings.research_enabled:
-        warn(
+        check(
+            _module_available("tavily"),
+            "tavily-python importable (research web grounding)",
+            "Reinstall the runner with `uv sync` — without it research silently runs ungrounded.",
+        )
+        # Promoted from a warning: with the client library mandatory, a missing
+        # key is the only remaining way for grounding to be off, and the old
+        # note ("research will still run without it") described exactly the
+        # silent degradation this check exists to prevent.
+        check(
             _tavily_key_available(settings),
             "TAVILY_API_KEY set (research grounding is mandatory-when-enabled)",
-            "Research will still run without it, but skips the adversary-tradecraft "
-            "web-search skill — set TAVILY_API_KEY in the Hecate workspace .env for full "
-            "grounding. Get a free-tier key at https://tavily.com",
+            "Set TAVILY_API_KEY in the Hecate workspace .env. Get a free-tier "
+            "key at https://tavily.com, or set HECATE_RUNNER_RESEARCH_ENABLED=false "
+            "to run drafts without research grounding deliberately.",
         )
     warn(
         bool(settings.slack_webhook_url),
@@ -799,6 +842,34 @@ def _env_key_available(settings: Settings, key_name: str) -> bool:
 
 def _tavily_key_available(settings: Settings) -> bool:
     return _env_key_available(settings, "TAVILY_API_KEY")
+
+
+def _module_available(name: str) -> bool:
+    """True if `name` can be imported in *this* interpreter.
+
+    find_spec rather than a real import: the point is whether the dependency is
+    installed here, and importing heavyweight ML packages just to answer that
+    would make `doctor` slow enough that people stop running it.
+    """
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _stix_data_available() -> bool:
+    """True if ATT&CK lookups are backed by live STIX data, not the fallback.
+
+    Distinct from `_module_available("mitreattack")`: the provider needs both
+    the package and a downloaded bundle, and silently falls back when either is
+    missing.
+    """
+    try:
+        from hecate_agent.core.attack_matrix import is_using_stix
+
+        return bool(is_using_stix())
+    except Exception:
+        return False
 
 
 def _has_write(path: Path) -> bool:

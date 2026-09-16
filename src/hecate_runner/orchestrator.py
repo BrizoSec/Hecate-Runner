@@ -181,6 +181,83 @@ def derive_data_sources(techniques: list[str], indicator_types: list[str]) -> li
     return found
 
 
+#: Telemetry that only exists on a given platform. The hypothesis agent
+#: proposes its own data_sources list and nothing checked it against the
+#: platform the techniques actually resolved to, so a macOS hunt shipped asking
+#: for `registry_events` -- telemetry macOS does not have. A reviewer scoping
+#: that hunt has to notice and discard it, and an automated consumer cannot.
+_PLATFORM_ONLY_DATA_SOURCES: dict[str, frozenset[str]] = {
+    "registry_events": frozenset({"windows"}),
+}
+
+
+#: Telemetry category names the model returns as if they were observations.
+#: A draft came back with "What Suspicious Looks Like" reading "Process
+#: execution / Network connections / File operations" -- the data source list
+#: retitled, which tells a reviewer nothing about what to look for and reads
+#: as if the section had been filled in.
+_DATA_SOURCE_RESTATEMENTS = frozenset(
+    {
+        "process execution",
+        "process executions",
+        "process creation",
+        "file operations",
+        "file operation",
+        "file events",
+        "network connections",
+        "network connection",
+        "network traffic",
+        "registry events",
+        "registry event",
+        "dns queries",
+        "dns query",
+        "authentication events",
+    }
+)
+
+
+def substantive_observables(observables: list[str]) -> list[str]:
+    """Drop "observables" that only restate the telemetry category.
+
+    Kept deliberately narrow: an entry is dropped only when the whole string is
+    a bare category name. "Process execution of an unsigned binary from
+    /tmp" describes something a hunter can look for and stays.
+    """
+    kept: list[str] = []
+    for observable in observables:
+        text = str(observable).strip()
+        normalised = text.lower().rstrip(".").replace("_", " ")
+        if normalised in _DATA_SOURCE_RESTATEMENTS:
+            continue
+        if text:
+            kept.append(text)
+    return kept
+
+
+def platform_consistent_data_sources(data_sources: list[str], platforms: list[str]) -> list[str]:
+    """Drop telemetry that cannot exist on any of this hunt's platforms.
+
+    Only drops when the platform list is non-empty and unambiguous about it.
+    An empty platform list means scope is unknown, not that everything is
+    excluded, so nothing is removed there -- the draft is a starting point for
+    a human, and silently narrowing telemetry on no evidence is worse than
+    leaving a source a reviewer can strike out.
+    """
+    if not platforms:
+        return data_sources
+    known = {str(p).strip().lower() for p in platforms if str(p).strip()}
+    if not known:
+        return data_sources
+
+    kept: list[str] = []
+    for source in data_sources:
+        required = _PLATFORM_ONLY_DATA_SOURCES.get(str(source).strip().lower())
+        if required is not None and not (known & required):
+            continue
+        kept.append(source)
+    return kept
+
+
 _EMPTY_SOURCE_SLOT = re.compile(r"(published in)\s{2,}(appear)", re.IGNORECASE)
 
 
@@ -862,6 +939,22 @@ class Orchestrator:
             scope_text=" ".join([hypothesis.hypothesis, hypothesis.location]),
             facts=technique_facts,
         )
+
+        # Applied here rather than at merge time: the platform list only
+        # exists once the techniques have resolved against the live matrix.
+        hypothesis.data_sources = platform_consistent_data_sources(
+            hypothesis.data_sources, platforms
+        )
+
+        # An empty section is honest; a section listing the telemetry
+        # categories back is not, and a reviewer skims past it as done.
+        kept_observables = substantive_observables(hypothesis.observables)
+        if kept_observables != hypothesis.observables:
+            log.info(
+                "Dropped %d observable(s) that only restated a telemetry category",
+                len(hypothesis.observables) - len(kept_observables),
+            )
+        hypothesis.observables = kept_observables or ["[none proposed - human to populate]"]
 
         # 4.2 Drop unresolvable technique IDs from the draft so they don't
         # reach the frontmatter and break `hunt validate` downstream.
