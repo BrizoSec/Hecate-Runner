@@ -474,6 +474,33 @@ def _named_entities(prose: str) -> list[str]:
     return found
 
 
+def _is_path_component(text: str, start: int) -> bool:
+    """Whether the domain-shaped token at `start` is part of a filesystem path.
+
+    `/Applications/Safari.app` is a path, not a hostname, but the domain
+    pattern matches only `Safari.app` -- the separator sits outside the match,
+    so `_looks_like_a_filename` never sees it and the token was reported as a
+    fabricated domain on a rule that was matching a process parent.
+
+    Deliberately positional rather than another entry in `_FILE_SUFFIXES`:
+    `.app` resolves as a real TLD, and that list omits real TLDs on purpose so
+    a fabricated C2 domain cannot hide behind one. Path context discriminates
+    without creating that blind spot, and it covers the suffixes the list
+    could never include -- `/usr/local/bin/deploy.sh` has the same problem.
+
+    A URL's host is also preceded by a separator, so a scheme immediately
+    before it means this really is a hostname.
+    """
+    if start == 0:
+        return False
+    if text[start - 1] not in "/\\":
+        return False
+    before = text[:start]
+    # `https://evil.com/x` and the protocol-relative `//evil.com` are URL
+    # authorities; the token there is the host, not a path segment.
+    return not before.endswith(("://", "//"))
+
+
 def _looks_like_a_filename(value: str) -> bool:
     if "/" in value or "\\" in value:
         return True
@@ -587,10 +614,15 @@ def audit_draft(
         # rejects those before they are ever attached to a hunt.
         detection = _detection_section(block) or block
         for pattern, label in ((_IPV4_RE, "ip"), (_DOMAIN_RE, "domain"), (_HASH_RE, "hash")):
-            for value in pattern.findall(detection):
+            # finditer, not findall: the filename check needs the character
+            # before the match, and a path separator never falls inside it.
+            for match in pattern.finditer(detection):
+                value = match.group(0)
                 if _scaffolding(value):
                     continue
-                if label == "domain" and _looks_like_a_filename(value):
+                if label == "domain" and (
+                    _looks_like_a_filename(value) or _is_path_component(detection, match.start())
+                ):
                     continue
                 status, note = grade(value)
                 add("indicator", value, status, f"{label} {note}")

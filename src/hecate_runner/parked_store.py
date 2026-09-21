@@ -134,3 +134,22 @@ def restore(queue_dir: Path, item: ParkedItem) -> Path:
         item.path.unlink(missing_ok=True)
     log.info("Restored parked item %s to %s", item.park_id, next_file)
     return next_file
+
+
+def prune_parked(queue_dir: Path, max_age_days: int) -> int:
+    """Delete parked items older than max_age_days."""
+    if max_age_days <= 0:
+        return 0
+    now = datetime.now(UTC)
+    count = 0
+    for item in list_parked(queue_dir):
+        try:
+            item_time = datetime.fromisoformat(item.parked_at)
+            if (now - item_time).days > max_age_days and item.path and item.path.exists():
+                item.path.unlink()
+                count += 1
+        except Exception as e:
+            log.warning(f"Failed to check/prune parked item {item.park_id}: {e}")
+    if count > 0:
+        log.info(f"Pruned {count} parked items older than {max_age_days} days.")
+    return count

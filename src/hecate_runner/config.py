@@ -118,6 +118,11 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_CTI_QUEUE_DIR",
         description="CTI queue directory. Defaults to <workspace>/cti_queue.",
     )
+    parked_max_age_days: int = Field(
+        default=30,
+        alias="HECATE_RUNNER_PARKED_MAX_AGE_DAYS",
+        description="Days after which parked CTI items are automatically deleted. 0 to disable.",
+    )
 
     # --- Research grounding (Phase 6) ---------------------------------------
     research_enabled: bool = Field(

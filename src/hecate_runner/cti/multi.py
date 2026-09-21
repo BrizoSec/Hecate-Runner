@@ -93,12 +93,17 @@ class MultiProvider(CTIProvider):
                 )
                 continue
             if item is not None:
-                cursor.next_index = (idx + 1) % count
-                cursor.save(self.cursor_file)
+                # The rotation advances in acknowledge(), not here. Every
+                # sub-provider already works that way -- RSS and OTX move their
+                # own cursors on acknowledge -- and doing it at pick time made
+                # `--dry-run` consume a slot in the rotation, so the next real
+                # cycle silently started at a different source. It also means
+                # a cycle that dies mid-draft re-offers the same item from the
+                # same source, which is the contract the orchestrator already
+                # relies on for retries.
                 log.info(
-                    "Multi CTI: picked %s (next cycle starts at %s)",
+                    "Multi CTI: picked %s (rotation advances once the item is acknowledged)",
                     provider.name,
-                    self.providers[cursor.next_index].name,
                 )
                 return item
 
@@ -115,3 +120,23 @@ class MultiProvider(CTIProvider):
             )
             return
         provider.acknowledge(item)
+        self._advance_rotation_past(provider.name)
+
+    def _advance_rotation_past(self, name: str) -> None:
+        """Point the rotation at the source after `name`.
+
+        Called only after the sub-provider acknowledged successfully: if that
+        raises, the item stays queued and the rotation must stay put so the
+        retry comes back to the same source.
+        """
+        try:
+            idx = [p.name for p in self.providers].index(name)
+        except ValueError:  # pragma: no cover - guarded by the caller
+            return
+        cursor = MultiCursorState.load(self.cursor_file)
+        cursor.next_index = (idx + 1) % len(self.providers)
+        cursor.save(self.cursor_file)
+        log.debug(
+            "Multi CTI: rotation now starts at %s",
+            self.providers[cursor.next_index].name,
+        )

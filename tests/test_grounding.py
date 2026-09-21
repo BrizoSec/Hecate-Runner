@@ -8,7 +8,14 @@ these tests are about what it must *not* flag.
 
 from __future__ import annotations
 
-from hecate_runner.grounding import TechniqueFact, audit_draft, render_grounding_section
+import pytest
+
+from hecate_runner.grounding import (
+    TechniqueFact,
+    _is_path_component,
+    audit_draft,
+    render_grounding_section,
+)
 
 # The real source blurb shape, abridged from MISP event 476.
 CTI = """MISP Event: The Chrysalis Backdoor: A Deep Dive into Lotus Blossom's toolkit
@@ -436,3 +443,90 @@ def test_the_provider_label_is_not_a_malware_name():
     found = _named_entities("MISP Event: KadNap botnet IOC")
     assert "MISP" not in found
     assert "KadNap" in found
+
+
+# --- Paths are not hostnames -----------------------------------------------
+
+
+class TestPathComponentsAreNotDomains:
+    """`/Applications/Safari.app` is a path, but the domain pattern matches only
+    `Safari.app` and the separator falls outside the match, so a rule matching a
+    process parent was reported as carrying a fabricated domain.
+
+    Handled positionally rather than by adding `app` to the filename suffix
+    list: `.app` resolves as a real TLD, and that list omits real TLDs so a
+    fabricated C2 domain cannot hide behind one."""
+
+    def test_the_production_false_positive_is_gone(self):
+        report = audit_draft(
+            draft_text=_rule(
+                "detection:\n"
+                "  selection:\n"
+                "    CommandLine|contains: macsync\n"
+                "  filter:\n"
+                "    ParentImage|contains: /Applications/Safari.app\n"
+                "  condition: selection and not filter"
+            ),
+            cti_text=CTI,
+        )
+        assert [c.value for c in report.unsupported] == []
+
+    def test_it_also_covers_suffixes_the_list_could_never_hold(self):
+        """`.sh` resolves too, so the suffix list cannot suppress it."""
+        report = audit_draft(
+            draft_text=_rule(
+                "detection:\n"
+                "  selection:\n"
+                "    CommandLine|contains: /usr/local/bin/deploy.sh\n"
+                "  condition: selection"
+            ),
+            cti_text=CTI,
+        )
+        assert [c.value for c in report.unsupported] == []
+
+    def test_a_bare_domain_in_the_same_tld_is_still_flagged(self):
+        """The blind spot this avoids: no suffix is exempted, only paths."""
+        report = audit_draft(
+            draft_text=_rule(
+                "detection:\n"
+                "  selection:\n"
+                "    QueryName|contains: fabricated.app\n"
+                "  condition: selection"
+            ),
+            cti_text=CTI,
+        )
+        assert [c.value for c in report.unsupported] == ["fabricated.app"]
+
+    def test_a_url_host_is_still_a_host(self):
+        report = audit_draft(
+            draft_text=_rule(
+                "detection:\n"
+                "  selection:\n"
+                "    url|contains: https://invented-c2.test/beacon\n"
+                "  condition: selection"
+            ),
+            cti_text=CTI,
+        )
+        assert "invented-c2.test" in [c.value for c in report.unsupported]
+
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            ("ParentImage|contains: /Applications/Safari.app", True),
+            ("Image|endswith: C:\\Tools\\thing.app", True),
+            ("CommandLine|contains: /usr/local/bin/deploy.sh", True),
+            ("references: https://evil.com/payload", False),
+            ("url|contains: //cdn.evil.com/x", False),
+            ("QueryName|contains: evil.app", False),
+            ("DestinationHostname: mythic-c2.com", False),
+        ],
+    )
+    def test_path_discrimination_cases(self, text, expected):
+        import re
+
+        pattern = re.compile(
+            r"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\b", re.IGNORECASE
+        )
+        match = pattern.search(text)
+        assert match is not None
+        assert _is_path_component(text, match.start()) is expected

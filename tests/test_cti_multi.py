@@ -60,16 +60,57 @@ def test_round_robins_across_cycles(tmp_path: Path) -> None:
     otx = _FakeProvider("otx", [_item("otx", "otx-1")])
     provider = MultiProvider(providers=[rss, otx], cursor_file=tmp_path / "cursor.json")
 
+    # A cycle is next_item() then acknowledge(); the rotation advances on the
+    # acknowledgement, matching how every sub-provider moves its own cursor.
     first = provider.next_item()
     assert first is not None and first.content == "rss-1"
+    provider.acknowledge(first)
 
     second = provider.next_item()
     assert second is not None and second.content == "otx-1"
+    provider.acknowledge(second)
 
     # Rotation is back to rss's turn (0 -> 1 -> 0); it still has a queued
     # item, so no fallback to another source is needed this cycle.
     third = provider.next_item()
     assert third is not None and third.content == "rss-2"
+
+
+def test_an_unacknowledged_pick_does_not_advance_the_rotation(tmp_path: Path) -> None:
+    """`--dry-run` picks an item and does nothing with it. Advancing at pick
+    time made a dry run consume a slot, so the next real cycle silently
+    started at a different source."""
+    rss = _FakeProvider("rss", [_item("rss", "rss-1")])
+    otx = _FakeProvider("otx", [_item("otx", "otx-1")])
+    cursor_file = tmp_path / "cursor.json"
+    provider = MultiProvider(providers=[rss, otx], cursor_file=cursor_file)
+
+    picked = provider.next_item()
+    assert picked is not None and picked.source == "rss"
+
+    assert not cursor_file.exists()
+    assert MultiCursorState.load(cursor_file).next_index == 0
+
+
+def test_a_failed_acknowledge_leaves_the_rotation_put(tmp_path: Path) -> None:
+    """The item stays queued for retry, so the retry must come back to the
+    same source."""
+
+    class _AckFails(_FakeProvider):
+        def acknowledge(self, item: CTIItem) -> None:
+            raise RuntimeError("cursor write failed")
+
+    rss = _AckFails("rss", [_item("rss", "rss-1")])
+    otx = _FakeProvider("otx", [_item("otx", "otx-1")])
+    cursor_file = tmp_path / "cursor.json"
+    provider = MultiProvider(providers=[rss, otx], cursor_file=cursor_file)
+
+    picked = provider.next_item()
+    assert picked is not None
+    with pytest.raises(RuntimeError):
+        provider.acknowledge(picked)
+
+    assert MultiCursorState.load(cursor_file).next_index == 0
 
 
 def test_skips_source_with_nothing_new(tmp_path: Path) -> None:
@@ -128,7 +169,10 @@ def test_cursor_persists_across_instances(tmp_path: Path) -> None:
     cursor_file = tmp_path / "cursor.json"
     rss = _FakeProvider("rss", [_item("rss", "rss-1")])
     otx = _FakeProvider("otx", [_item("otx", "otx-1")])
-    MultiProvider(providers=[rss, otx], cursor_file=cursor_file).next_item()
+    first_run = MultiProvider(providers=[rss, otx], cursor_file=cursor_file)
+    picked = first_run.next_item()
+    assert picked is not None
+    first_run.acknowledge(picked)
 
     # A fresh instance (new process, same disk state) should honor the
     # persisted rotation rather than restarting from provider 0.

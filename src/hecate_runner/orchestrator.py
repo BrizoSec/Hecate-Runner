@@ -30,7 +30,7 @@ from hecate_runner.hunt_writer import (
 )
 from hecate_runner.indicator_sweep import build_indicator_sweep, parse_indicator_inventory
 from hecate_runner.notifications import notify_draft_created
-from hecate_runner.parked_store import park
+from hecate_runner.parked_store import park, prune_parked
 from hecate_runner.state import OrchestratorState
 
 log = logging.getLogger(__name__)
@@ -468,6 +468,7 @@ class RunResult:
     hunt_id: str | None = None
     draft_path: Path | None = None
     research_id: str | None = None
+    parked_count: int = 0
 
     @property
     def ok(self) -> bool:
@@ -497,6 +498,9 @@ class Orchestrator:
         """Execute one cycle. Never raises; always returns a RunResult."""
         log.info("=== Orchestrator cycle starting (dry_run=%s) ===", dry_run)
         state = OrchestratorState.load(self.settings.state_file)
+
+        if self.settings.parked_max_age_days > 0:
+            prune_parked(self.settings.cti_queue_dir_resolved, self.settings.parked_max_age_days)
         try:
             result = self._run_body(state, dry_run=dry_run)
             state.mark_run(success=result.ok)
@@ -722,8 +726,8 @@ class Orchestrator:
             return False
         return True
 
-    def _next_actionable_item(self) -> tuple[CTIItem | None, int]:
-        """The next CTI item worth drafting, and how many were walked past.
+    def _next_actionable_item(self) -> tuple[CTIItem | None, int, int]:
+        """The next CTI item worth drafting, and how many were walked past, and how many parked.
 
         An item with neither narrative nor a parseable indicator inventory
         offers nothing to hunt. Drafted anyway it produced H-0630 --
@@ -737,17 +741,19 @@ class Orchestrator:
         must not cost one.
         """
         skipped = 0
+        parked_count = 0
         for _ in range(_MAX_SKIPS_PER_CYCLE + 1):
             item = self.cti.next_item()
             if item is None:
-                return None, skipped
+                return None, skipped, parked_count
             if is_actionable(item.content):
                 verdict = triage(item) if self.settings.cti_triage == "park" else None
                 if verdict is None or not verdict.park:
-                    return item, skipped
+                    return item, skipped, parked_count
                 # Held back, not dropped: the cursor has already moved past
                 # this item, so the copy written here is the only one left.
                 skipped += 1
+                parked_count += 1
                 log.info(
                     "Parking CTI item from %s (%s): %s",
                     item.source,
@@ -760,9 +766,10 @@ class Orchestrator:
                     # Parking is the whole safety net. If it cannot be written,
                     # draft the item rather than losing it.
                     log.warning("Could not park CTI item (%s); drafting it instead.", exc)
-                    return item, skipped - 1
+                    parked_count -= 1
+                    return item, skipped - 1, parked_count
                 if not self._advance_past(item):
-                    return None, skipped
+                    return None, skipped, parked_count
                 continue
 
             # Counted where the decision is made, not after the cursor moves:
@@ -775,19 +782,23 @@ class Orchestrator:
                 item.source,
             )
             if not self._advance_past(item):
-                return None, skipped
+                return None, skipped, parked_count
 
         log.info("Found %d non-actionable CTI items; stopping this cycle.", skipped)
-        return None, skipped
+        return None, skipped, parked_count
 
     def _run_body(self, state: OrchestratorState, *, dry_run: bool) -> RunResult:
-        item, skipped = self._next_actionable_item()
+        item, skipped, parked_count = self._next_actionable_item()
         if item is None:
             if skipped:
                 log.info("No actionable CTI this cycle; %d item(s) had nothing to hunt.", skipped)
-                return RunResult(outcome="no_actionable_cti", detail=f"skipped {skipped}")
+                return RunResult(
+                    outcome="no_actionable_cti",
+                    detail=f"skipped {skipped}",
+                    parked_count=parked_count,
+                )
             log.info("No CTI in queue; nothing to do this cycle.")
-            return RunResult(outcome="no_cti")
+            return RunResult(outcome="no_cti", parked_count=parked_count)
 
         log.info("Picked up CTI item from %s (%d chars)", item.source, len(item.content))
 
@@ -805,7 +816,9 @@ class Orchestrator:
             log.info("[dry-run] Would call hecate and write a draft; leaving CTI in queue.")
             state.drafts_today -= 1  # reverse the reservation in dry-run
             state.total_drafts_ever -= 1
-            return RunResult(outcome="dry_run", detail=item.content[:100])
+            return RunResult(
+                outcome="dry_run", detail=item.content[:100], parked_count=parked_count
+            )
 
         # Computed once for the whole cycle: the same "is there any prose
         # here?" answer gates web search during research (nothing real to
@@ -872,7 +885,9 @@ class Orchestrator:
                 )
                 state.drafts_today -= 1
                 state.total_drafts_ever -= 1
-                return RunResult(outcome="research_error", detail=str(exc))
+                return RunResult(
+                    outcome="research_error", detail=str(exc), parked_count=parked_count
+                )
 
             if research_result.is_empty:
                 log.error(
@@ -880,7 +895,7 @@ class Orchestrator:
                 )
                 state.drafts_today -= 1
                 state.total_drafts_ever -= 1
-                return RunResult(outcome="research_empty")
+                return RunResult(outcome="research_empty", parked_count=parked_count)
 
             research_id = research_result.research_id
             related_hunts = research_result.related_hunts
@@ -907,7 +922,7 @@ class Orchestrator:
                 # Refund the quota — the CTI stays in the queue.
                 state.drafts_today -= 1
                 state.total_drafts_ever -= 1
-                return RunResult(outcome="hecate_error", detail=str(exc))
+                return RunResult(outcome="hecate_error", detail=str(exc), parked_count=parked_count)
 
         repaired = _fill_empty_source_slot(hypothesis.hypothesis, item.title)
         if repaired != hypothesis.hypothesis:
@@ -918,7 +933,7 @@ class Orchestrator:
             log.warning("hecate returned empty hypothesis; refunding quota and leaving CTI.")
             state.drafts_today -= 1
             state.total_drafts_ever -= 1
-            return RunResult(outcome="empty_hypothesis")
+            return RunResult(outcome="empty_hypothesis", parked_count=parked_count)
 
         # Restore what the pipeline was discarding before the draft is built.
         # The hypothesis agent returns only the techniques it reasoned about,
@@ -986,7 +1001,7 @@ class Orchestrator:
             # item is still unacknowledged so it stays queued for retry.
             state.drafts_today -= 1
             state.total_drafts_ever -= 1
-            return RunResult(outcome="write_error", detail=str(exc))
+            return RunResult(outcome="write_error", detail=str(exc), parked_count=parked_count)
 
         # Close the loop back to the research document. Isolated like the
         # other post-write steps: the draft already exists and its quota is

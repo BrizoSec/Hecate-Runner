@@ -80,3 +80,8 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# One-shot source-patching scripts, not part of the package. Untracked
+# anyway, but listed so `ruff check .` and an accidental `git add -A`
+# both skip them.
+/patch*.py

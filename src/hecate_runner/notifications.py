@@ -25,10 +25,15 @@ def notify_draft_created(settings: Settings, result: RunResult) -> None:
         return
 
     grounding = f"grounded by {result.research_id}" if result.research_id else "ungrounded"
+    parked_note = (
+        f"\n:information_source: {result.parked_count} item(s) were held back (parked) during intake triage."
+        if result.parked_count > 0
+        else ""
+    )
     text = (
         f":memo: New draft hunt *{result.hunt_id}* ({grounding})\n"
         f"`{result.draft_path}`\n"
-        f"Status: `planning` — human review required before execution."
+        f"Status: `planning` — human review required before execution.{parked_note}"
     )
 
     try:
