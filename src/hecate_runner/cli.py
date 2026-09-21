@@ -944,6 +944,11 @@ def list_sources() -> None:
         "cisa_kev", format_active("cisa_kev"), "Built-in (Public)", cursor_status(cisa_cursor)
     )
 
+    # abuse_ch
+    table.add_row(
+        "abuse_ch", format_active("abuse_ch"), "ThreatFox (Public JSON)", cursor_status(settings.abuse_ch_cursor_file)
+    )
+
     # File Queue
     file_queue_dir = settings.cti_queue_dir_resolved
     file_status = (
@@ -983,7 +988,7 @@ def enable_source(name: str) -> None:
     settings = Settings()
     console = Console()
 
-    valid = {"otx", "rss", "misp", "cisa_kev", "file"}
+    valid = {"otx", "rss", "misp", "cisa_kev", "abuse_ch", "file"}
     if name not in valid:
         console.print(
             f"[red]Error:[/red] Unknown source '{name}'. Valid sources are: {', '.join(valid)}"
@@ -1071,6 +1076,7 @@ def reset_cursor(name: str) -> None:
         "rss": settings.rss_cursor_file,
         "multi": settings.multi_cursor_file,
         "cisa_kev": settings.hecate_workspace / ".cursors" / "cisa_kev_cursor.json",
+        "abuse_ch": settings.abuse_ch_cursor_file,
     }
 
     if name not in cursors:

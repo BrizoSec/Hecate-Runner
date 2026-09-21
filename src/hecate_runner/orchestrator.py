@@ -544,6 +544,7 @@ class Orchestrator:
                 research_text=self._research_text(req.research_id),
                 cti_techniques=[str(t) for t in (item.metadata.get("techniques") or [])],
                 technique_facts=technique_facts,
+                hunt_platforms=list(req.platforms),
             )
         except Exception as exc:
             log.warning("Grounding audit failed for %s (%s); section left empty.", req.hunt_id, exc)
@@ -688,6 +689,15 @@ class Orchestrator:
                 facts[technique_id.upper()] = TechniqueFact(
                     valid=meta.found,
                     superseded_by=(meta.superseded_from and meta.technique_id) or "",
+                    # Relabelled to the frontmatter vocabulary so the audit can
+                    # compare them against the hunt's own platform list. A
+                    # near-universal technique records nothing: it carries no
+                    # scoping signal, so it must not be able to contradict one.
+                    platforms=(
+                        ()
+                        if len(meta.platforms) >= _NON_SCOPING_PLATFORM_THRESHOLD
+                        else tuple(_PLATFORM_LABELS.get(pf, pf) for pf in meta.platforms)
+                    ),
                 )
             for tactic in meta.tactics:
                 if tactic not in tactics:

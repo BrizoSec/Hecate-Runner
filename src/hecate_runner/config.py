@@ -69,7 +69,7 @@ class Settings(BaseSettings):
             "hecate-runner-orchestrator.service) since that's an outer, harder cap."
         ),
     )
-    cti_provider: Literal["file", "otx", "rss", "misp", "cisa_kev", "multi"] = Field(
+    cti_provider: Literal["file", "otx", "rss", "misp", "cisa_kev", "abuse_ch", "multi"] = Field(
         default="file",
         alias="HECATE_RUNNER_CTI_PROVIDER",
         description=(
@@ -461,6 +461,10 @@ class Settings(BaseSettings):
     def cti_multi_provider_names(self) -> list[str]:
         """Parsed, whitespace-trimmed sub-provider list from HECATE_RUNNER_CTI_MULTI_PROVIDERS."""
         return [name.strip() for name in self.cti_multi_providers_raw.split(",") if name.strip()]
+
+    @property
+    def abuse_ch_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "abuse_ch_cursor.json"
 
     @property
     def multi_cursor_file(self) -> Path:

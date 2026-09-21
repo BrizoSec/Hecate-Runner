@@ -403,6 +403,10 @@ class TechniqueFact:
 
     valid: bool = True
     superseded_by: str = ""
+    #: Platforms ATT&CK lists for this technique, already relabelled to the
+    #: vocabulary the draft's frontmatter uses. Empty means the caller could
+    #: not resolve them, which is not the same as a mismatch.
+    platforms: tuple[str, ...] = ()
 
 
 @dataclass
@@ -514,6 +518,7 @@ def audit_draft(
     research_text: str = "",
     cti_techniques: list[str] | None = None,
     technique_facts: dict[str, TechniqueFact] | None = None,
+    hunt_platforms: list[str] | None = None,
 ) -> GroundingReport:
     """Classify the draft's checkable claims against the evidence behind it.
 
@@ -549,6 +554,8 @@ def audit_draft(
         seen.add(key)
         report.claims.append(GroundingClaim(kind=kind, value=value, status=status, note=note))
 
+    hunt_platforms = list(hunt_platforms or [])
+
     # --- ATT&CK techniques ------------------------------------------------
     # A technique the hypothesis reasoned to is legitimate; one the source
     # asserted is stronger. The distinction is what a reviewer needs.
@@ -567,6 +574,33 @@ def audit_draft(
         note_suffix = ""
         if fact is not None and fact.superseded_by:
             note_suffix = f"; revoked by ATT&CK, superseded by {fact.superseded_by}"
+
+        # A technique that exists but cannot occur on the platform this hunt
+        # scopes to is a real mapping in the wrong place, and it reads as
+        # evidence. Observed: T1059.003 (Windows Command Shell), a
+        # Windows-only technique, attached to a hunt scoped to macOS.
+        #
+        # Only fires when both sides are known and genuinely disjoint. A
+        # technique ATT&CK lists on eight or more platforms carries no scoping
+        # signal and is excluded upstream, so it never reaches here with a
+        # narrow list to contradict.
+        if (
+            fact is not None
+            and fact.platforms
+            and hunt_platforms
+            and not (set(fact.platforms) & set(hunt_platforms))
+        ):
+            add(
+                "technique",
+                upper,
+                "unsupported",
+                "ATT&CK lists this technique on {} only, but the hunt scopes to {}".format(
+                    ", ".join(fact.platforms),
+                    ", ".join(hunt_platforms),
+                )
+                + note_suffix,
+            )
+            continue
 
         if upper in asserted_techniques:
             add("technique", upper, "asserted", "named by the source CTI" + note_suffix)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from hecate_runner.config import Settings
 from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
+from hecate_runner.cti.abuse_ch import AbuseChProvider
 from hecate_runner.cti.cisa_kev import CisaKevProvider
 from hecate_runner.cti.file_queue import FileQueueProvider
 from hecate_runner.cti.misp import MispProvider
@@ -15,6 +16,7 @@ __all__ = [
     "ATTACK_TECHNIQUE_LINE",
     "CTIItem",
     "CTIProvider",
+    "AbuseChProvider",
     "CisaKevProvider",
     "FileQueueProvider",
     "MispProvider",
@@ -62,6 +64,8 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
         )
     if name == "cisa_kev":
         return CisaKevProvider(workspace=settings.hecate_workspace)
+    if name == "abuse_ch":
+        return AbuseChProvider(cursor_file=settings.abuse_ch_cursor_file)
     if name == "multi":
         sub_names = settings.cti_multi_provider_names
         if not sub_names:

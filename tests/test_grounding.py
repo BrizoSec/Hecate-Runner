@@ -8,6 +8,8 @@ these tests are about what it must *not* flag.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
 from hecate_runner.grounding import (
@@ -530,3 +532,68 @@ class TestPathComponentsAreNotDomains:
         match = pattern.search(text)
         assert match is not None
         assert _is_path_component(text, match.start()) is expected
+
+
+# --- Platform consistency ---------------------------------------------------
+
+
+class TestTechniquePlatformMismatch:
+    """A technique that exists but cannot occur on the platform the hunt scopes
+    to is a real mapping in the wrong place, and it reads as evidence.
+    Observed: T1059.003 (Windows Command Shell) attached to a macOS hunt, which
+    graded as `inferred` and passed."""
+
+    DRAFT = "Techniques: T1059.003, T1217, T1098 observed on the affected hosts."
+    FACTS: ClassVar[dict[str, TechniqueFact]] = {
+        "T1059.003": TechniqueFact(valid=True, platforms=("Windows",)),
+        "T1217": TechniqueFact(valid=True, platforms=("Linux", "macOS", "Windows")),
+        # Near-universal; the orchestrator records no platforms for these.
+        "T1098": TechniqueFact(valid=True, platforms=()),
+    }
+
+    def _audit(self, scope):
+        return audit_draft(
+            draft_text=self.DRAFT,
+            cti_text="macOS infostealer campaign",
+            technique_facts=self.FACTS,
+            hunt_platforms=scope,
+        )
+
+    def test_a_windows_only_technique_on_a_macos_hunt_is_flagged(self):
+        unsupported = [c.value for c in self._audit(["macOS"]).unsupported]
+        assert unsupported == ["T1059.003"]
+
+    def test_the_note_names_both_sides(self):
+        claim = next(c for c in self._audit(["macOS"]).unsupported if c.value == "T1059.003")
+        assert "Windows" in claim.note
+        assert "macOS" in claim.note
+
+    def test_a_matching_platform_is_clean(self):
+        assert self._audit(["Windows"]).unsupported == []
+
+    def test_an_overlapping_platform_is_clean(self):
+        """T1217 spans three platforms including macOS; overlap is enough."""
+        report = self._audit(["macOS"])
+        assert "T1217" not in [c.value for c in report.unsupported]
+
+    def test_unknown_hunt_scope_flags_nothing(self):
+        """An empty platform list is a gap signal, not a contradiction."""
+        assert self._audit([]).unsupported == []
+
+    def test_a_near_universal_technique_can_never_contradict(self):
+        """Techniques ATT&CK lists on 8+ platforms carry no scoping signal and
+        are recorded with no platforms upstream, so they must stay silent."""
+        report = self._audit(["macOS"])
+        assert "T1098" not in [c.value for c in report.unsupported]
+
+    def test_an_invalid_id_still_wins_over_a_platform_mismatch(self):
+        """A technique that does not exist is an invention, which is the more
+        serious finding; it must not be relabelled as a platform problem."""
+        report = audit_draft(
+            draft_text="Technique T1059.003 applies.",
+            cti_text="macOS campaign",
+            technique_facts={"T1059.003": TechniqueFact(valid=False, platforms=("Windows",))},
+            hunt_platforms=["macOS"],
+        )
+        claim = report.unsupported[0]
+        assert "no such technique" in claim.note

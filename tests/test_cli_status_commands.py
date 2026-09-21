@@ -55,6 +55,11 @@ def cli_env(workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     # healthy baseline has to carry a key. Tests that care about its absence
     # delete it themselves.
     monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")
+
+    # Mock environment checks so tests pass regardless of CI runner state
+    monkeypatch.setattr("hecate_runner.cli._module_available", lambda _: True)
+    monkeypatch.setattr("hecate_runner.cli._stix_data_available", lambda: True)
+
     return workspace
 
 
