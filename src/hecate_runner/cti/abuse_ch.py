@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import httpx
 
@@ -62,9 +60,9 @@ class AbuseChProvider(CTIProvider):
     def _fetch_recent(self) -> None:
         if self._fetched:
             return
-            
+
         cursor = AbuseChCursorState.from_file(self.cursor_file)
-        
+
         try:
             response = httpx.get(THREATFOX_RECENT_URL, timeout=15.0)
             response.raise_for_status()
@@ -83,22 +81,22 @@ class AbuseChProvider(CTIProvider):
             item_id = int(id_str)
             if item_id > cursor.last_id and entries:
                 valid_items.append((item_id, entries[0]))
-                
+
         valid_items.sort(key=lambda x: x[0])
-        
+
         for item_id, entry in valid_items:
             ioc_value = entry.get("ioc_value", "")
             ioc_type = entry.get("ioc_type", "")
             malware = entry.get("malware_printable") or entry.get("malware") or "Unknown"
-            
+
             mapped_type = self._map_ioc_type(ioc_type)
-            
+
             # Construct a blurb that triggers the indicator sweep
             blurb = f"ThreatFox Indicator: {malware}\n"
             blurb += f"Indicators (1 total): {mapped_type} (1)\n\n"
             blurb += f"Malware: {malware}\n"
             blurb += f"IOC: {ioc_value} ({ioc_type})\n"
-            
+
             self._items.append(
                 CTIItem(
                     content=blurb,
@@ -108,7 +106,7 @@ class AbuseChProvider(CTIProvider):
                     source_url=f"https://threatfox.abuse.ch/ioc/{item_id}/",
                 )
             )
-            
+
         self._fetched = True
 
     def next_item(self) -> CTIItem | None:
@@ -120,11 +118,11 @@ class AbuseChProvider(CTIProvider):
     def acknowledge(self, item: CTIItem) -> None:
         if not self._items or self._items[0].identifier != item.identifier:
             return
-            
+
         self._items.pop(0)
         cursor = AbuseChCursorState.from_file(self.cursor_file)
         item_id = int(item.identifier)
         if item_id > cursor.last_id:
             cursor.last_id = item_id
-            
+
         atomic_write_text(self.cursor_file, cursor.to_json())

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from hecate_runner.config import Settings
-from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
 from hecate_runner.cti.abuse_ch import AbuseChProvider
+from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
 from hecate_runner.cti.cisa_kev import CisaKevProvider
 from hecate_runner.cti.file_queue import FileQueueProvider
 from hecate_runner.cti.misp import MispProvider
@@ -14,9 +14,9 @@ from hecate_runner.cti.rss import RssProvider
 
 __all__ = [
     "ATTACK_TECHNIQUE_LINE",
+    "AbuseChProvider",
     "CTIItem",
     "CTIProvider",
-    "AbuseChProvider",
     "CisaKevProvider",
     "FileQueueProvider",
     "MispProvider",
