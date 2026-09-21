@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 
 THREATFOX_RECENT_URL = "https://threatfox.abuse.ch/export/json/recent/"
 
+
 @dataclass
 class AbuseChCursorState:
     last_id: int = 0

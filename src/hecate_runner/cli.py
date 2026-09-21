@@ -946,7 +946,10 @@ def list_sources() -> None:
 
     # abuse_ch
     table.add_row(
-        "abuse_ch", format_active("abuse_ch"), "ThreatFox (Public JSON)", cursor_status(settings.abuse_ch_cursor_file)
+        "abuse_ch",
+        format_active("abuse_ch"),
+        "ThreatFox (Public JSON)",
+        cursor_status(settings.abuse_ch_cursor_file),
     )
 
     # File Queue
