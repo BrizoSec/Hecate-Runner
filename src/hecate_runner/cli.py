@@ -371,6 +371,7 @@ def _attack_facts(
         collected[technique_id.upper()] = TechniqueFact(
             valid=meta.found,
             superseded_by=meta.technique_id if meta.superseded_from else "",
+            names=tuple(n for n in (meta.name, meta.parent_name) if n),
         )
     return collected
 
@@ -521,6 +522,10 @@ def status() -> None:
     table.add_row("CTI queue dir", str(settings.cti_queue_dir_resolved))
     table.add_row("Model", _effective_model(settings))
     table.add_row("Drafts today", f"{state.drafts_today} / {settings.max_drafts_per_day}")
+    table.add_row(
+        "Research runs today",
+        f"{state.research_runs_today} / {settings.max_research_runs_per_day}",
+    )
     table.add_row("Total drafts ever", str(state.total_drafts_ever))
     table.add_row("Last run", state.last_run_iso or "(never)")
     table.add_row("Consecutive failures", str(state.consecutive_failures))

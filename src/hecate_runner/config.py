@@ -53,6 +53,20 @@ class Settings(BaseSettings):
         le=100,
         alias="HECATE_RUNNER_MAX_DRAFTS_PER_DAY",
     )
+    max_research_runs_per_day: int = Field(
+        default=7,
+        ge=0,
+        le=100,
+        alias="HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY",
+        description=(
+            "Cap on web-searching research runs per UTC day. Each run makes two "
+            "Tavily searches (4 credits at advanced depth, 2 at basic). Unlike "
+            "the draft quota this is never refunded, so a cycle that fails after "
+            "research and retries next hour cannot keep spending credits. The "
+            "default of 7 at advanced depth is ~850 credits/month, inside the "
+            "1,000-credit free tier. 0 blocks all searched research."
+        ),
+    )
     llm_timeout_sec: int = Field(
         default=1500,
         ge=30,

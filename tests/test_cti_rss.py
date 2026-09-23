@@ -17,8 +17,10 @@ from hecate_runner.cti.rss import (
     RssProvider,
     _entry_published,
     _entry_to_blurb,
+    _entry_to_cti_item,
     _strip_html,
 )
+from hecate_runner.orchestrator import has_narrative, is_actionable
 
 FEED_A = "https://feed-a.example.com/rss/"
 FEED_B = "https://feed-b.example.com/rss/"
@@ -339,6 +341,32 @@ def test_blurb_includes_key_fields() -> None:
 def test_blurb_handles_sparse_entry() -> None:
     blurb = _entry_to_blurb(FEED_A, {})
     assert "Untitled" in blurb
+
+
+@pytest.mark.parametrize("placeholder", ["[object Object]", "<p>[object Object]</p>", "undefined"])
+def test_placeholder_title_and_summary_are_treated_as_missing(placeholder: str) -> None:
+    # Huntress's feed renders every title and description as "[object Object]".
+    # Passed through, it read as a narrative Summary and research searched for
+    # the literal string (R-0001/H-0001).
+    entry = {"title": placeholder, "summary": placeholder, "link": "https://example.com/post"}
+
+    blurb = _entry_to_blurb(FEED_A, entry)
+
+    assert "object Object" not in blurb
+    assert "Summary:" not in blurb
+    assert not has_narrative(blurb)
+    assert not is_actionable(blurb)
+    item = _entry_to_cti_item(FEED_A, {**entry, "id": "x"})
+    assert item.title == ""
+    assert item.metadata["entry_title"] == ""
+
+
+def test_placeholder_summary_keeps_real_title() -> None:
+    blurb = _entry_to_blurb(
+        FEED_A, {"title": "Akira affiliates abuse SonicWall VPNs", "summary": "[object Object]"}
+    )
+    assert "RSS: Akira affiliates abuse SonicWall VPNs" in blurb
+    assert "Summary:" not in blurb
 
 
 def test_strip_html_removes_tags_and_unescapes_entities() -> None:

@@ -472,7 +472,13 @@ class RunResult:
 
     @property
     def ok(self) -> bool:
-        return self.outcome in {"draft_created", "no_cti", "no_actionable_cti", "quota_reached"}
+        return self.outcome in {
+            "draft_created",
+            "no_cti",
+            "no_actionable_cti",
+            "quota_reached",
+            "research_quota_reached",
+        }
 
 
 class Orchestrator:
@@ -689,6 +695,7 @@ class Orchestrator:
                 facts[technique_id.upper()] = TechniqueFact(
                     valid=meta.found,
                     superseded_by=(meta.superseded_from and meta.technique_id) or "",
+                    names=tuple(n for n in (meta.name, meta.parent_name) if n),
                     # Relabelled to the frontmatter vocabulary so the audit can
                     # compare them against the hunt's own platform list. A
                     # near-universal technique records nothing: it carries no
@@ -875,6 +882,23 @@ class Orchestrator:
             # grounded (ungrounded generation measured ~30% accuracy).
             log.info("CTI is a parseable indicator dump; skipping research grounding.")
         elif self.settings.research_enabled:
+            # Only a narrative search spends Tavily credits, so only that
+            # counts. Refused rather than drafted ungrounded, for the same
+            # reason a research failure is: the CTI waits for tomorrow's quota.
+            if intel_has_narrative and not state.check_and_reserve_research(
+                self.settings.max_research_runs_per_day
+            ):
+                log.warning(
+                    "Daily research quota reached (%d). Leaving CTI in queue for next cycle.",
+                    self.settings.max_research_runs_per_day,
+                )
+                state.drafts_today -= 1
+                state.total_drafts_ever -= 1
+                return RunResult(
+                    outcome="research_quota_reached",
+                    detail=f"{state.research_runs_today}/{self.settings.max_research_runs_per_day}",
+                    parked_count=parked_count,
+                )
             topic, technique = derive_research_topic(item.content, title=item.title or None)
             try:
                 research_result = self.hecate.research_new(

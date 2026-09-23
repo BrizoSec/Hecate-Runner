@@ -54,6 +54,15 @@ def test_check_and_reserve_rolls_over_day() -> None:
     assert state.date == datetime.now(UTC).strftime("%Y-%m-%d")
 
 
+def test_check_and_reserve_research_caps_and_rolls_over() -> None:
+    state = OrchestratorState(date="1999-01-01", drafts_today=2, research_runs_today=9)
+    assert state.check_and_reserve_research(max_per_day=1) is True
+    assert state.research_runs_today == 1
+    assert state.drafts_today == 0
+    assert state.check_and_reserve_research(max_per_day=1) is False
+    assert state.research_runs_today == 1
+
+
 def test_mark_run_success_clears_failures() -> None:
     state = OrchestratorState(consecutive_failures=5)
     state.mark_run(success=True)

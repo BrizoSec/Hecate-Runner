@@ -597,3 +597,91 @@ class TestTechniquePlatformMismatch:
         )
         claim = report.unsupported[0]
         assert "no such technique" in claim.note
+
+
+class TestTechniqueNameSupport:
+    """A real, platform-compatible technique can still be the wrong one.
+
+    Observed on H-0002: a LabubaRAT report describing masquerading as NVIDIA
+    software and abuse of Microsoft build utilities was mapped to T1027.004
+    Compile After Delivery and T1055.012 Process Hollowing, and both passed
+    as inferred.
+    """
+
+    LABUBA_CTI = (
+        "Description: LabubaRAT is a Rust-based remote access trojan designed to "
+        "masquerade as legitimate NVIDIA software. The delivery mechanism utilized "
+        "the RAT's own JavaScript execution capability, abusing legitimate "
+        "Microsoft build utilities."
+    )
+    FACTS: ClassVar[dict[str, TechniqueFact]] = {
+        "T1027.004": TechniqueFact(
+            names=("Compile After Delivery", "Obfuscated Files or Information")
+        ),
+        "T1055.012": TechniqueFact(names=("Process Hollowing", "Process Injection")),
+        "T1036.005": TechniqueFact(
+            names=("Match Legitimate Resource Name or Location", "Masquerading")
+        ),
+        "T1127.001": TechniqueFact(
+            names=("MSBuild", "Trusted Developer Utilities Proxy Execution")
+        ),
+    }
+
+    def _status(self, technique: str, cti: str = LABUBA_CTI, research: str = "") -> str:
+        report = audit_draft(
+            draft_text=f"techniques: {technique}",
+            cti_text=cti,
+            research_text=research,
+            technique_facts=self.FACTS,
+        )
+        return report.claims[0].status
+
+    def test_a_technique_no_source_describes_is_unsupported(self):
+        assert self._status("T1055.012") == "unsupported"
+
+    def test_a_generic_word_shared_with_the_source_is_not_support(self):
+        """ "delivery" appears in the CTI; "compile" does not."""
+        assert self._status("T1027.004") == "unsupported"
+
+    def test_the_parent_name_supports_a_subtechnique(self):
+        """T1036.005's own name is abstract; "masquerade" is the parent's word."""
+        assert self._status("T1036.005") == "derived"
+
+    def test_the_research_document_counts_as_support(self):
+        assert self._status("T1055.012", research="The loader performs process hollowing.") == (
+            "derived"
+        )
+
+    def test_report_wording_supports_an_abstractly_named_technique(self):
+        """A DDoS write-up never says "Network Denial of Service" (H-0483)."""
+        facts = {"T1498": TechniqueFact(names=("Network Denial of Service",))}
+        report = audit_draft(
+            draft_text="techniques: T1498",
+            cti_text="The botnet implements 15 DDoS attack methods.",
+            technique_facts=facts,
+        )
+        assert report.claims[0].status == "derived"
+
+    def test_a_name_of_only_generic_words_is_not_judged(self):
+        facts = {"T1204": TechniqueFact(names=("User Execution",))}
+        report = audit_draft(
+            draft_text="techniques: T1204", cti_text="nothing", technique_facts=facts
+        )
+        assert report.claims[0].status == "derived"
+
+    def test_an_unresolved_name_is_not_judged(self):
+        report = audit_draft(
+            draft_text="techniques: T1055.012",
+            cti_text=self.LABUBA_CTI,
+            technique_facts={"T1055.012": TechniqueFact()},
+        )
+        assert report.claims[0].status == "derived"
+
+    def test_a_source_asserted_technique_is_never_second_guessed(self):
+        report = audit_draft(
+            draft_text="techniques: T1055.012",
+            cti_text=self.LABUBA_CTI,
+            cti_techniques=["T1055.012"],
+            technique_facts=self.FACTS,
+        )
+        assert report.claims[0].status == "asserted"

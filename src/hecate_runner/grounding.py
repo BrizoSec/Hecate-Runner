@@ -407,6 +407,9 @@ class TechniqueFact:
     #: vocabulary the draft's frontmatter uses. Empty means the caller could
     #: not resolve them, which is not the same as a mismatch.
     platforms: tuple[str, ...] = ()
+    #: The technique's ATT&CK name, plus its parent's for a sub-technique.
+    #: Empty means unresolved, and disables the name-support check.
+    names: tuple[str, ...] = ()
 
 
 @dataclass
@@ -511,6 +514,69 @@ def _looks_like_a_filename(value: str) -> bool:
     return value.rsplit(".", 1)[-1].lower() in _FILE_SUFFIXES
 
 
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+#: Words in ATT&CK technique names that say nothing about *which* behaviour is
+#: meant, so a source using them is no evidence for the technique. "delivery"
+#: is here because T1027.004 "Compile After Delivery" otherwise matched
+#: "the delivery mechanism" in a source that never mentions compiling.
+_GENERIC_NAME_WORDS = frozenset(
+    {
+        "account", "accounts", "after", "application", "before", "command",
+        "data", "delivery", "execution", "file", "files", "from", "information",
+        "into", "legitimate", "local", "location", "match", "name", "network",
+        "other", "process", "protocol", "remote", "resource", "service",
+        "services", "software", "standard", "system", "systems", "tool",
+        "tools", "user", "using", "with",
+    }
+)  # fmt: skip
+
+#: Stem length for name keywords, so "Masquerading" matches "masquerade" and
+#: "Hollowing" matches "hollowed" without a stemming dependency.
+_STEM_LEN = 6
+
+
+#: How reports describe techniques whose ATT&CK names they rarely use, keyed
+#: by top-level ID so sub-techniques inherit them. Kept to names that are
+#: abstract rather than wrong: a DDoS write-up says "DDoS", never "Network
+#: Denial of Service" (observed on H-0483). Not a synonym dictionary -- an
+#: entry here makes the technique harder to flag, so each one must be a word
+#: that only describes that behaviour.
+_REPORT_WORDING = {
+    "T1053": ("schtasks", "crontab", "cron"),
+    "T1071": ("http", "https", "dns", "websocket"),
+    "T1105": ("download", "downloader"),
+    "T1498": ("ddos", "flood"),
+    "T1499": ("ddos", "flood"),
+}
+
+
+def _name_stems(names: tuple[str, ...], technique_id: str = "") -> set[str]:
+    stems = set(_REPORT_WORDING.get(technique_id.split(".")[0], ()))
+    for name in names:
+        for word in _WORD_RE.findall(name.lower()):
+            if len(word) >= 4 and word not in _GENERIC_NAME_WORDS:
+                stems.add(word[:_STEM_LEN])
+    return stems
+
+
+def _names_unsupported(
+    names: tuple[str, ...], evidence_words: set[str], technique_id: str = ""
+) -> bool:
+    """True when a technique's names carry keywords and no source uses any of them.
+
+    Deliberately lenient -- one shared keyword is enough -- because this can
+    only tell "the sources never mention this behaviour" from "they might".
+    A name made entirely of generic words cannot be judged and is let through.
+    """
+    if not names:
+        return False
+    stems = _name_stems(names, technique_id)
+    if not stems:
+        return False
+    return not any(word.startswith(stem) for stem in stems for word in evidence_words)
+
+
 def audit_draft(
     *,
     draft_text: str,
@@ -555,6 +621,7 @@ def audit_draft(
         report.claims.append(GroundingClaim(kind=kind, value=value, status=status, note=note))
 
     hunt_platforms = list(hunt_platforms or [])
+    evidence_words = set(_WORD_RE.findall(primary)) | set(_WORD_RE.findall(secondary))
 
     # --- ATT&CK techniques ------------------------------------------------
     # A technique the hypothesis reasoned to is legitimate; one the source
@@ -612,6 +679,22 @@ def audit_draft(
                 upper,
                 "asserted",
                 "sub/parent of a technique the source named" + note_suffix,
+            )
+        elif fact is not None and _names_unsupported(fact.names, evidence_words, upper):
+            # A real ID on the right platform can still be the wrong
+            # technique. Observed on H-0002 (LabubaRAT): the source described
+            # masquerading as NVIDIA software and abusing Microsoft build
+            # utilities; the hypothesis mapped it to T1027.004 Compile After
+            # Delivery and T1055.012 Process Hollowing, and both passed as
+            # inferred. Neither "compile" nor "hollow" appears in any source.
+            add(
+                "technique",
+                upper,
+                "unsupported",
+                "nothing in the CTI or research describes {}".format(
+                    " / ".join(f"'{n}'" for n in fact.names)
+                )
+                + note_suffix,
             )
         else:
             add(

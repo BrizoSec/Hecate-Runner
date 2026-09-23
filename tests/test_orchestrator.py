@@ -550,6 +550,62 @@ def test_research_failure_aborts_cycle(
     assert state.drafts_today == 0
 
 
+def test_research_quota_survives_failed_cycle_refunds(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_hecate: MagicMock,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A failed cycle refunds its draft slot, but the searches it made are spent.
+    # The retry next hour must hit the research cap, not search again.
+    monkeypatch.setenv("HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY", "1")
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    (file_queue_with_cti.queue_dir / "next.txt").write_text(
+        "RSS: Some Campaign\n"
+        "Source: example.com\n"
+        "Summary: Attackers observed doing something specific and narrative-worthy.\n"
+        "Link: https://example.com/post"
+    )
+    mock_hecate.research_new.side_effect = HecateError("ollama timed out")
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
+
+    first = orch.run_once()
+    assert first.outcome == "research_error"
+    assert mock_hecate.research_new.call_args.kwargs["web_search_enabled"] is True
+
+    second = orch.run_once()
+    assert second.outcome == "research_quota_reached"
+    assert second.ok
+    assert mock_hecate.research_new.call_count == 1
+    mock_hecate.hypothesis_generator.assert_not_called()
+    assert (workspace / "cti_queue" / "next.txt").exists()
+
+    state = OrchestratorState.load(settings.state_file)
+    assert state.drafts_today == 0
+    assert state.research_runs_today == 1
+
+
+def test_research_quota_ignores_runs_without_web_search(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_hecate: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Research with search disabled spends no Tavily credits, so a zero cap
+    # must not block it.
+    monkeypatch.setenv("HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY", "0")
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    monkeypatch.setattr("hecate_runner.orchestrator.has_narrative", lambda _content: False)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
+
+    result = orch.run_once()
+
+    assert result.outcome != "research_quota_reached"
+    assert mock_hecate.research_new.call_args.kwargs["web_search_enabled"] is False
+    assert OrchestratorState.load(settings.state_file).research_runs_today == 0
+
+
 def test_research_failure_does_not_notify(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,
@@ -1439,3 +1495,27 @@ class TestSubstantiveObservables:
 
     def test_blank_entries_are_dropped(self):
         assert substantive_observables(["", "   "]) == []
+
+
+def test_technique_names_from_the_lookup_reach_the_grounding_audit(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_hecate: MagicMock,
+) -> None:
+    """The name-support check only works if the orchestrator carries the
+    technique's ATT&CK names from the lookup into the audit."""
+    mock_hecate.lookup_technique.return_value = TechniqueMetadata(
+        technique_id="T1003.001",
+        tactics=["credential-access"],
+        platforms=["Windows"],
+        found=True,
+        name="Process Hollowing",
+        parent_name="Process Injection",
+    )
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
+
+    result = orch.run_once()
+
+    assert result.draft_path is not None
+    content = result.draft_path.read_text()
+    assert "nothing in the CTI or research describes 'Process Hollowing'" in content

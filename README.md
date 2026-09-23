@@ -257,6 +257,7 @@ Key ones:
 | `HECATE_WORKSPACE` | Path to the Hecate workspace (Hecate-Core) | `~/betas/Hecate-Core` |
 | `HECATE_BIN` | Path to the `hecate-agent` CLI | `<workspace>/.venv/bin/hecate-agent` |
 | `HECATE_RUNNER_MAX_DRAFTS_PER_DAY` | Cap on drafts per 24h | `4` |
+| `HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY` | Cap on web-searching research runs per UTC day; not refunded on a failed cycle, so retries can't drain the Tavily quota | `7` |
 | `HECATE_RUNNER_LLM_TIMEOUT_SEC` | Hard timeout on any single `hecate-agent` invocation (research call and hypothesis call each get their own budget) | `1500` |
 | `HECATE_RUNNER_RESEARCH_ENABLED` | Run `hecate-agent research new` (web-grounded) before hypothesis generation | `true` |
 | `HECATE_RUNNER_RESEARCH_DEPTH` | `basic` (~5 min) or `advanced` (~15-20 min) research depth | `advanced` |

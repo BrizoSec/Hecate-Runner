@@ -55,6 +55,12 @@ class TechniqueMetadata:
     platforms: list[str] = field(default_factory=list)
     found: bool = False
     superseded_from: str = ""
+    name: str = ""
+    #: Name of the parent technique when this is a sub-technique. Sub-technique
+    #: names are often narrower than the behaviour a source describes --
+    #: T1036.005 is "Match Legitimate Resource Name or Location"; the word a
+    #: report actually uses is the parent's, "Masquerading".
+    parent_name: str = ""
 
 
 class HecateError(RuntimeError):
@@ -226,13 +232,33 @@ class HecateClient:
             if "stix_unavailable" in str(exc):
                 return TechniqueMetadata()
             raise HecateError(f"lookup failed: {exc}") from exc
+        resolved_id = data.get("technique_id", "")
         return TechniqueMetadata(
-            technique_id=data.get("technique_id", ""),
+            technique_id=resolved_id,
             tactics=data.get("tactics", []),
             platforms=data.get("platforms", []),
             found=data.get("found", False),
             superseded_from=data.get("superseded_from", ""),
+            name=data.get("name", ""),
+            parent_name=self._parent_name(resolved_id),
         )
+
+    def _parent_name(self, technique_id: str) -> str:
+        """The parent technique's name, or "" for a top-level or unresolvable ID.
+
+        An in-process lookup, not a subprocess, so a second call per
+        sub-technique costs nothing worth caching. A failure only costs the
+        grounding audit one name to match on, so it is not worth raising.
+        """
+        if "." not in technique_id:
+            return ""
+        from hecate_agent.api import lookup_technique
+
+        try:
+            data = self._with_context(lookup_technique, technique_id=technique_id.split(".")[0])
+        except RuntimeError:
+            return ""
+        return str(data.get("name", "")) if data.get("found") else ""
 
     def link_research_to_hunt(
         self, research_id: str, hunt_id: str, timeout_sec: int | None = None

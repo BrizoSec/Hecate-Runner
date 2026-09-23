@@ -317,8 +317,22 @@ def _entry_published(entry: dict[str, Any]) -> datetime | None:
     return None
 
 
+#: Values a broken feed generator emits in place of real text. Huntress's feed
+#: renders every title and description as "[object Object]" (a JavaScript
+#: object stringified by their CMS); passed through, it read as a narrative
+#: Summary, and research searched for the literal string -- R-0001/H-0001 were
+#: grounded in JavaScript docs and adversarial-ML papers.
+_PLACEHOLDER_VALUES = frozenset({"[object object]", "undefined", "null", "none", "nan"})
+
+
 def _strip_html(raw: str) -> str:
     return html.unescape(_HTML_TAG_RE.sub("", raw or "")).strip()
+
+
+def _real_text(raw: Any) -> str:
+    """``raw`` stripped of HTML, or "" when it is a feed generator's placeholder."""
+    text = _strip_html(str(raw or ""))
+    return "" if text.lower() in _PLACEHOLDER_VALUES else text
 
 
 def _entry_to_cti_item(feed_url: str, entry: dict[str, Any]) -> CTIItem:
@@ -332,7 +346,7 @@ def _entry_to_cti_item(feed_url: str, entry: dict[str, Any]) -> CTIItem:
         metadata={
             "feed_url": feed_url,
             "entry_id": entry_id,
-            "entry_title": entry.get("title", ""),
+            "entry_title": _real_text(entry.get("title")),
             "entry_link": entry.get("link", ""),
             # Publisher-declared categories, structured alongside the blurb
             # (which renders them as a "Tags:" line) so intake triage reads
@@ -342,16 +356,16 @@ def _entry_to_cti_item(feed_url: str, entry: dict[str, Any]) -> CTIItem:
             # Huntress and SANS publish none.
             "entry_tags": [t.get("term", "") for t in entry.get("tags", []) if t.get("term")],
         },
-        title=str(entry.get("title") or ""),
+        title=_real_text(entry.get("title")),
         source_url=str(entry.get("link") or ""),
     )
 
 
 def _entry_to_blurb(feed_url: str, entry: dict[str, Any]) -> str:
     """Condense an RSS/Atom entry into a text blurb for hypothesis-generator."""
-    title = entry.get("title") or "Untitled"
+    title = _real_text(entry.get("title")) or "Untitled"
     link = entry.get("link") or ""
-    summary = _strip_html(entry.get("summary", ""))[:1500]
+    summary = _real_text(entry.get("summary"))[:1500]
     tags = [t.get("term", "") for t in entry.get("tags", []) if t.get("term")]
     techniques = sorted(set(_TECHNIQUE_RE.findall(f"{title}\n{summary}")))
     feed_title = entry.get("feed_title") or _feed_domain(feed_url)

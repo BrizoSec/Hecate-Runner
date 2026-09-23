@@ -37,6 +37,7 @@ def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Setti
         "HECATE_WORKSPACE",
         "HECATE_BIN",
         "HECATE_RUNNER_MAX_DRAFTS_PER_DAY",
+        "HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY",
         "HECATE_RUNNER_LLM_TIMEOUT_SEC",
         "HECATE_RUNNER_CTI_PROVIDER",
         "HECATE_RUNNER_CTI_MULTI_PROVIDERS",
