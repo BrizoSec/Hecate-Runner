@@ -90,6 +90,7 @@ class HecateClient:
         self.workspace = workspace
         self.env_overrides = env_overrides or {}
         self.default_timeout_sec = default_timeout_sec
+        self._workspace_env: dict[str, str | None] | None = None
 
     def check_installed(self) -> None:
         if importlib.util.find_spec("hecate_agent") is None:
@@ -101,10 +102,14 @@ class HecateClient:
         try:
             os.chdir(self.workspace)
             # 1. Load the workspace's .env so we pick up HECATE_LLM_MODEL, etc.
-            # just like the subprocess CLI used to do.
-            from dotenv import load_dotenv
-
-            load_dotenv(self.workspace / ".env")
+            # Cache it to avoid excessive disk I/O when called in loops.
+            if self._workspace_env is None:
+                from dotenv import dotenv_values
+                self._workspace_env = dotenv_values(self.workspace / ".env")
+            
+            for k, v in self._workspace_env.items():
+                if v is not None:
+                    os.environ[k] = v
 
             # 2. Apply runner overrides on top
             os.environ.update(self.env_overrides)

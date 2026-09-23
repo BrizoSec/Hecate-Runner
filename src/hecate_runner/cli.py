@@ -668,7 +668,7 @@ def doctor() -> None:
     check(
         settings.hecate_workspace.exists(),
         f"Hecate workspace exists: {settings.hecate_workspace}",
-        "Set HECATE_WORKSPACE or run `hecate init`",
+        "Set HECATE_WORKSPACE to the Hecate-Core checkout",
     )
     check(
         settings.hecate_bin_resolved.exists(),
@@ -678,7 +678,7 @@ def doctor() -> None:
     check(
         settings.hunts_root.exists() or settings.hecate_workspace.exists(),
         f"Hunts root writable: {settings.hunts_root}",
-        "Run `hecate init` inside the workspace",
+        "Create it with `hecate-agent hunt new` inside the workspace",
     )
     check(
         _has_write(settings.log_dir),
@@ -695,7 +695,8 @@ def doctor() -> None:
         check(
             bool(multi_names) and "multi" not in multi_names,
             f"HECATE_RUNNER_CTI_MULTI_PROVIDERS valid ({', '.join(multi_names) or 'empty'})",
-            "Set HECATE_RUNNER_CTI_MULTI_PROVIDERS to a comma-separated list from: file, otx, rss, misp.",
+            "Set HECATE_RUNNER_CTI_MULTI_PROVIDERS to a comma-separated list from: "
+            "file, otx, rss, misp, cisa_kev, abuse_ch.",
         )
     else:
         multi_names = []

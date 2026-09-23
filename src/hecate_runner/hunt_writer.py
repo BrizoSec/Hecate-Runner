@@ -595,7 +595,7 @@ def write_draft(req: DraftHuntRequest, hunts_root: Path) -> Path:
     """Render and write the draft. Returns the file path."""
     path = draft_hunt_path(hunts_root, req.hunt_id, req.generated_at)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_draft(req))
+    atomic_write_text(path, render_draft(req))
     log.info("Wrote draft hunt %s (%d bytes)", path, path.stat().st_size)
     return path
 

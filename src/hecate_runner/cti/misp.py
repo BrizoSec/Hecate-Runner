@@ -619,6 +619,7 @@ def _event_to_cti_item(base_url: str, event: dict[str, Any]) -> CTIItem:
             "event_id": event_id,
             "event_timestamp": timestamp,
             "event_info": event.get("info", ""),
+            "entry_tags": [str(t.get("name", "")) for t in event.get("Tag", []) or [] if t.get("name")],
             # Structured alongside the rendered blurb so downstream steps
             # (Sigma drafting) get typed values instead of re-parsing prose.
             "indicators": _indicator_map(event),

@@ -155,7 +155,8 @@ def platforms_named_in(*texts: str) -> list[str]:
     haystack = " ".join(t for t in texts if t).lower()
     named: list[str] = []
     for mention, platform in _PLATFORM_MENTIONS.items():
-        if mention in haystack and platform not in named:
+        pattern = r"\b" + re.escape(mention) + r"\b"
+        if re.search(pattern, haystack) and platform not in named:
             named.append(platform)
     return named
 
@@ -1066,6 +1067,21 @@ class Orchestrator:
                     exc,
                 )
 
+        # The draft file already exists on disk at this point. Acknowledge the
+        # CTI item and save state *before* the multi-minute Sigma drafting
+        # step, so if the process is killed during Sigma generation, we don't
+        # lose the quota count and re-draft the exact same CTI item next cycle.
+        try:
+            self.cti.acknowledge(item)
+            state.save(self.settings.state_file)
+        except Exception as exc:  # isolate from the top-level guard
+            log.warning(
+                "Failed to acknowledge CTI item or save state after successfully drafting %s (%s); "
+                "this item may be re-drafted under a new ID next cycle.",
+                hunt_id,
+                exc,
+            )
+
         # Sigma drafting sits here deliberately: after the file exists, and
         # outside hunt_id_lock. It is a multi-minute LLM call, and holding
         # the ID-allocation lock across it would stall every concurrent
@@ -1074,24 +1090,6 @@ class Orchestrator:
         # placeholder query section rather than losing it.
         if self.settings.sigma_generation_enabled:
             self._attach_sigma_rules(req, path, item, technique_facts)
-
-        # The draft file already exists on disk at this point. A failure from
-        # here on must NOT be treated as "the cycle failed" (that would
-        # incorrectly mark state.mark_run(success=False) despite real forward
-        # progress having happened) or refund the quota (a real draft WAS
-        # produced — that's legitimate usage). acknowledge() failing just
-        # means the CTI item's cursor didn't advance, so it may be picked up
-        # and redrafted under a new ID next cycle — worth a loud warning, not
-        # a cycle-level failure that also risks silently duplicating content.
-        try:
-            self.cti.acknowledge(item)
-        except Exception as exc:  # isolate from the top-level guard, see above
-            log.warning(
-                "Failed to acknowledge CTI item after successfully drafting %s (%s); "
-                "this item may be re-drafted under a new ID next cycle.",
-                hunt_id,
-                exc,
-            )
 
         log.info(
             "Draft %s created at %s (research=%s, drafts today: %d/%d)",

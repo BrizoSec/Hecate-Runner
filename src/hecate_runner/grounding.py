@@ -120,6 +120,12 @@ _FILE_SUFFIXES = frozenset(
         "hta",
         "iso",
         "img",
+        "bin",
+        "pid",
+        "local",
+        "db",
+        "bak",
+        "old",
     }
 )
 
@@ -395,10 +401,9 @@ class TechniqueFact:
     """What the live ATT&CK matrix says about one technique ID.
 
     Supplied by the caller rather than looked up here: the orchestrator
-    already resolves every technique through ``hecate-agent attack lookup`` to derive
-    tactics and platforms, and each of those is a subprocess call. Re-running
-    them inside the audit would double the cost of a draft to re-learn what
-    the caller just found out.
+    already resolves every technique in-process through the HecateClient to derive
+    tactics and platforms. While this lookup is now in-process, passing it
+    avoids duplicating work the caller just did.
     """
 
     valid: bool = True

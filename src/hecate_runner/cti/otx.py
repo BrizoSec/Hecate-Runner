@@ -317,6 +317,7 @@ def _pulse_to_cti_item(pulse: dict[str, Any]) -> CTIItem:
             "pulse_id": str(pulse.get("id", "")),
             "pulse_modified": modified,
             "pulse_name": pulse.get("name", ""),
+            "entry_tags": pulse.get("tags") or [],
             # Structured alongside the blurb, matching the MISP provider, so
             # Sigma drafting gets typed values rather than re-parsing prose.
             "indicators": _indicator_map(pulse),

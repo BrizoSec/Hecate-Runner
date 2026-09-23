@@ -42,6 +42,7 @@ _TELEMETRY_BY_TYPE: dict[str, tuple[str, str]] = {
     "ip-dst": ("Network flow / firewall logs", "Outbound connection to a listed IP"),
     "ip-src": ("Network flow / firewall logs", "Inbound connection from a listed IP"),
     "ip-dst|port": ("Network flow / firewall logs", "Outbound connection to a listed IP:port"),
+    "ip-src|port": ("Network flow / firewall logs", "Inbound connection from a listed IP:port"),
     "ipv4": ("Network flow / firewall logs", "Connection to a listed IPv4 address"),
     "ipv6": ("Network flow / firewall logs", "Connection to a listed IPv6 address"),
     "md5": ("Endpoint/EDR file and process telemetry", "Execution of a file matching a listed MD5"),

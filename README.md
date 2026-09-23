@@ -4,7 +4,7 @@ Autonomous hunt draft orchestrator for the Agentic Threat Hunting Framework (Hec
 
 `hecate-runner` sits on top of Hecate and turns it into a persistent, 24/7 hunting loop:
 
-1. Pulls fresh CTI from a configured source (file queue, AlienVault OTX, RSS/Atom feeds, or MISP)
+1. Pulls fresh CTI from a configured source (file queue, AlienVault OTX, RSS/Atom feeds, MISP, CISA KEV, or abuse.ch ThreatFox)
 2. Calls the Hecate `hypothesis-generator` agent (which uses a local Ollama-served LLM)
 3. Writes structured draft hunt records into your Hecate workspace
 4. Never auto-executes queries — a human proposes a bounded query and separately approves running it (see [Query execution](#query-execution-propose-dont-run) below); nothing runs unattended
@@ -21,7 +21,7 @@ Runs as a systemd timer on a hunting host, or manually via `hecate-runner run`.
 ## Architecture
 
 ```
-  CTI provider: file | otx | rss | misp | multi
+  CTI provider: file | otx | rss | misp | cisa_kev | abuse_ch | multi
   (file reads cti_queue/next.txt; the rest poll their source directly)
                                 |
                                 v
@@ -45,6 +45,35 @@ Runs as a systemd timer on a hunting host, or manually via `hecate-runner run`.
 ```
 
 Research grounding runs before hypothesis generation on every cycle by default (`HECATE_RUNNER_RESEARCH_ENABLED=true`). **A research failure aborts the cycle** (refunds the quota, leaves the CTI queued for retry) rather than falling back to an ungrounded hypothesis: `hecate-agent eval` measured ungrounded generation at ~30% accuracy on known-answer MITRE technique fixtures, so an ungrounded draft isn't a degraded-but-useful fallback, it's an unreliable one. Set `HECATE_RUNNER_RESEARCH_ENABLED=false` to explicitly opt out of research and always generate ungrounded (e.g. for offline testing) — that's a deliberate choice, different from a research call failing mid-cycle.
+
+### Intake triage: park, don't drop
+
+Not everything a feed emits is intelligence. Three of the first fifteen drafts
+came from a conference recap, a weekly news roundup, and a vendor post about
+agentic SOCs. `HECATE_RUNNER_CTI_TRIAGE=park` (the default) holds those back
+before they consume a draft slot.
+
+It parks rather than skips because the two error directions cost very different
+amounts. A junk draft costs one review slot and is visible. A wrongly-dropped
+item is gone silently — the cursor has already advanced past it. So nothing is
+ever discarded: the item is written whole to `<cti_queue>/parked/` with the
+reason attached.
+
+```bash
+hecate-runner parked list            # what was held back, newest first
+hecate-runner parked show <id>       # read one in full
+hecate-runner parked restore <id>    # put it back on the queue for the next cycle
+```
+
+The rules are deliberately narrow and deterministic rather than clever. A model
+was measured on this exact task first: 8/8 on hand-picked examples, but on 36
+uncurated live entries it parked 27, including three unambiguous pieces of
+intelligence from the highest-signal feed subscribed to, and gave three
+different answers to three entries of one monthly series. Recoverability makes
+a heuristic gate survivable; it does not make a bad one good. Set
+`HECATE_RUNNER_CTI_TRIAGE=off` to draft from everything.
+Parked items are deleted after `HECATE_RUNNER_PARKED_MAX_AGE_DAYS` (default 30;
+0 disables).
 
 One exception is automatic: when the CTI is a bare indicator dump with a parseable inventory (a ThreatFox-style feed event), the draft is built deterministically from the indicator list with no LLM call, and research is skipped along with it. There is no behavior described for research to ground, and running it anyway produced documents whose every section said so.
 
@@ -204,8 +233,9 @@ You can also skip the file queue entirely and have the orchestrator pull directl
 Unlike OTX, this needs no signup or credential — it polls a configured list of security research blog feeds directly.
 
 ```bash
-# Works out of the box with four verified defaults (The DFIR Report, Talos,
-# Unit42, Microsoft Security Blog) -- override with your own list:
+# Works out of the box with nine verified defaults (The DFIR Report, Talos,
+# Unit42, Microsoft Security Blog, Google TAG, Mandiant, Sekoia, Volexity,
+# WeLiveSecurity) -- override with your own list:
 # HECATE_RUNNER_RSS_FEED_URLS=https://a.example.com/feed/,https://b.example.com/feed/
 
 # One-off: route the oldest unrouted entry across all configured feeds
@@ -244,6 +274,35 @@ Used alone each is a trap: requiring galaxies on a dump-heavy recent window star
 
 **Standing up a local MISP instance for dev/test:** see [MISP/misp-docker](https://github.com/MISP/misp-docker) — `docker compose up`, then create a dedicated Auth key as above. On a host already running an ingress controller, bind non-standard ports (e.g. 8080/8443) and set `BASE_URL` to match: Traefik claims 80/443 system-wide via iptables NAT including loopback, which `ss` does not show.
 
+### CISA KEV provider
+
+```bash
+# No credential required -- the catalog is a public JSON feed.
+HECATE_RUNNER_CTI_PROVIDER=cisa_kev   # or include cisa_kev in CTI_MULTI_PROVIDERS
+```
+
+Polls the [CISA Known Exploited Vulnerabilities catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
+and returns entries added since the last cursor date.
+
+This source is vulnerability-shaped, not behavior-shaped, and the drafts read
+that way: a hunt for exploitation of one specific CVE rather than for a TTP. That
+is the right shape for "is this being used against us", and the wrong one if you
+are expecting the behavioral hunts MISP and RSS produce.
+
+### abuse.ch ThreatFox provider
+
+```bash
+# Also credential-free.
+HECATE_RUNNER_CTI_PROVIDER=abuse_ch   # or include abuse_ch in CTI_MULTI_PROVIDERS
+```
+
+Polls ThreatFox's recent-IOC export, cursored on the highest IOC id already seen.
+
+ThreatFox is a bare indicator feed, so it hits the deterministic path described
+under Grounding: the draft is built from the indicator inventory with no LLM call
+and research is skipped, because there is no described behavior to ground. Expect
+indicator-sweep hunts, not hypotheses.
+
 ## Configuration
 
 All config comes from environment variables (or a `.env` file in the working directory). See [.env.example](.env.example) for the full list.
@@ -261,13 +320,19 @@ Key ones:
 | `HECATE_RUNNER_LLM_TIMEOUT_SEC` | Hard timeout on any single `hecate-agent` invocation (research call and hypothesis call each get their own budget) | `1500` |
 | `HECATE_RUNNER_RESEARCH_ENABLED` | Run `hecate-agent research new` (web-grounded) before hypothesis generation | `true` |
 | `HECATE_RUNNER_RESEARCH_DEPTH` | `basic` (~5 min) or `advanced` (~15-20 min) research depth | `advanced` |
-| `HECATE_RUNNER_CTI_PROVIDER` | Which CTI source to use (`file`, `otx`, `rss`, `misp`, or `multi`) | `file` |
+| `HECATE_RUNNER_CTI_PROVIDER` | Which CTI source to use (`file`, `otx`, `rss`, `misp`, `cisa_kev`, `abuse_ch`, or `multi`) | `file` |
 | `HECATE_RUNNER_CTI_MULTI_PROVIDERS` | Sub-providers to rotate through when `CTI_PROVIDER=multi` | `rss,otx,misp` |
+| `HECATE_RUNNER_CTI_TRIAGE` | `park` holds commentary-shaped CTI in `<cti_queue>/parked/`; `off` drafts from everything | `park` |
+| `HECATE_RUNNER_PARKED_MAX_AGE_DAYS` | Delete parked items after this many days (0 disables) | `30` |
+| `HECATE_RUNNER_CTI_QUEUE_DIR` | Override the CTI queue location | `<workspace>/cti_queue` |
+| `HECATE_RUNNER_LOG_LEVEL` | Orchestrator log level | `INFO` |
 | `OTX_API_KEY` | AlienVault OTX API key — required for `cti_provider=otx` and `hecate-runner otx-poll` | — |
-| `HECATE_RUNNER_RSS_FEED_URLS` | Comma-separated RSS/Atom feed URLs — no API key needed | 4 verified defaults, see `.env.example` |
+| `HECATE_RUNNER_RSS_FEED_URLS` | Comma-separated RSS/Atom feed URLs — no API key needed | 9 verified defaults, see `config.py` |
 | `HECATE_RUNNER_RSS_MAX_ENTRY_AGE_DAYS` | Ignore RSS entries older than this | `30` |
 | `MISP_BASE_URL` / `MISP_API_KEY` | MISP instance + dedicated automation Auth key — required for `cti_provider=misp` and `hecate-runner misp-poll` | — |
 | `HECATE_RUNNER_MISP_VERIFY_SSL` | Set false only for self-signed dev/test MISP instances | `true` |
+| `HECATE_RUNNER_MISP_MAX_EVENT_AGE_DAYS` | Freshness floor on MISP events (ignored when `MISP_BACKFILL` is on) | `30` |
+| `HECATE_RUNNER_OTX_MAX_PULSE_AGE_DAYS` | Freshness floor on OTX pulses | `30` |
 | `HECATE_RUNNER_MISP_REQUIRE_GALAXY` | Only route MISP events carrying a galaxy cluster — keeps bulk indicator dumps (ThreatFox-style) out, since they describe no behavior | `true` |
 | `HECATE_RUNNER_LOG_MAX_BYTES` | Rotate the orchestrator log past this size (copy-and-truncate, since systemd co-writes the file) | `5242880` |
 | `HECATE_RUNNER_LOG_BACKUP_COUNT` | Rotated logs to keep | `5` |
@@ -281,6 +346,29 @@ Key ones:
 | `HECATE_RUNNER_MAX_QUERY_TIME_RANGE_DAYS` | Hard ceiling on a proposed query's time range | `7` |
 | `HECATE_RUNNER_MAX_QUERY_LIMIT` | Hard ceiling on a proposed query's result limit | `1000` |
 | `HECATE_RUNNER_SLACK_WEBHOOK_URL` | Slack incoming webhook — posts on every draft creation, no-op if unset | — |
+
+## Operating it
+
+Beyond `run` and the pollers, the CLI covers the things you reach for when a
+cycle looks wrong:
+
+```bash
+hecate-runner status     # quota used today, last run, total drafts
+hecate-runner doctor     # sanity-check the deployment; non-zero exit if anything is off
+hecate-runner config     # effective settings as JSON, safe to paste into an issue
+hecate-runner parked     # list / show / restore CTI held back by triage
+hecate-runner sources    # list / enable / disable / reset cursors, editing .env in place
+```
+
+`doctor` is the first thing to run after any deployment change: it checks the
+workspace path, the `hecate-agent` binary, credentials for whichever providers
+are active, and — when `QUERY_PROVIDER=splunk` — that `SPLUNK_HOST`/`SPLUNK_TOKEN`
+are set. It cannot detect an API key that is present and valid but out of quota,
+since that would mean spending a paid call on every run.
+
+`sources reset` re-ingests from a source by rewinding its cursor. Note that
+cursors advance past items the filters skip, so rewinding is also how you revisit
+events an org allowlist or galaxy requirement walked past.
 
 ## Development
 
@@ -299,12 +387,15 @@ Done:
 
 - **4a** file-based CTI queue, orchestrator, systemd timer
 - **4b/5** AlienVault OTX provider
-- **4c** RSS/Atom provider, no API key needed (4 verified default feeds; CISA's advisory feed was tried and excluded — it blocks automated requests on every path regardless of User-Agent)
+- **4c** RSS/Atom provider, no API key needed (9 verified default feeds; CISA's advisory feed was tried and excluded — it blocks automated requests on every path regardless of User-Agent)
 - **4d** MISP provider, live-verified against a real instance, with galaxy filtering and archive backfill
+- **4e** CISA KEV and abuse.ch ThreatFox providers, both credential-free
+- **4f** intake triage — commentary-shaped CTI is parked rather than drafted or dropped, and is restorable
 - **5b** Slack webhook on draft creation (email still open)
 - **6a** web-search grounding via Tavily, mandatory when enabled — a research failure aborts the cycle rather than falling back to ungrounded
 - **6b** eval harness (`hecate-agent eval`), which is what measured ungrounded generation at ~30% MITRE technique recall and made grounding mandatory rather than a soft fallback
 - **6c** ATT&CK STIX grounding fed into the research skills instead of asking the model to recall technique metadata — closed that ~30% to 100% on the same model
+- **6d** grounding audit written into each draft, plus `hecate-runner audit` to re-grade hunts already on disk
 
 In progress:
 
