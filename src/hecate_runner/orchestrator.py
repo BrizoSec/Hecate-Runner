@@ -603,6 +603,12 @@ class Orchestrator:
             "platforms": req.platforms,
             "indicators": indicators,
             "references": [item.source_url] if item.source_url else [],
+            # The draft's observables and ABLE evidence carry what grounded
+            # research found -- H-0002's `nvidia-sysruntime.exe` -- which the
+            # generator otherwise never sees, so it invented `.nvidia.exe`.
+            "observables": [
+                o for o in [*req.hypothesis.observables, req.hypothesis.evidence] if o and o.strip()
+            ],
         }
 
         try:
@@ -616,6 +622,12 @@ class Orchestrator:
                 exc,
             )
             return
+
+        # A rejected rule is not retried, so its reason is the only record of
+        # why a log source came back empty. The client's `warnings` is always
+        # empty; the reasons live in `rejected`.
+        for reason in result.rejected:
+            log.info("Sigma rule rejected for %s: %s", req.hunt_id, reason)
 
         if not result.success or not result.rules:
             log.warning(

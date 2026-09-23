@@ -1117,6 +1117,50 @@ def test_sigma_uses_cti_techniques_over_the_narrower_hypothesis_list(
     assert payload["indicators"] == {"hostname": ["api.wiresguard.com"]}
 
 
+def test_sigma_payload_carries_the_drafts_observables(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_hecate: MagicMock,
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    """Grounded research reaches the draft as observables and evidence; the
+    Sigma generator must see them too, or it invents filenames (H-0002)."""
+    sample_hypothesis.evidence = "process_execution.process.name=nvidia-sysruntime.exe"
+    mock_hecate.hypothesis_generator.return_value = sample_hypothesis
+    mock_hecate.sigma_generator.return_value = SigmaResult(success=True, rules=[_SIGMA_RULE])
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
+
+    orch.run_once()
+
+    payload = mock_hecate.sigma_generator.call_args.args[0]
+    assert payload["observables"] == [
+        "rundll32.exe loading comsvcs.dll",
+        "process access to lsass.exe with PROCESS_VM_READ",
+        "process_execution.process.name=nvidia-sysruntime.exe",
+    ]
+
+
+def test_sigma_rejections_are_logged(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_hecate: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    mock_hecate.sigma_generator.return_value = SigmaResult(
+        success=True,
+        rules=[_SIGMA_RULE],
+        rejected=["process_creation: selections match only '.exe'"],
+    )
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
+
+    with caplog.at_level("INFO", logger="hecate_runner.orchestrator"):
+        orch.run_once()
+
+    assert "Sigma rule rejected for H-0001: process_creation: selections match only '.exe'" in (
+        caplog.text
+    )
+
+
 # --- Technique / platform / data-source fidelity ---------------------------
 
 _CHRYSALIS_CTI_TECHNIQUES = [
