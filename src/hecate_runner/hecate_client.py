@@ -272,6 +272,24 @@ class HecateClient:
             parent_name=self._parent_name(resolved_id),
         )
 
+    def candidate_techniques(self, text: str) -> list[tuple[str, str]]:
+        """(ID, name) for ATT&CK techniques the text names as a phrase.
+
+        Deterministic matching in Hecate (``core.technique_candidates``), not
+        a model call. Returns nothing -- rather than failing the cycle -- on a
+        Hecate that predates the module or when ATT&CK data cannot be read.
+        """
+        try:
+            from hecate_agent.core.technique_candidates import candidate_techniques
+        except ImportError:
+            return []
+        try:
+            found = self._with_context(candidate_techniques, text)
+        except Exception as exc:  # candidates are an aid; never fatal
+            log.warning("Candidate technique matching failed (%s); continuing without it", exc)
+            return []
+        return [(str(tid), str(name)) for tid, name in found]
+
     def _parent_name(self, technique_id: str) -> str:
         """The parent technique's name, or "" for a top-level or unresolvable ID.
 

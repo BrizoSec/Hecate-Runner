@@ -135,6 +135,8 @@ def mock_hecate(
     mock = MagicMock(spec=HecateClient)
     mock.hypothesis_generator.return_value = sample_hypothesis
     mock.research_new.return_value = sample_research_result
+    # No phrase-matched techniques unless a test supplies some.
+    mock.candidate_techniques.return_value = []
     # Matches sample_hypothesis's T1003.001 so tests asserting on rendered
     # draft content see real-looking tactics/platform, not an empty lookup.
     mock.lookup_technique.return_value = TechniqueMetadata(

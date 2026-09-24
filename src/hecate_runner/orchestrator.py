@@ -152,6 +152,22 @@ def merge_techniques(cti_techniques: list[str], hypothesis_techniques: list[str]
     return [t for t in merged if "." in t or t not in parents_with_children]
 
 
+_TRADECRAFT_SECTION_RE = re.compile(
+    r"^## 2\. Adversary Tradecraft.*?$(.*?)(?=^## \d+\.|\Z)", re.MULTILINE | re.DOTALL
+)
+
+
+def research_tradecraft_text(research_doc: str) -> str:
+    """The research document's Adversary Tradecraft section.
+
+    What the retrieved sources said adversaries did. The rest of the document
+    is model speculation -- gaps, focus areas, telemetry -- whose wording must
+    not be able to put a technique on a hunt.
+    """
+    match = _TRADECRAFT_SECTION_RE.search(research_doc or "")
+    return match.group(1) if match else ""
+
+
 def platforms_named_in(*texts: str) -> list[str]:
     """Platforms a hypothesis explicitly claims, in ATT&CK's spelling."""
     haystack = " ".join(t for t in texts if t).lower()
@@ -1225,7 +1241,27 @@ class Orchestrator:
         # list. Merging is what keeps the draft's ATT&CK mapping, its platform
         # scope and its telemetry list faithful to the source.
         cti_techniques = [str(t) for t in (item.metadata.get("techniques") or [])]
-        hypothesis.techniques = merge_techniques(cti_techniques, hypothesis.techniques)
+
+        # Techniques whose names the intel itself uses as a phrase. Offered to
+        # the model as a prompt hint first, which it ignored in 3 of 4 re-drafts
+        # (SEO Poisoning offered, T1098/T1563 chosen), so they are now merged
+        # in directly, after what the CTI asserted and ahead of the model's own
+        # picks. An indicator dump gets none: it describes no behaviour.
+        candidates: list[tuple[str, str]] = []
+        if not sweep_inventory:
+            candidates = self.hecate.candidate_techniques(
+                "\n".join(
+                    [item.content, research_tradecraft_text(self._research_text(research_id))]
+                )
+            )
+            self.trail.step(
+                "techniques",
+                "matched in the intel's wording: %s",
+                listing(f"{tid} {name}" for tid, name in candidates),
+            )
+        hypothesis.techniques = merge_techniques(
+            [*cti_techniques, *(tid for tid, _ in candidates)], hypothesis.techniques
+        )
         self.trail.step(
             "techniques",
             "model chose %s; CTI asserted %s -> merged %s",
