@@ -43,32 +43,6 @@ _SIGMA_RULE = {
 }
 
 
-@pytest.fixture
-def mock_hecate(
-    sample_hypothesis: HypothesisResult,
-    sample_research_result: ResearchResult,
-) -> MagicMock:
-    mock = MagicMock(spec=HecateClient)
-    mock.hypothesis_generator.return_value = sample_hypothesis
-    mock.research_new.return_value = sample_research_result
-    # Matches sample_hypothesis's T1003.001 so tests asserting on rendered
-    # draft content see real-looking tactics/platform, not an empty lookup.
-    mock.lookup_technique.return_value = TechniqueMetadata(
-        technique_id="T1003.001",
-        tactics=["credential-access"],
-        platforms=["Windows"],
-        found=True,
-    )
-    # Default to the failure path so tests that are not about Sigma exercise
-    # the graceful degradation. Left as a bare MagicMock this silently
-    # rendered a "0 Sigma rule(s)" header into every draft under test, via
-    # MagicMock's default __len__/__iter__ -- passing, but testing nothing.
-    mock.sigma_generator.return_value = SigmaResult(
-        success=False, error="sigma generation not configured in this test"
-    )
-    return mock
-
-
 def test_no_cti_returns_no_cti(
     settings: Settings,
     workspace: Path,
