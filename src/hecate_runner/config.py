@@ -434,10 +434,6 @@ class Settings(BaseSettings):
         return self.cti_queue_dir_resolved / "next.txt"
 
     @property
-    def cti_processed_dir(self) -> Path:
-        return self.cti_queue_dir_resolved / "processed"
-
-    @property
     def log_dir(self) -> Path:
         return self.hecate_workspace / "logs"
 

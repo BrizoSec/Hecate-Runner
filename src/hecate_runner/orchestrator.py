@@ -18,6 +18,7 @@ from pathlib import Path
 from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.config import Settings
 from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider, get_provider
+from hecate_runner.context_metrics import measure_tokens
 from hecate_runner.cti_triage import triage
 from hecate_runner.grounding import TechniqueFact, audit_draft, render_grounding_section
 from hecate_runner.hecate_client import HecateClient, HecateError
@@ -611,6 +612,10 @@ class Orchestrator:
                 o for o in [*req.hypothesis.observables, req.hypothesis.evidence] if o and o.strip()
             ],
         }
+        import json
+        payload_str = json.dumps(payload)
+        input_tokens = measure_tokens(payload_str, model_name=self.settings.hecate_llm_model or "gpt-4")
+        log.info("Context Window Metrics: Executing sigma_generator with ~%d input tokens", input_tokens)
 
         try:
             result = self.hecate.sigma_generator(
@@ -739,8 +744,20 @@ class Orchestrator:
         claimed = platforms_named_in(scope_text)
         if claimed:
             scoped = [p for p in platforms if p in claimed]
-            if scoped:
-                return tactics, scoped
+            # If the resolved techniques have ZERO overlap with what was claimed
+            # (e.g. LLM suggested T1207 Windows for a macOS hunt), the technique
+            # is hallucinated. The claimed text is the source of truth.
+            final_platforms = scoped if scoped else claimed
+
+            # Mark any technique that strongly contradicts our final platforms as invalid
+            # so it is stripped from the payload and doesn't pollute the Sigma generator
+            if facts is not None:
+                for tech_id, fact in facts.items():
+                    if fact.platforms and not any(p in final_platforms for p in fact.platforms):
+                        fact.valid = False
+
+            return tactics, final_platforms
+
         return tactics, platforms
 
     def _advance_past(self, item: CTIItem) -> bool:
@@ -913,6 +930,11 @@ class Orchestrator:
                     parked_count=parked_count,
                 )
             topic, technique = derive_research_topic(item.content, title=item.title or None)
+            
+            # Measure context usage for optimization
+            input_tokens = measure_tokens(topic, model_name=self.settings.hecate_llm_model or "gpt-4")
+            log.info("Context Window Metrics: Executing research_new with ~%d input tokens", input_tokens)
+
             try:
                 research_result = self.hecate.research_new(
                     topic=topic,
@@ -957,6 +979,9 @@ class Orchestrator:
             )
             hypothesis = build_indicator_sweep(item.content, title=item.title or None)
         else:
+            # Measure context usage for optimization
+            input_tokens = measure_tokens(item.content, model_name=self.settings.hecate_llm_model or "gpt-4")
+            log.info("Context Window Metrics: Executing hypothesis_generator with ~%d input tokens", input_tokens)
             try:
                 hypothesis = self.hecate.hypothesis_generator(
                     threat_intel=item.content,
