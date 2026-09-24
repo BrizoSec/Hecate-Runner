@@ -67,6 +67,7 @@ def run_rss_poll(settings: Settings) -> RssPollResult:
             return result
 
         from hecate_runner.atomic_write import atomic_write_text
+
         atomic_write_text(next_file, item.content)
         rss.acknowledge(item)
         result.routed = 1

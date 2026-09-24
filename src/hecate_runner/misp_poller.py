@@ -76,6 +76,7 @@ def run_misp_poll(settings: Settings) -> MispPollResult:
             return result
 
         from hecate_runner.atomic_write import atomic_write_text
+
         atomic_write_text(next_file, item.content)
         misp.acknowledge(item)
         result.routed = 1

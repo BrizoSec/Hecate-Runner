@@ -1089,8 +1089,46 @@ def test_sigma_uses_cti_techniques_over_the_narrower_hypothesis_list(
 
     assert orch.run_once().outcome == "draft_created"
     payload = mock_hecate.sigma_generator.call_args.args[0]
-    assert payload["techniques"] == ["T1071.001", "T1547.001", "T1005"]
+    # Every CTI technique first, then the hypothesis's own (T1003.001).
+    assert payload["techniques"] == ["T1071.001", "T1547.001", "T1005", "T1003.001"]
     assert payload["indicators"] == {"hostname": ["api.wiresguard.com"]}
+
+
+def test_sigma_drafts_from_the_validated_list_not_the_raw_cti_one(
+    settings: Settings,
+    mock_hecate: MagicMock,
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    """H-0011: the MISP event's only technique, T1438, is Mobile ATT&CK and was
+    dropped from the hunt; Sigma still drafted from it, fell back to
+    process_creation, and ignored the T1071.004 that the intel's wording named."""
+    from hecate_runner.cti.base import CTIItem
+
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="MISP Event: Kunai\nSummary: malware abusing open recursive DNS for exfiltration",
+        source="misp",
+        metadata={"techniques": ["T1438"]},
+    )
+    sample_hypothesis.techniques = []
+    mock_hecate.candidate_techniques.return_value = [("T1071.004", "DNS")]
+
+    def lookup(technique_id: str, timeout_sec: int | None = None) -> TechniqueMetadata:
+        if technique_id == "T1438":
+            return TechniqueMetadata()  # not in Enterprise ATT&CK
+        return TechniqueMetadata(
+            technique_id=technique_id,
+            tactics=["command-and-control"],
+            platforms=["Linux", "Windows"],
+            found=True,
+        )
+
+    mock_hecate.lookup_technique.side_effect = lookup
+    mock_hecate.sigma_generator.return_value = SigmaResult(success=True, rules=[_SIGMA_RULE])
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    assert orch.run_once().outcome == "draft_created"
+    assert mock_hecate.sigma_generator.call_args.args[0]["techniques"] == ["T1071.004"]
 
 
 def test_sigma_payload_carries_the_drafts_observables(

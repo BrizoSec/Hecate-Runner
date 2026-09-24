@@ -64,6 +64,7 @@ def run_otx_poll(settings: Settings) -> OtxPollResult:
             return result
 
         from hecate_runner.atomic_write import atomic_write_text
+
         atomic_write_text(next_file, item.content)
         otx.acknowledge(item)
         result.routed = 1

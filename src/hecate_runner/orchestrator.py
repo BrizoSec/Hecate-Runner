@@ -639,13 +639,15 @@ class Orchestrator:
     ) -> None:
         """Draft Sigma rules for the hunt and rewrite the draft to include them.
 
-        Techniques come from the CTI itself where the provider supplied them,
-        not from the hypothesis. The hypothesis narrows to the two or three
-        techniques it reasoned about; the source event asserted fifteen, and
-        the log sources a hunt should cover follow from all of them. Falling
-        back to the hypothesis keeps providers that map no techniques working.
+        Techniques are the hunt's final list: the CTI's own (all of them, not
+        the two or three the hypothesis reasoned about), then those matched in
+        the intel's wording, then the model's -- already validated against
+        ATT&CK and the hunt's platform. Reading the CTI's raw list instead
+        drafted H-0011 (DNS exfiltration) from T1438 alone, a Mobile ATT&CK ID
+        the cycle had just dropped, so the log sources fell back to
+        process_creation and the T1071.004 that belonged there was ignored.
         """
-        techniques = list(item.metadata.get("techniques") or []) or list(req.hypothesis.techniques)
+        techniques = list(req.hypothesis.techniques)
         indicators = dict(item.metadata.get("indicators") or {})
         out_dir = self.settings.hecate_workspace / "queries" / req.hunt_id
 

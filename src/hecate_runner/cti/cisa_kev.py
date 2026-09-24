@@ -59,9 +59,9 @@ class CisaKevProvider(CTIProvider):
         """Advance the cursor to the given date."""
         try:
             from hecate_runner.atomic_write import atomic_write_text
+
             atomic_write_text(
-                self.cursor_file,
-                json.dumps({"last_date_added": date_added.isoformat()})
+                self.cursor_file, json.dumps({"last_date_added": date_added.isoformat()})
             )
         except Exception as e:
             log.warning("Failed to write cisa_kev cursor: %s", e)
