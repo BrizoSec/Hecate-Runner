@@ -72,6 +72,14 @@ intelligence from the highest-signal feed subscribed to, and gave three
 different answers to three entries of one monthly series. Recoverability makes
 a heuristic gate survivable; it does not make a bad one good. Set
 `HECATE_RUNNER_CTI_TRIAGE=off` to draft from everything.
+
+Category and title rules cannot see a commentary post whose category they have
+never met (an Elastic product blog tagged "AI & Automation", a Talos opinion
+piece tagged "On The Radar"). So there is a second, later gate: when research
+reads a prose item and concludes it describes no adversary behavior, the item
+is parked there instead of drafted, with the research ID in the reason. The
+draft slot is refunded; the research run is not. It uses the same
+`HECATE_RUNNER_CTI_TRIAGE` switch.
 Parked items are deleted after `HECATE_RUNNER_PARKED_MAX_AGE_DAYS` (default 30;
 0 disables).
 
