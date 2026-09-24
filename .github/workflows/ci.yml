@@ -19,13 +19,19 @@ jobs:
       # pyproject.toml pulls in `hecate-agent` as an editable path dependency
       # at ../Hecate-Core, which only exists locally because the two repos are
       # checked out as siblings. actions/checkout refuses to write anywhere
-      # outside the workspace, so land the (public) Hecate-Core repo in a
-      # scratch subdirectory and move it up to the sibling slot afterwards.
+      # outside the workspace, so land the Hecate-Core repo in a scratch
+      # subdirectory and move it up to the sibling slot afterwards.
+      #
+      # Hecate-Core is private, and this job's GITHUB_TOKEN can only read this
+      # repository, so the checkout failed with "Not Found" on every run since
+      # it went private. HECATE_CORE_DEPLOY_KEY is a read-only deploy key
+      # registered on Hecate-Core; its private half lives in this repo's secrets.
       - name: Checkout Hecate-Core (sibling dependency for hecate-agent)
         uses: actions/checkout@v5
         with:
           repository: BrizoSec/Hecate-Core
           path: .hecate-core-checkout
+          ssh-key: ${{ secrets.HECATE_CORE_DEPLOY_KEY }}
 
       - name: Move Hecate-Core alongside this checkout
         run: mv .hecate-core-checkout ../Hecate-Core
