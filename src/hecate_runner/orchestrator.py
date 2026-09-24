@@ -479,6 +479,7 @@ class RunResult:
             "no_actionable_cti",
             "quota_reached",
             "research_quota_reached",
+            "parked_after_research",
         }
 
 
@@ -676,6 +677,7 @@ class Orchestrator:
         techniques: list[str],
         scope_text: str = "",
         facts: dict[str, TechniqueFact] | None = None,
+        asserted: list[str] | None = None,
     ) -> tuple[list[str], list[str]]:
         """Derive real tactics/platforms for a hypothesis's techniques.
 
@@ -698,6 +700,10 @@ class Orchestrator:
         """
         tactics: list[str] = []
         platforms: list[str] = []
+        # Whether any platform in the union came from a technique the CTI
+        # itself named, as opposed to one the hypothesis model chose.
+        asserted_ids = {t.upper() for t in (asserted or [])}
+        scoped_by_source = False
         for technique_id in techniques:
             meta = self.hecate.lookup_technique(
                 technique_id, timeout_sec=self.settings.llm_timeout_sec
@@ -724,6 +730,9 @@ class Orchestrator:
                     tactics.append(tactic)
             if len(meta.platforms) >= _NON_SCOPING_PLATFORM_THRESHOLD:
                 continue
+            upper = technique_id.upper()
+            if upper in asserted_ids or upper.split(".")[0] in asserted_ids:
+                scoped_by_source = True
             for platform in meta.platforms:
                 platform = _PLATFORM_LABELS.get(platform, platform)
                 if platform not in platforms:
@@ -733,14 +742,27 @@ class Orchestrator:
         # across every technique the CTI asserted is right for "where could
         # this technique occur" and wrong for "where does this hunt look":
         # it returned five platforms for a hypothesis whose own sentence said
-        # "compromised Windows systems". Only narrows -- a claimed platform
-        # that no resolved technique supports is ignored rather than added,
-        # and if the two share nothing the union stands.
+        # "compromised Windows systems". Normally only narrows -- a claimed
+        # platform that a source-asserted technique contradicts is ignored.
         claimed = platforms_named_in(scope_text)
         if claimed:
             scoped = [p for p in platforms if p in claimed]
             if scoped:
                 return tactics, scoped
+            # The two share nothing and every scoping technique was the
+            # model's own pick: the technique is the likelier error. H-0007
+            # said "macOS systems" about a macOS backdoor and was scoped to
+            # Windows because the model chose T1207 Rogue Domain Controller,
+            # which then pulled registry telemetry into a macOS hunt.
+            if platforms and not scoped_by_source:
+                log.warning(
+                    "Hypothesis scopes to %s but its inferred techniques %s only cover %s; "
+                    "trusting the hypothesis",
+                    ", ".join(claimed),
+                    ", ".join(techniques),
+                    ", ".join(platforms),
+                )
+                return tactics, claimed
         return tactics, platforms
 
     def _advance_past(self, item: CTIItem) -> bool:
@@ -920,6 +942,8 @@ class Orchestrator:
                     depth=self.settings.research_depth,
                     timeout_sec=self.settings.llm_timeout_sec,
                     web_search_enabled=intel_has_narrative,
+                    # The topic is a search label; research needs the report.
+                    source_context=item.content,
                 )
             except HecateError as exc:
                 # Cold (ungrounded) generation measured ~30% accuracy on known-
@@ -946,6 +970,46 @@ class Orchestrator:
 
             research_id = research_result.research_id
             related_hunts = research_result.related_hunts
+
+            # Intake triage matches publisher categories and title shapes, so
+            # it cannot see that a post with a fresh category is commentary:
+            # an Elastic product blog ("AI & Automation") and a Talos opinion
+            # piece ("On The Radar") both became drafts (H-0005, H-0006), and
+            # research had already said of each "the source describes no
+            # behavior to detect". Only prose items: a bare dump describes no
+            # behavior by definition and still makes an indicator hunt.
+            if (
+                self.settings.cti_triage == "park"
+                and intel_has_narrative
+                and not research_result.describes_behavior
+            ):
+                reason = (
+                    f"research {research_id} found no adversary behavior to hunt in it "
+                    "(commentary, product or opinion content)"
+                )
+                try:
+                    park(self.settings.cti_queue_dir_resolved, item, reason)
+                except OSError as exc:
+                    log.warning("Could not park CTI item (%s); drafting it instead.", exc)
+                else:
+                    log.info(
+                        "Parking CTI item from %s (%s): %s",
+                        item.source,
+                        item.title[:60] or "untitled",
+                        reason,
+                    )
+                    # The draft slot was reserved for a hunt that will not be
+                    # written; the research run was real and stays counted.
+                    state.drafts_today -= 1
+                    state.total_drafts_ever -= 1
+                    self._advance_past(item)
+                    return RunResult(
+                        outcome="parked_after_research",
+                        detail=reason,
+                        research_id=research_id,
+                        parked_count=parked_count + 1,
+                    )
+
             log.info("Research %s grounds this cycle's hypothesis", research_id)
 
         if sweep_inventory:
@@ -1000,6 +1064,7 @@ class Orchestrator:
             hypothesis.techniques,
             scope_text=" ".join([hypothesis.hypothesis, hypothesis.location]),
             facts=technique_facts,
+            asserted=cti_techniques,
         )
 
         # Applied here rather than at merge time: the platform list only

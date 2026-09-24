@@ -662,6 +662,31 @@ class TestTechniqueNameSupport:
         )
         assert report.claims[0].status == "derived"
 
+    def test_incidental_domain_and_control_words_are_not_support(self):
+        """H-0007: T1207 Rogue Domain Controller passed on a macOS report that
+        mentioned "provider domains" and "remote control"."""
+        facts = {"T1207": TechniqueFact(names=("Rogue Domain Controller",))}
+        report = audit_draft(
+            draft_text="techniques: T1207",
+            cti_text="Typosquatted provider domains delivered macOS backdoors for remote control.",
+            technique_facts=facts,
+        )
+        assert report.claims[0].status == "unsupported"
+
+    def test_incidental_module_and_extension_words_are_not_support(self):
+        """H-0004: T1547.006 passed on "Go modules" and "Chrome extensions"."""
+        facts = {
+            "T1547.006": TechniqueFact(
+                names=("Kernel Modules and Extensions", "Boot or Logon Autostart Execution")
+            )
+        }
+        report = audit_draft(
+            draft_text="techniques: T1547.006",
+            cti_text="Spreads across npm, PyPI, Go modules, Packagist and Chrome extensions.",
+            technique_facts=facts,
+        )
+        assert report.claims[0].status == "unsupported"
+
     def test_a_name_of_only_generic_words_is_not_judged(self):
         facts = {"T1204": TechniqueFact(names=("User Execution",))}
         report = audit_draft(

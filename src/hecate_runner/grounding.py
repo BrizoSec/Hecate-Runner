@@ -525,14 +525,21 @@ _WORD_RE = re.compile(r"[a-z0-9]+")
 #: meant, so a source using them is no evidence for the technique. "delivery"
 #: is here because T1027.004 "Compile After Delivery" otherwise matched
 #: "the delivery mechanism" in a source that never mentions compiling.
+#: "domain", "control", "module" and "extension" are here for the same reason:
+#: T1207 "Rogue Domain Controller" passed on "typosquatted provider domains"
+#: and "remote control" (H-0007, a macOS intrusion), and T1547.006 "Kernel
+#: Modules and Extensions" on "Go modules" and "Chrome extensions" (H-0004).
+#: Re-measured over 55 inferred techniques: those two flipped, nothing else.
 _GENERIC_NAME_WORDS = frozenset(
     {
         "account", "accounts", "after", "application", "before", "command",
-        "data", "delivery", "execution", "file", "files", "from", "information",
-        "into", "legitimate", "local", "location", "match", "name", "network",
-        "other", "process", "protocol", "remote", "resource", "service",
-        "services", "software", "standard", "system", "systems", "tool",
-        "tools", "user", "using", "with",
+        "control", "controller", "controls", "data", "delivery", "domain",
+        "domains", "execution", "extension", "extensions", "file", "files",
+        "from", "information", "into", "legitimate", "local", "location",
+        "match", "module", "modules", "name", "network", "other", "process",
+        "protocol", "remote", "resource", "service", "services", "software",
+        "standard", "system", "systems", "tool", "tools", "user", "using",
+        "with",
     }
 )  # fmt: skip
 
