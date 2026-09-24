@@ -63,7 +63,8 @@ def run_otx_poll(settings: Settings) -> OtxPollResult:
             log.info("No new high-signal OTX pulses since last poll.")
             return result
 
-        next_file.write_text(item.content)
+        from hecate_runner.atomic_write import atomic_write_text
+        atomic_write_text(next_file, item.content)
         otx.acknowledge(item)
         result.routed = 1
         result.routed_pulse_ids.append(item.identifier)

@@ -128,6 +128,12 @@ ignore_missing_imports = true
 module = "hecate_agent.*"
 ignore_missing_imports = true
 
+# Following tiktoken pulls in numpy's stubs, which use 3.12-only syntax that a
+# python_version = "3.11" check cannot parse -- the whole run then stops.
+[[tool.mypy.overrides]]
+module = ["tiktoken", "tiktoken.*"]
+follow_imports = "skip"
+
 # --- pytest --------------------------------------------------------------
 [tool.pytest.ini_options]
 minversion = "8.0"

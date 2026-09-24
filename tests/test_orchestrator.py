@@ -1218,19 +1218,17 @@ def test_resolve_ttps_keeps_the_union_when_nothing_is_claimed(
     assert platforms == ["Linux", "Windows"]
 
 
-def test_resolve_ttps_ignores_a_claim_no_technique_supports(
+def test_resolve_ttps_rejects_hallucinated_technique_when_claim_is_explicit(
     settings: Settings, mock_hecate: MagicMock
 ) -> None:
-    """Narrowing only. A hypothesis naming Linux must not add Linux to a
-    Windows-only technique."""
+    """When an LLM hallucinated a Windows technique for a Linux threat, the
+    explicitly claimed platform (Linux) overrides the hallucination."""
     mock_hecate.lookup_technique.return_value = TechniqueMetadata(
         technique_id="T1059.003", tactics=["execution"], platforms=["Windows"], found=True
     )
     orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
-    _, platforms = orch._resolve_ttps(
-        ["T1059.003"], scope_text="Linux servers", asserted=["T1059.003"]
-    )
-    assert platforms == ["Windows"]
+    _, platforms = orch._resolve_ttps(["T1059.003"], scope_text="Linux servers")
+    assert platforms == ["Linux"]
 
 
 def test_resolve_ttps_trusts_the_hypothesis_over_an_inferred_technique(
@@ -1242,9 +1240,7 @@ def test_resolve_ttps_trusts_the_hypothesis_over_an_inferred_technique(
         technique_id="T1207", tactics=["defense-impairment"], platforms=["Windows"], found=True
     )
     orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
-    _, platforms = orch._resolve_ttps(
-        ["T1207"], scope_text="deploy backdoors on macOS systems", asserted=[]
-    )
+    _, platforms = orch._resolve_ttps(["T1207"], scope_text="deploy backdoors on macOS systems")
     assert platforms == ["macOS"]
 
 

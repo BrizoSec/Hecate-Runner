@@ -75,7 +75,8 @@ def run_misp_poll(settings: Settings) -> MispPollResult:
             log.info("No new high-signal MISP events since last poll.")
             return result
 
-        next_file.write_text(item.content)
+        from hecate_runner.atomic_write import atomic_write_text
+        atomic_write_text(next_file, item.content)
         misp.acknowledge(item)
         result.routed = 1
         result.routed_event_uuids.append(item.identifier)

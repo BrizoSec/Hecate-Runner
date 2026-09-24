@@ -17,6 +17,7 @@ from pathlib import Path
 
 from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.config import Settings
+from hecate_runner.context_metrics import measure_tokens
 from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider, get_provider
 from hecate_runner.cti_triage import triage
 from hecate_runner.grounding import TechniqueFact, audit_draft, render_grounding_section
@@ -647,6 +648,15 @@ class Orchestrator:
                 o for o in [*req.hypothesis.observables, req.hypothesis.evidence] if o and o.strip()
             ],
         }
+        import json
+
+        payload_str = json.dumps(payload)
+        input_tokens = measure_tokens(
+            payload_str, model_name=self.settings.hecate_llm_model or "gpt-4"
+        )
+        log.info(
+            "Context Window Metrics: Executing sigma_generator with ~%d input tokens", input_tokens
+        )
 
         self.trail.step(
             "sigma",
@@ -735,7 +745,6 @@ class Orchestrator:
         techniques: list[str],
         scope_text: str = "",
         facts: dict[str, TechniqueFact] | None = None,
-        asserted: list[str] | None = None,
     ) -> tuple[list[str], list[str]]:
         """Derive real tactics/platforms for a hypothesis's techniques.
 
@@ -758,10 +767,6 @@ class Orchestrator:
         """
         tactics: list[str] = []
         platforms: list[str] = []
-        # Whether any platform in the union came from a technique the CTI
-        # itself named, as opposed to one the hypothesis model chose.
-        asserted_ids = {t.upper() for t in (asserted or [])}
-        scoped_by_source = False
         for technique_id in techniques:
             meta = self.hecate.lookup_technique(
                 technique_id, timeout_sec=self.settings.llm_timeout_sec
@@ -788,9 +793,6 @@ class Orchestrator:
                     tactics.append(tactic)
             if len(meta.platforms) >= _NON_SCOPING_PLATFORM_THRESHOLD:
                 continue
-            upper = technique_id.upper()
-            if upper in asserted_ids or upper.split(".")[0] in asserted_ids:
-                scoped_by_source = True
             for platform in meta.platforms:
                 platform = _PLATFORM_LABELS.get(platform, platform)
                 if platform not in platforms:
@@ -811,31 +813,36 @@ class Orchestrator:
         )
         if claimed:
             scoped = [p for p in platforms if p in claimed]
-            if scoped:
-                if scoped != platforms:
-                    self.trail.step(
-                        "scope", "narrowed to what the hypothesis names: %s", listing(scoped)
-                    )
-                return tactics, scoped
-            # The two share nothing and every scoping technique was the
-            # model's own pick: the technique is the likelier error. H-0007
-            # said "macOS systems" about a macOS backdoor and was scoped to
-            # Windows because the model chose T1207 Rogue Domain Controller,
-            # which then pulled registry telemetry into a macOS hunt.
-            if platforms and not scoped_by_source:
+            # If the resolved techniques have ZERO overlap with what was claimed
+            # (e.g. LLM suggested T1207 Windows for a macOS hunt), the technique
+            # is hallucinated. The claimed text is the source of truth.
+            final_platforms = scoped if scoped else claimed
+            if not scoped:
                 self.trail.step(
                     "scope",
-                    "no overlap and every technique was the model's pick: trusting the hypothesis (%s)",
+                    "no overlap: trusting the hypothesis (%s) over the techniques",
                     listing(claimed),
                 )
-                log.warning(
-                    "Hypothesis scopes to %s but its inferred techniques %s only cover %s; "
-                    "trusting the hypothesis",
-                    ", ".join(claimed),
-                    ", ".join(techniques),
-                    ", ".join(platforms),
+            elif scoped != platforms:
+                self.trail.step(
+                    "scope", "narrowed to what the hypothesis names: %s", listing(scoped)
                 )
-                return tactics, claimed
+
+            # Mark any technique that strongly contradicts our final platforms as invalid
+            # so it is stripped from the payload and doesn't pollute the Sigma generator
+            if facts is not None:
+                for tech_id, fact in facts.items():
+                    if fact.platforms and not any(p in final_platforms for p in fact.platforms):
+                        fact.valid = False
+                        self.trail.step(
+                            "scope",
+                            "%s only runs on %s: dropping it",
+                            tech_id,
+                            listing(fact.platforms),
+                        )
+
+            return tactics, final_platforms
+
         return tactics, platforms
 
     def _advance_past(self, item: CTIItem) -> bool:
@@ -1052,6 +1059,16 @@ class Orchestrator:
                 len(item.content),
             )
             research_started = self.trail.elapsed
+
+            # Measure context usage for optimization. Research is sent the
+            # CTI body as source_context as well as the topic, so count both.
+            input_tokens = measure_tokens(
+                f"{topic}\n{item.content}", model_name=self.settings.hecate_llm_model or "gpt-4"
+            )
+            log.info(
+                "Context Window Metrics: Executing research_new with ~%d input tokens", input_tokens
+            )
+
             try:
                 research_result = self.hecate.research_new(
                     topic=topic,
@@ -1154,6 +1171,14 @@ class Orchestrator:
                 "" if intel_has_narrative else "; constrained to indicator presence",
             )
             hypothesis_started = self.trail.elapsed
+            # Measure context usage for optimization
+            input_tokens = measure_tokens(
+                item.content, model_name=self.settings.hecate_llm_model or "gpt-4"
+            )
+            log.info(
+                "Context Window Metrics: Executing hypothesis_generator with ~%d input tokens",
+                input_tokens,
+            )
             try:
                 hypothesis = self.hecate.hypothesis_generator(
                     threat_intel=item.content,
@@ -1219,7 +1244,6 @@ class Orchestrator:
             hypothesis.techniques,
             scope_text=" ".join([hypothesis.hypothesis, hypothesis.location]),
             facts=technique_facts,
-            asserted=cti_techniques,
         )
 
         # Applied here rather than at merge time: the platform list only

@@ -66,7 +66,8 @@ def run_rss_poll(settings: Settings) -> RssPollResult:
             log.info("No new entries across %d configured RSS feeds.", len(settings.rss_feed_urls))
             return result
 
-        next_file.write_text(item.content)
+        from hecate_runner.atomic_write import atomic_write_text
+        atomic_write_text(next_file, item.content)
         rss.acknowledge(item)
         result.routed = 1
         result.routed_entry_ids.append(item.identifier)
