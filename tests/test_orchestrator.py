@@ -1642,3 +1642,66 @@ def test_triage_off_drafts_even_when_research_finds_no_behavior(
     orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     assert orch.run_once().outcome == "draft_created"
+
+
+def test_an_item_the_hypothesis_model_calls_commentary_is_parked_once(
+    settings: Settings,
+    workspace: Path,
+    mock_hecate: MagicMock,
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    """Research can let commentary through; the hypothesis model is the last
+    reader to say "no adversary did anything here"."""
+    sample_hypothesis.is_threat_report = False
+    sample_hypothesis.low_confidence_reason = "Vendor product announcement"
+    provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
+    provider.ensure_dirs()
+    (workspace / "cti_queue" / "next.txt").write_text(_OPINION_POST)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    result = orch.run_once()
+
+    assert result.outcome == "parked_after_hypothesis"
+    assert result.ok is True
+    assert "Vendor product announcement" in result.detail
+    parked = list_parked(workspace / "cti_queue")
+    assert len(parked) == 1
+    assert OrchestratorState.load(settings.state_file).drafts_today == 0
+
+
+def test_a_parked_item_is_acknowledged_so_the_queue_moves_on(
+    settings: Settings,
+    workspace: Path,
+    mock_hecate: MagicMock,
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    """Without the acknowledgement the parked item stayed at the head of the
+    queue: re-researched and re-parked every cycle, blocking everything behind
+    it. The next cycle must find the queue empty, not the same item."""
+    sample_hypothesis.is_threat_report = False
+    provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
+    provider.ensure_dirs()
+    (workspace / "cti_queue" / "next.txt").write_text(_OPINION_POST)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    assert orch.run_once().outcome == "parked_after_hypothesis"
+    assert orch.run_once().outcome == "no_cti"
+    assert mock_hecate.research_new.call_count == 1
+    assert len(list_parked(workspace / "cti_queue")) == 1
+
+
+def test_triage_off_drafts_what_the_hypothesis_model_calls_commentary(
+    settings: Settings,
+    workspace: Path,
+    mock_hecate: MagicMock,
+    sample_hypothesis: HypothesisResult,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "cti_triage", "off")
+    sample_hypothesis.is_threat_report = False
+    provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
+    provider.ensure_dirs()
+    (workspace / "cti_queue" / "next.txt").write_text(_OPINION_POST)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    assert orch.run_once().outcome == "draft_created"

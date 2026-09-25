@@ -498,6 +498,7 @@ class RunResult:
             "quota_reached",
             "research_quota_reached",
             "parked_after_research",
+            "parked_after_hypothesis",
         }
 
 
@@ -1224,11 +1225,40 @@ class Orchestrator:
                 clip(hypothesis.hypothesis, 140),
             )
             if not hypothesis.is_threat_report:
-                self.trail.step(
-                    "hypothesis",
-                    "model judged this NOT a threat report: %s",
-                    clip(hypothesis.low_confidence_reason, 120) or "no reason given",
-                )
+                why = clip(hypothesis.low_confidence_reason, 120) or "no reason given"
+                self.trail.step("hypothesis", "model judged this NOT a threat report: %s", why)
+
+                # A last gate for commentary that research let through: the
+                # hypothesis model reads the item whole and says outright when
+                # no adversary did anything. Parked, not dropped, so a wrong
+                # call costs one `parked restore`.
+                if self.settings.cti_triage == "park":
+                    reason = f"hypothesis model judged this NOT a threat report: {why}"
+                    try:
+                        park(self.settings.cti_queue_dir_resolved, item, reason)
+                    except OSError as exc:
+                        log.warning("Could not park CTI item (%s); drafting it instead.", exc)
+                    else:
+                        self.trail.step("hypothesis", "park: %s; draft slot refunded", reason)
+                        log.info(
+                            "Parking CTI item from %s (%s): %s",
+                            item.source,
+                            item.title[:60] or "untitled",
+                            reason,
+                        )
+                        state.drafts_today -= 1
+                        state.total_drafts_ever -= 1
+                        # Without the acknowledgement the parked item stayed at
+                        # the head of the queue: re-researched and re-parked
+                        # every cycle, and -- since multi-provider rotation only
+                        # advances on acknowledge -- nothing else drafted.
+                        self._advance_past(item)
+                        return RunResult(
+                            outcome="parked_after_hypothesis",
+                            detail=reason,
+                            research_id=research_id,
+                            parked_count=parked_count + 1,
+                        )
         model_techniques = list(hypothesis.techniques)
 
         if hypothesis.is_empty:
