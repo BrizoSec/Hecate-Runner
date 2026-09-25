@@ -111,9 +111,18 @@ def test_the_counts_line_survives_alongside_the_values():
 
 def test_a_bulk_dump_is_still_summarised_as_counts_only():
     """Past the ceiling the list is a feed, not tradecraft."""
-    blurb = _pulse_to_blurb(_pulse(_hashes(41)))
-    assert "Indicators (41 total)" in blurb
+    blurb = _pulse_to_blurb(_pulse(_hashes(201)))
+    assert "Indicators (201 total)" in blurb
     assert "Key indicators:" not in blurb
+
+
+def test_a_curated_report_just_over_forty_indicators_keeps_its_values():
+    """H-0007: a 42-indicator SentinelOne pulse lost every value to a
+    ceiling of 40, so neither the model nor the Sigma generator saw one."""
+    blurb = _pulse_to_blurb(_pulse(_hashes(42)))
+    assert "Key indicators:" in blurb
+    assert f"{0:064x}" in blurb
+    assert "(+32 more)" in blurb
 
 
 def test_values_are_capped_per_type_and_the_elision_is_reported():

@@ -43,32 +43,6 @@ _SIGMA_RULE = {
 }
 
 
-@pytest.fixture
-def mock_hecate(
-    sample_hypothesis: HypothesisResult,
-    sample_research_result: ResearchResult,
-) -> MagicMock:
-    mock = MagicMock(spec=HecateClient)
-    mock.hypothesis_generator.return_value = sample_hypothesis
-    mock.research_new.return_value = sample_research_result
-    # Matches sample_hypothesis's T1003.001 so tests asserting on rendered
-    # draft content see real-looking tactics/platform, not an empty lookup.
-    mock.lookup_technique.return_value = TechniqueMetadata(
-        technique_id="T1003.001",
-        tactics=["credential-access"],
-        platforms=["Windows"],
-        found=True,
-    )
-    # Default to the failure path so tests that are not about Sigma exercise
-    # the graceful degradation. Left as a bare MagicMock this silently
-    # rendered a "0 Sigma rule(s)" header into every draft under test, via
-    # MagicMock's default __len__/__iter__ -- passing, but testing nothing.
-    mock.sigma_generator.return_value = SigmaResult(
-        success=False, error="sigma generation not configured in this test"
-    )
-    return mock
-
-
 def test_no_cti_returns_no_cti(
     settings: Settings,
     workspace: Path,
@@ -112,6 +86,8 @@ def test_happy_path_creates_draft(
     assert len(processed) == 1
 
     mock_hecate.research_new.assert_called_once()
+    # Research gets the report itself, not only the short topic label.
+    assert "comsvcs.dll" in mock_hecate.research_new.call_args.kwargs["source_context"]
     mock_hecate.hypothesis_generator.assert_called_once()
     # research_id from the grounding step must flow into hypothesis generation
     assert mock_hecate.hypothesis_generator.call_args.kwargs["research_id"] == "R-0001"
@@ -1113,8 +1089,46 @@ def test_sigma_uses_cti_techniques_over_the_narrower_hypothesis_list(
 
     assert orch.run_once().outcome == "draft_created"
     payload = mock_hecate.sigma_generator.call_args.args[0]
-    assert payload["techniques"] == ["T1071.001", "T1547.001", "T1005"]
+    # Every CTI technique first, then the hypothesis's own (T1003.001).
+    assert payload["techniques"] == ["T1071.001", "T1547.001", "T1005", "T1003.001"]
     assert payload["indicators"] == {"hostname": ["api.wiresguard.com"]}
+
+
+def test_sigma_drafts_from_the_validated_list_not_the_raw_cti_one(
+    settings: Settings,
+    mock_hecate: MagicMock,
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    """H-0011: the MISP event's only technique, T1438, is Mobile ATT&CK and was
+    dropped from the hunt; Sigma still drafted from it, fell back to
+    process_creation, and ignored the T1071.004 that the intel's wording named."""
+    from hecate_runner.cti.base import CTIItem
+
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="MISP Event: Kunai\nSummary: malware abusing open recursive DNS for exfiltration",
+        source="misp",
+        metadata={"techniques": ["T1438"]},
+    )
+    sample_hypothesis.techniques = []
+    mock_hecate.candidate_techniques.return_value = [("T1071.004", "DNS")]
+
+    def lookup(technique_id: str, timeout_sec: int | None = None) -> TechniqueMetadata:
+        if technique_id == "T1438":
+            return TechniqueMetadata()  # not in Enterprise ATT&CK
+        return TechniqueMetadata(
+            technique_id=technique_id,
+            tactics=["command-and-control"],
+            platforms=["Linux", "Windows"],
+            found=True,
+        )
+
+    mock_hecate.lookup_technique.side_effect = lookup
+    mock_hecate.sigma_generator.return_value = SigmaResult(success=True, rules=[_SIGMA_RULE])
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    assert orch.run_once().outcome == "draft_created"
+    assert mock_hecate.sigma_generator.call_args.args[0]["techniques"] == ["T1071.004"]
 
 
 def test_sigma_payload_carries_the_drafts_observables(
@@ -1253,6 +1267,19 @@ def test_resolve_ttps_rejects_hallucinated_technique_when_claim_is_explicit(
     orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
     _, platforms = orch._resolve_ttps(["T1059.003"], scope_text="Linux servers")
     assert platforms == ["Linux"]
+
+
+def test_resolve_ttps_trusts_the_hypothesis_over_an_inferred_technique(
+    settings: Settings, mock_hecate: MagicMock
+) -> None:
+    """H-0007: a macOS backdoor hypothesis was scoped to Windows because the
+    model picked T1207 Rogue Domain Controller, which the CTI never named."""
+    mock_hecate.lookup_technique.return_value = TechniqueMetadata(
+        technique_id="T1207", tactics=["defense-impairment"], platforms=["Windows"], found=True
+    )
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
+    _, platforms = orch._resolve_ttps(["T1207"], scope_text="deploy backdoors on macOS systems")
+    assert platforms == ["macOS"]
 
 
 def test_draft_records_cti_techniques_and_scoped_platform(
@@ -1563,3 +1590,55 @@ def test_technique_names_from_the_lookup_reach_the_grounding_audit(
     assert result.draft_path is not None
     content = result.draft_path.read_text()
     assert "nothing in the CTI or research describes 'Process Hollowing'" in content
+
+
+_OPINION_POST = (
+    "RSS: The safety penalty: Reclaiming operational sovereignty in the age of AI\n"
+    "Source: blog.talosintelligence.com\n"
+    "Tags: On The Radar\n"
+    "Summary: As frontier AI models become increasingly restrictive, security teams are "
+    "facing a safety penalty that hampers real-time incident response.\n"
+    "Link: https://blog.talosintelligence.com/the-safety-penalty/"
+)
+
+
+def test_an_item_research_finds_no_behavior_in_is_parked_not_drafted(
+    settings: Settings, workspace: Path, mock_hecate: MagicMock
+) -> None:
+    """H-0005/H-0006: a vendor blog and an opinion post passed intake triage
+    on unlisted categories, and research said of each that the source
+    describes no behavior to detect -- then both became drafts anyway."""
+    mock_hecate.research_new.return_value = ResearchResult(
+        research_id="R-0005", describes_behavior=False
+    )
+    provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
+    provider.ensure_dirs()
+    (workspace / "cti_queue" / "next.txt").write_text(_OPINION_POST)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    result = orch.run_once()
+
+    assert result.outcome == "parked_after_research"
+    assert result.ok is True
+    mock_hecate.hypothesis_generator.assert_not_called()
+    parked = list_parked(workspace / "cti_queue")
+    assert len(parked) == 1
+    assert "R-0005" in parked[0].reason
+    # The draft slot is refunded; the cursor moved past the item.
+    assert OrchestratorState.load(settings.state_file).drafts_today == 0
+    assert not (workspace / "cti_queue" / "next.txt").exists()
+
+
+def test_triage_off_drafts_even_when_research_finds_no_behavior(
+    settings: Settings, workspace: Path, mock_hecate: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "cti_triage", "off")
+    mock_hecate.research_new.return_value = ResearchResult(
+        research_id="R-0005", describes_behavior=False
+    )
+    provider = FileQueueProvider(queue_dir=workspace / "cti_queue")
+    provider.ensure_dirs()
+    (workspace / "cti_queue" / "next.txt").write_text(_OPINION_POST)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+
+    assert orch.run_once().outcome == "draft_created"

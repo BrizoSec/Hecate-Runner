@@ -619,7 +619,9 @@ def _event_to_cti_item(base_url: str, event: dict[str, Any]) -> CTIItem:
             "event_id": event_id,
             "event_timestamp": timestamp,
             "event_info": event.get("info", ""),
-            "entry_tags": [str(t.get("name", "")) for t in event.get("Tag", []) or [] if t.get("name")],
+            "entry_tags": [
+                str(t.get("name", "")) for t in event.get("Tag", []) or [] if t.get("name")
+            ],
             # Structured alongside the rendered blurb so downstream steps
             # (Sigma drafting) get typed values instead of re-parsing prose.
             "indicators": _indicator_map(event),
@@ -636,7 +638,10 @@ def _event_to_cti_item(base_url: str, event: dict[str, Any]) -> CTIItem:
 # swamp the prompt and teach the model to write indicator sweeps. So values
 # are inlined only for events small enough to have been written by hand, and
 # capped per type so one long URL list cannot crowd out the filenames.
-_MAX_ATTRS_INLINE = 40
+# The ceiling was 40, which curated reports exceed (an OTX pulse from a
+# SentinelOne write-up carried 42 and lost every value); the per-type cap is
+# what bounds the prompt, so this only needs to separate reports from dumps.
+_MAX_ATTRS_INLINE = 200
 _MAX_VALUES_PER_TYPE = 6
 _MAX_VALUE_CHARS = 120
 

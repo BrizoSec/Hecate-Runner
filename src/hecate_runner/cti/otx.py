@@ -229,7 +229,13 @@ def _is_high_signal(pulse: dict[str, Any], cutoff: datetime) -> bool:
 # bound the MISP provider uses applies: past this many, the list describes a
 # feed rather than tradecraft, and handing it to a rule generator produces an
 # indicator-match rule per line instead of a behavioural one.
-_MAX_INDICATORS_INLINE = 40
+#
+# It was 40, which is not where curated reports stop: SentinelOne's
+# TraderTraitor write-up carried 42 (hashes, IPs, domains, hostnames) and every
+# value was dropped, so H-0007 reached the model and the Sigma generator with
+# counts only. Hand-written reports run to low hundreds; bulk feeds run to
+# many hundreds. The per-type cap below is what bounds the prompt.
+_MAX_INDICATORS_INLINE = 200
 _MAX_INDICATOR_VALUES_PER_TYPE = 10
 
 # A CVE identifies a vulnerability, not an observable a detection rule can

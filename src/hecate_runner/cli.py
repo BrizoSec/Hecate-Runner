@@ -12,6 +12,7 @@ Commands:
     hecate-runner pending       List queries awaiting approval
     hecate-runner approve       Execute a previously proposed, guardrail-passed query
     hecate-runner reject        Discard a proposed query without executing it
+    hecate-runner watch         Follow what a running cycle is deciding, step by step
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ from hecate_runner.query_execution import ProposedQuery, get_provider, validate_
 from hecate_runner.query_store import PendingQueryStore
 from hecate_runner.rss_poller import run_rss_poll
 from hecate_runner.state import OrchestratorState
+from hecate_runner.trail import LOGGER_NAME as TRAIL_LOGGER
 
 app = typer.Typer(
     name="hecate-runner",
@@ -104,6 +106,10 @@ def _configure_logging(settings: Settings, *, to_stdout: bool = True) -> None:
         handlers=handlers,
         force=True,
     )
+    # One line per HTTP request (every MISP/OTX/RSS poll) was half of each
+    # cycle's log; the trail's intake line already says what was fetched.
+    if settings.log_level != "DEBUG":
+        logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 # --- Commands --------------------------------------------------------------
@@ -504,6 +510,88 @@ def reject(
         f"[green]✓[/green] Rejected pending query for {hunt_id}"
         + (f" ({reason})" if reason else "")
     )
+
+
+_TRAIL_MARKER = f"{TRAIL_LOGGER}: "
+_LOG_LINE = re.compile(r"^\d{4}-\d\d-\d\d (\d\d:\d\d:\d\d),\d+ \[(\w+)\] ([\w.]+): (.*)$")
+
+
+def _watch_line(line: str, show_all: bool) -> str | None:
+    """The form of one log line `watch` prints, or None to hide it.
+
+    Trail lines are the point: one per decision. Warnings and errors from any
+    logger are shown too, because a stage that fails says so there first, and
+    so is Hecate's own INFO output (what it offered the model), which is sparse.
+    """
+    match = _LOG_LINE.match(line.rstrip("\n"))
+    if not match:
+        # Continuation lines (tracebacks) belong to the line above them.
+        return line.rstrip("\n") if show_all else None
+    clock, level, logger_name, message = match.groups()
+    if logger_name == TRAIL_LOGGER:
+        return f"{clock} {message}"
+    if level in {"WARNING", "ERROR", "CRITICAL"}:
+        return f"{clock} {level:<7} {logger_name}: {message}"
+    if logger_name.startswith("hecate_agent"):
+        return f"{clock}   hecate: {message}"
+    return f"{clock} {level:<7} {logger_name}: {message}" if show_all else None
+
+
+@app.command()
+def watch(
+    lines: Annotated[
+        int, typer.Option("--lines", "-n", help="Show this many earlier lines first.")
+    ] = 30,
+    show_all: Annotated[
+        bool, typer.Option("--all", help="Every log line, not just the decision trail.")
+    ] = False,
+    follow: Annotated[
+        bool, typer.Option("--follow/--no-follow", help="Keep printing new lines as they land.")
+    ] = True,
+) -> None:
+    """Follow what the orchestrator is doing, one line per decision.
+
+    Reads the orchestrator log, so it shows cycles started by the systemd timer
+    as well as ones run by hand. Ctrl-C to stop.
+    """
+    import time
+
+    log_file = Settings().log_file
+    if not log_file.exists() and not follow:
+        console.print(f"[yellow]No log yet at {log_file}[/yellow]")
+        raise typer.Exit(code=1)
+    while not log_file.exists():
+        time.sleep(1)
+
+    handle = log_file.open(encoding="utf-8", errors="replace")
+    earlier = [shown for raw in handle if (shown := _watch_line(raw, show_all)) is not None]
+    for shown in earlier[-lines:] if lines > 0 else []:
+        print(shown)
+    if not follow:
+        return
+
+    inode = os.fstat(handle.fileno()).st_ino
+    try:
+        while True:
+            raw = handle.readline()
+            if raw:
+                shown = _watch_line(raw, show_all)
+                if shown is not None:
+                    print(shown, flush=True)
+                continue
+            time.sleep(0.5)
+            # The log rotates at the start of a cycle; reopen the new file.
+            try:
+                if os.stat(log_file).st_ino != inode:
+                    handle.close()
+                    handle = log_file.open(encoding="utf-8", errors="replace")
+                    inode = os.fstat(handle.fileno()).st_ino
+            except FileNotFoundError:
+                continue
+    except KeyboardInterrupt:
+        pass
+    finally:
+        handle.close()
 
 
 @app.command()

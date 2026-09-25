@@ -17,8 +17,8 @@ from pathlib import Path
 
 from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.config import Settings
-from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider, get_provider
 from hecate_runner.context_metrics import measure_tokens
+from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider, get_provider
 from hecate_runner.cti_triage import triage
 from hecate_runner.grounding import TechniqueFact, audit_draft, render_grounding_section
 from hecate_runner.hecate_client import HecateClient, HecateError
@@ -33,6 +33,7 @@ from hecate_runner.indicator_sweep import build_indicator_sweep, parse_indicator
 from hecate_runner.notifications import notify_draft_created
 from hecate_runner.parked_store import park, prune_parked
 from hecate_runner.state import OrchestratorState
+from hecate_runner.trail import CycleTrail, clip, counts, listing
 
 log = logging.getLogger(__name__)
 
@@ -149,6 +150,22 @@ def merge_techniques(cti_techniques: list[str], hypothesis_techniques: list[str]
 
     parents_with_children = {t.split(".", 1)[0] for t in merged if "." in t}
     return [t for t in merged if "." in t or t not in parents_with_children]
+
+
+_TRADECRAFT_SECTION_RE = re.compile(
+    r"^## 2\. Adversary Tradecraft.*?$(.*?)(?=^## \d+\.|\Z)", re.MULTILINE | re.DOTALL
+)
+
+
+def research_tradecraft_text(research_doc: str) -> str:
+    """The research document's Adversary Tradecraft section.
+
+    What the retrieved sources said adversaries did. The rest of the document
+    is model speculation -- gaps, focus areas, telemetry -- whose wording must
+    not be able to put a technique on a hunt.
+    """
+    match = _TRADECRAFT_SECTION_RE.search(research_doc or "")
+    return match.group(1) if match else ""
 
 
 def platforms_named_in(*texts: str) -> list[str]:
@@ -480,6 +497,7 @@ class RunResult:
             "no_actionable_cti",
             "quota_reached",
             "research_quota_reached",
+            "parked_after_research",
         }
 
 
@@ -496,6 +514,9 @@ class Orchestrator:
         self.settings = settings
         self.hecate = hecate
         self.cti = cti_provider
+        # Replaced at the start of every cycle; this one only serves callers
+        # that use a stage method directly (tests, `_resolve_ttps`).
+        self.trail = CycleTrail()
         # Defaults to a no-op so tests and callers that don't care about
         # notifications don't have to pass one.
         self.notify = notify or (lambda result: None)
@@ -506,16 +527,36 @@ class Orchestrator:
         """Execute one cycle. Never raises; always returns a RunResult."""
         log.info("=== Orchestrator cycle starting (dry_run=%s) ===", dry_run)
         state = OrchestratorState.load(self.settings.state_file)
+        self.trail = CycleTrail()
+        self.trail.step(
+            "start",
+            "cycle %s%s; drafts today %d/%d, research runs today %d/%d",
+            self.trail.cycle_id,
+            " (dry run)" if dry_run else "",
+            state.drafts_today,
+            self.settings.max_drafts_per_day,
+            state.research_runs_today,
+            self.settings.max_research_runs_per_day,
+        )
 
         if self.settings.parked_max_age_days > 0:
             prune_parked(self.settings.cti_queue_dir_resolved, self.settings.parked_max_age_days)
         try:
             result = self._run_body(state, dry_run=dry_run)
             state.mark_run(success=result.ok)
+            self.trail.step(
+                "done",
+                "%s%s%s in %.0fs",
+                result.outcome,
+                f" -> {result.hunt_id}" if result.hunt_id else "",
+                f" ({clip(result.detail, 90)})" if result.detail else "",
+                self.trail.elapsed,
+            )
             return result
         except Exception as exc:  # top-level guard
             log.exception("Cycle failed unexpectedly: %s", exc)
             state.mark_run(success=False)
+            self.trail.step("done", "error after %.0fs: %s", self.trail.elapsed, clip(str(exc)))
             return RunResult(outcome="error", detail=str(exc))
         finally:
             state.save(self.settings.state_file)
@@ -558,6 +599,17 @@ class Orchestrator:
             log.warning("Grounding audit failed for %s (%s); section left empty.", req.hunt_id, exc)
             return ""
 
+        tally = report.counts
+        self.trail.step(
+            "grounding",
+            "%s: %d asserted by CTI, %d research-only, %d inferred, %d UNSUPPORTED%s",
+            req.hunt_id,
+            tally.get("asserted", 0),
+            tally.get("corroborated", 0),
+            tally.get("derived", 0),
+            tally.get("unsupported", 0),
+            f" ({listing(c.value for c in report.unsupported)})" if report.unsupported else "",
+        )
         if report.unsupported:
             log.warning(
                 "%s carries %d claim(s) that trace to no source: %s",
@@ -587,13 +639,15 @@ class Orchestrator:
     ) -> None:
         """Draft Sigma rules for the hunt and rewrite the draft to include them.
 
-        Techniques come from the CTI itself where the provider supplied them,
-        not from the hypothesis. The hypothesis narrows to the two or three
-        techniques it reasoned about; the source event asserted fifteen, and
-        the log sources a hunt should cover follow from all of them. Falling
-        back to the hypothesis keeps providers that map no techniques working.
+        Techniques are the hunt's final list: the CTI's own (all of them, not
+        the two or three the hypothesis reasoned about), then those matched in
+        the intel's wording, then the model's -- already validated against
+        ATT&CK and the hunt's platform. Reading the CTI's raw list instead
+        drafted H-0011 (DNS exfiltration) from T1438 alone, a Mobile ATT&CK ID
+        the cycle had just dropped, so the log sources fell back to
+        process_creation and the T1071.004 that belonged there was ignored.
         """
-        techniques = list(item.metadata.get("techniques") or []) or list(req.hypothesis.techniques)
+        techniques = list(req.hypothesis.techniques)
         indicators = dict(item.metadata.get("indicators") or {})
         out_dir = self.settings.hecate_workspace / "queries" / req.hunt_id
 
@@ -613,15 +667,34 @@ class Orchestrator:
             ],
         }
         import json
-        payload_str = json.dumps(payload)
-        input_tokens = measure_tokens(payload_str, model_name=self.settings.hecate_llm_model or "gpt-4")
-        log.info("Context Window Metrics: Executing sigma_generator with ~%d input tokens", input_tokens)
 
+        payload_str = json.dumps(payload)
+        input_tokens = measure_tokens(
+            payload_str, model_name=self.settings.hecate_llm_model or "gpt-4"
+        )
+        log.info(
+            "Context Window Metrics: Executing sigma_generator with ~%d input tokens", input_tokens
+        )
+
+        self.trail.step(
+            "sigma",
+            "drafting rules from techniques %s, indicator types %s, platforms %s",
+            listing(techniques),
+            listing(indicators.keys()),
+            listing(req.platforms, "unscoped"),
+        )
+        sigma_started = self.trail.elapsed
         try:
             result = self.hecate.sigma_generator(
                 payload, out_dir, timeout_sec=self.settings.sigma_timeout_sec
             )
         except HecateError as exc:
+            self.trail.step(
+                "sigma",
+                "no rules after %.0fs: %s",
+                self.trail.elapsed - sigma_started,
+                clip(str(exc), 160),
+            )
             log.warning(
                 "Sigma drafting failed for %s (%s); draft keeps its placeholder query section.",
                 req.hunt_id,
@@ -633,7 +706,16 @@ class Orchestrator:
         # why a log source came back empty. The client's `warnings` is always
         # empty; the reasons live in `rejected`.
         for reason in result.rejected:
+            self.trail.step("sigma", "rejected %s", clip(reason, 160))
             log.info("Sigma rule rejected for %s: %s", req.hunt_id, reason)
+        self.trail.step(
+            "sigma",
+            "done in %.0fs: %d rule(s) kept (%s), %d rejected",
+            self.trail.elapsed - sigma_started,
+            len(result.rules or []),
+            listing(sorted({str(r.get("logsource_category")) for r in result.rules or []})),
+            len(result.rejected),
+        )
 
         if not result.success or not result.rules:
             log.warning(
@@ -738,16 +820,31 @@ class Orchestrator:
         # across every technique the CTI asserted is right for "where could
         # this technique occur" and wrong for "where does this hunt look":
         # it returned five platforms for a hypothesis whose own sentence said
-        # "compromised Windows systems". Only narrows -- a claimed platform
-        # that no resolved technique supports is ignored rather than added,
-        # and if the two share nothing the union stands.
+        # "compromised Windows systems". Normally only narrows -- a claimed
+        # platform that a source-asserted technique contradicts is ignored.
         claimed = platforms_named_in(scope_text)
+        self.trail.step(
+            "scope",
+            "techniques run on %s; hypothesis names %s",
+            listing(platforms, "no narrow platform"),
+            listing(claimed),
+        )
         if claimed:
             scoped = [p for p in platforms if p in claimed]
             # If the resolved techniques have ZERO overlap with what was claimed
             # (e.g. LLM suggested T1207 Windows for a macOS hunt), the technique
             # is hallucinated. The claimed text is the source of truth.
             final_platforms = scoped if scoped else claimed
+            if not scoped:
+                self.trail.step(
+                    "scope",
+                    "no overlap: trusting the hypothesis (%s) over the techniques",
+                    listing(claimed),
+                )
+            elif scoped != platforms:
+                self.trail.step(
+                    "scope", "narrowed to what the hypothesis names: %s", listing(scoped)
+                )
 
             # Mark any technique that strongly contradicts our final platforms as invalid
             # so it is stripped from the payload and doesn't pollute the Sigma generator
@@ -755,6 +852,12 @@ class Orchestrator:
                 for tech_id, fact in facts.items():
                     if fact.platforms and not any(p in final_platforms for p in fact.platforms):
                         fact.valid = False
+                        self.trail.step(
+                            "scope",
+                            "%s only runs on %s: dropping it",
+                            tech_id,
+                            listing(fact.platforms),
+                        )
 
             return tactics, final_platforms
 
@@ -792,11 +895,29 @@ class Orchestrator:
         for _ in range(_MAX_SKIPS_PER_CYCLE + 1):
             item = self.cti.next_item()
             if item is None:
+                self.trail.step("intake", "queue empty")
                 return None, skipped, parked_count
+            self.trail.step(
+                "intake",
+                '%s: "%s" (%d chars; indicators: %s; CTI techniques: %s)',
+                item.source,
+                clip(item.title or (item.content.splitlines() or [""])[0], 80),
+                len(item.content),
+                counts(item.metadata.get("indicators") or {}),
+                listing(item.metadata.get("techniques") or []),
+            )
             if is_actionable(item.content):
                 verdict = triage(item) if self.settings.cti_triage == "park" else None
                 if verdict is None or not verdict.park:
+                    self.trail.step(
+                        "triage",
+                        "pass (%s)",
+                        "triage off"
+                        if verdict is None
+                        else "no commentary category or title shape",
+                    )
                     return item, skipped, parked_count
+                self.trail.step("triage", "park: %s", verdict.reason)
                 # Held back, not dropped: the cursor has already moved past
                 # this item, so the copy written here is the only one left.
                 skipped += 1
@@ -823,6 +944,7 @@ class Orchestrator:
             # an item we could not advance past was still found and rejected,
             # and reporting "no CTI in queue" for it would be untrue.
             skipped += 1
+            self.trail.step("triage", "skip: no narrative, no indicator inventory, no prose")
             log.info(
                 "Skipping CTI item from %s: no narrative, no parseable indicator "
                 "inventory and no free-form prose, so there is nothing to hunt.",
@@ -854,10 +976,17 @@ class Orchestrator:
                 "Daily draft quota reached (%d). Leaving CTI in queue for next cycle.",
                 self.settings.max_drafts_per_day,
             )
+            self.trail.step("quota", "daily draft quota full; item stays queued")
             return RunResult(
                 outcome="quota_reached",
                 detail=f"{state.drafts_today}/{self.settings.max_drafts_per_day}",
             )
+        self.trail.step(
+            "quota",
+            "draft slot %d/%d reserved",
+            state.drafts_today,
+            self.settings.max_drafts_per_day,
+        )
 
         if dry_run:
             log.info("[dry-run] Would call hecate and write a draft; leaving CTI in queue.")
@@ -894,6 +1023,15 @@ class Orchestrator:
         # Computed here, ahead of research, because it now also decides
         # whether research runs at all.
         sweep_inventory = {} if intel_has_narrative else parse_indicator_inventory(item.content)
+        if sweep_inventory:
+            route = "indicator dump -> deterministic sweep draft (no research, no LLM)"
+        elif not self.settings.research_enabled:
+            route = "research disabled -> ungrounded hypothesis"
+        elif intel_has_narrative:
+            route = "narrative -> research with web search -> hypothesis"
+        else:
+            route = "no narrative -> research without web search -> indicator-only hypothesis"
+        self.trail.step("route", "%s", route)
 
         research_id: str | None = None
         related_hunts: list[str] = []
@@ -930,10 +1068,24 @@ class Orchestrator:
                     parked_count=parked_count,
                 )
             topic, technique = derive_research_topic(item.content, title=item.title or None)
-            
-            # Measure context usage for optimization
-            input_tokens = measure_tokens(topic, model_name=self.settings.hecate_llm_model or "gpt-4")
-            log.info("Context Window Metrics: Executing research_new with ~%d input tokens", input_tokens)
+            self.trail.step(
+                "research",
+                'starting: topic "%s"%s; web search %s; source text %d chars',
+                clip(topic, 80),
+                f", technique {technique}" if technique else "",
+                "on" if intel_has_narrative else "off",
+                len(item.content),
+            )
+            research_started = self.trail.elapsed
+
+            # Measure context usage for optimization. Research is sent the
+            # CTI body as source_context as well as the topic, so count both.
+            input_tokens = measure_tokens(
+                f"{topic}\n{item.content}", model_name=self.settings.hecate_llm_model or "gpt-4"
+            )
+            log.info(
+                "Context Window Metrics: Executing research_new with ~%d input tokens", input_tokens
+            )
 
             try:
                 research_result = self.hecate.research_new(
@@ -942,6 +1094,8 @@ class Orchestrator:
                     depth=self.settings.research_depth,
                     timeout_sec=self.settings.llm_timeout_sec,
                     web_search_enabled=intel_has_narrative,
+                    # The topic is a search label; research needs the report.
+                    source_context=item.content,
                 )
             except HecateError as exc:
                 # Cold (ungrounded) generation measured ~30% accuracy on known-
@@ -968,6 +1122,55 @@ class Orchestrator:
 
             research_id = research_result.research_id
             related_hunts = research_result.related_hunts
+            self.trail.step(
+                "research",
+                "%s done in %.0fs; describes adversary behavior: %s; related hunts: %s",
+                research_id,
+                self.trail.elapsed - research_started,
+                "yes" if research_result.describes_behavior else "NO",
+                listing(related_hunts),
+            )
+
+            # Intake triage matches publisher categories and title shapes, so
+            # it cannot see that a post with a fresh category is commentary:
+            # an Elastic product blog ("AI & Automation") and a Talos opinion
+            # piece ("On The Radar") both became drafts (H-0005, H-0006), and
+            # research had already said of each "the source describes no
+            # behavior to detect". Only prose items: a bare dump describes no
+            # behavior by definition and still makes an indicator hunt.
+            if (
+                self.settings.cti_triage == "park"
+                and intel_has_narrative
+                and not research_result.describes_behavior
+            ):
+                reason = (
+                    f"research {research_id} found no adversary behavior to hunt in it "
+                    "(commentary, product or opinion content)"
+                )
+                try:
+                    park(self.settings.cti_queue_dir_resolved, item, reason)
+                except OSError as exc:
+                    log.warning("Could not park CTI item (%s); drafting it instead.", exc)
+                else:
+                    self.trail.step("research", "park: %s; draft slot refunded", reason)
+                    log.info(
+                        "Parking CTI item from %s (%s): %s",
+                        item.source,
+                        item.title[:60] or "untitled",
+                        reason,
+                    )
+                    # The draft slot was reserved for a hunt that will not be
+                    # written; the research run was real and stays counted.
+                    state.drafts_today -= 1
+                    state.total_drafts_ever -= 1
+                    self._advance_past(item)
+                    return RunResult(
+                        outcome="parked_after_research",
+                        detail=reason,
+                        research_id=research_id,
+                        parked_count=parked_count + 1,
+                    )
+
             log.info("Research %s grounds this cycle's hypothesis", research_id)
 
         if sweep_inventory:
@@ -979,9 +1182,21 @@ class Orchestrator:
             )
             hypothesis = build_indicator_sweep(item.content, title=item.title or None)
         else:
+            self.trail.step(
+                "hypothesis",
+                "asking the model%s%s",
+                f" (grounded by {research_id})" if research_id else " (no research)",
+                "" if intel_has_narrative else "; constrained to indicator presence",
+            )
+            hypothesis_started = self.trail.elapsed
             # Measure context usage for optimization
-            input_tokens = measure_tokens(item.content, model_name=self.settings.hecate_llm_model or "gpt-4")
-            log.info("Context Window Metrics: Executing hypothesis_generator with ~%d input tokens", input_tokens)
+            input_tokens = measure_tokens(
+                item.content, model_name=self.settings.hecate_llm_model or "gpt-4"
+            )
+            log.info(
+                "Context Window Metrics: Executing hypothesis_generator with ~%d input tokens",
+                input_tokens,
+            )
             try:
                 hypothesis = self.hecate.hypothesis_generator(
                     threat_intel=item.content,
@@ -1001,6 +1216,21 @@ class Orchestrator:
             log.info("Filled empty [source] slot in indicator-sweep hypothesis from CTI title.")
             hypothesis.hypothesis = repaired
 
+        if not sweep_inventory:
+            self.trail.step(
+                "hypothesis",
+                'done in %.0fs: "%s"',
+                self.trail.elapsed - hypothesis_started,
+                clip(hypothesis.hypothesis, 140),
+            )
+            if not hypothesis.is_threat_report:
+                self.trail.step(
+                    "hypothesis",
+                    "model judged this NOT a threat report: %s",
+                    clip(hypothesis.low_confidence_reason, 120) or "no reason given",
+                )
+        model_techniques = list(hypothesis.techniques)
+
         if hypothesis.is_empty:
             log.warning("hecate returned empty hypothesis; refunding quota and leaving CTI.")
             state.drafts_today -= 1
@@ -1013,7 +1243,34 @@ class Orchestrator:
         # list. Merging is what keeps the draft's ATT&CK mapping, its platform
         # scope and its telemetry list faithful to the source.
         cti_techniques = [str(t) for t in (item.metadata.get("techniques") or [])]
-        hypothesis.techniques = merge_techniques(cti_techniques, hypothesis.techniques)
+
+        # Techniques whose names the intel itself uses as a phrase. Offered to
+        # the model as a prompt hint first, which it ignored in 3 of 4 re-drafts
+        # (SEO Poisoning offered, T1098/T1563 chosen), so they are now merged
+        # in directly, after what the CTI asserted and ahead of the model's own
+        # picks. An indicator dump gets none: it describes no behaviour.
+        candidates: list[tuple[str, str]] = []
+        if not sweep_inventory:
+            candidates = self.hecate.candidate_techniques(
+                "\n".join(
+                    [item.content, research_tradecraft_text(self._research_text(research_id))]
+                )
+            )
+            self.trail.step(
+                "techniques",
+                "matched in the intel's wording: %s",
+                listing(f"{tid} {name}" for tid, name in candidates),
+            )
+        hypothesis.techniques = merge_techniques(
+            [*cti_techniques, *(tid for tid, _ in candidates)], hypothesis.techniques
+        )
+        self.trail.step(
+            "techniques",
+            "model chose %s; CTI asserted %s -> merged %s",
+            listing(model_techniques),
+            listing(cti_techniques),
+            listing(hypothesis.techniques),
+        )
 
         indicator_types = list((item.metadata.get("indicators") or {}).keys())
         for source in derive_data_sources(hypothesis.techniques, indicator_types):
@@ -1032,6 +1289,13 @@ class Orchestrator:
         hypothesis.data_sources = platform_consistent_data_sources(
             hypothesis.data_sources, platforms
         )
+        self.trail.step(
+            "scope",
+            "platforms %s; tactics %s; data sources %s",
+            listing(platforms, "unscoped"),
+            listing(tactics),
+            listing(hypothesis.data_sources),
+        )
 
         # An empty section is honest; a section listing the telemetry
         # categories back is not, and a reviewer skims past it as done.
@@ -1045,11 +1309,18 @@ class Orchestrator:
 
         # 4.2 Drop unresolvable technique IDs from the draft so they don't
         # reach the frontmatter and break `hunt validate` downstream.
-        hypothesis.techniques = [
+        kept_techniques = [
             t
             for t in hypothesis.techniques
             if t.upper() not in technique_facts or technique_facts[t.upper()].valid
         ]
+        if kept_techniques != hypothesis.techniques:
+            self.trail.step(
+                "techniques",
+                "dropped IDs not in ATT&CK: %s",
+                listing(t for t in hypothesis.techniques if t not in kept_techniques),
+            )
+        hypothesis.techniques = kept_techniques
 
         try:
             with hunt_id_lock(self.settings.hunts_root):
@@ -1067,6 +1338,7 @@ class Orchestrator:
                 )
                 req.grounding_section = self._grounding_section(req, item, technique_facts)
                 path = write_draft(req, self.settings.hunts_root)
+                self.trail.step("write", "%s written to %s", hunt_id, path)
         except OSError as exc:
             log.error("Failed to allocate/write draft hunt file: %s", exc)
             # Refund the quota — nothing was actually drafted, and the CTI

@@ -324,3 +324,15 @@ def test_indicator_map_skips_bulk_feed_pulses() -> None:
 
     pulse = {"indicators": [{"type": "domain", "indicator": f"d{i}.example"} for i in range(500)]}
     assert _indicator_map(pulse) == {}
+
+
+def test_indicator_map_keeps_a_curated_report_past_forty_indicators() -> None:
+    from hecate_runner.cti.otx import _indicator_map
+
+    pulse = {
+        "indicators": [{"type": "IPv4", "indicator": f"10.0.0.{i}"} for i in range(30)]
+        + [{"type": "domain", "indicator": f"d{i}.example"} for i in range(12)]
+    }
+    grouped = _indicator_map(pulse)
+    assert len(grouped["IPv4"]) == 10
+    assert len(grouped["domain"]) == 10
