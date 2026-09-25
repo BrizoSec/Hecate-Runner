@@ -109,6 +109,7 @@ class OtxProvider(CTIProvider):
         base_url: str = OTX_BASE_URL,
         page_limit: int = 20,
         max_pulse_age_days: int = 30,
+        max_pages: int = 10,
         request_timeout_sec: float = 30.0,
         client: httpx.Client | None = None,
     ):
@@ -119,6 +120,7 @@ class OtxProvider(CTIProvider):
         self.base_url = base_url.rstrip("/")
         self.page_limit = page_limit
         self.max_pulse_age_days = max_pulse_age_days
+        self.max_pages = max_pages
         self.request_timeout_sec = request_timeout_sec
         self._client = client or httpx.Client(timeout=request_timeout_sec)
         self._owns_client = client is None
@@ -132,13 +134,22 @@ class OtxProvider(CTIProvider):
     def next_item(self) -> CTIItem | None:
         cursor = OtxCursorState.load(self.cursor_file)
         pulses = self._fetch_pulses_since(cursor.last_modified or None)
-        candidate = self._pick_oldest_unrouted(pulses, cursor)
+        candidate, aged_out, backlog = self._pick_oldest_unrouted(pulses, cursor)
         if candidate is None:
             log.debug(
                 "No new high-signal OTX pulses since %s", cursor.last_modified or "(beginning)"
             )
             return None
-        return _pulse_to_cti_item(candidate)
+        item = _pulse_to_cti_item(candidate)
+        item.metadata["backlog"] = backlog
+        if aged_out:
+            # Handed over rather than skipped, so the orchestrator parks it:
+            # skipping is what let 23 high-signal pulses vanish without trace.
+            item.metadata["aged_out"] = (
+                f"waited in the OTX backlog past the {self.max_pulse_age_days}-day "
+                "freshness limit before a draft slot was free"
+            )
+        return item
 
     def acknowledge(self, item: CTIItem) -> None:
         pulse_id = item.metadata.get("pulse_id")
@@ -153,7 +164,34 @@ class OtxProvider(CTIProvider):
     # --- Internal --------------------------------------------------------------
 
     def _fetch_pulses_since(self, modified_since: str | None) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {"limit": self.page_limit, "page": 1}
+        """Every pulse modified since the cursor, up to ``max_pages`` pages.
+
+        OTX returns newest first, so the oldest pulses -- the ones oldest-first
+        selection wants -- are on the *last* pages. Reading page 1 alone meant
+        "oldest of the newest 20": once more than 20 were waiting, older pulses
+        slid off the page as new ones arrived, the cursor then advanced past
+        them, and they were never seen again. Measured on the live feed: 23 of
+        40 high-signal pulses since 15 Sep, including Hangro (47 IOCs) and
+        SilkParasite (102), lost that way.
+        """
+        pulses: list[dict[str, Any]] = []
+        for page in range(1, self.max_pages + 1):
+            data = self._fetch_page(modified_since, page)
+            results = list(data.get("results", []))
+            pulses.extend(results)
+            if not data.get("next") or len(results) < self.page_limit:
+                return pulses
+        log.warning(
+            "OTX backlog exceeds %d pages (%d pulses) since %s; the oldest beyond that "
+            "are not visible this cycle",
+            self.max_pages,
+            len(pulses),
+            modified_since or "(beginning)",
+        )
+        return pulses
+
+    def _fetch_page(self, modified_since: str | None, page: int) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": self.page_limit, "page": page}
         if modified_since:
             params["modified_since"] = modified_since
 
@@ -176,23 +214,45 @@ class OtxProvider(CTIProvider):
             data = resp.json()
         except ValueError as exc:
             raise OtxError(f"OTX returned non-JSON response: {exc}") from exc
-
-        return list(data.get("results", []))
+        return data if isinstance(data, dict) else {}
 
     def _pick_oldest_unrouted(
         self, pulses: list[dict[str, Any]], cursor: OtxCursorState
-    ) -> dict[str, Any] | None:
-        cutoff = datetime.now(UTC) - timedelta(days=self.max_pulse_age_days)
-        candidates = [p for p in pulses if _is_high_signal(p, cutoff)]
-        candidates = [
+    ) -> tuple[dict[str, Any] | None, bool, int]:
+        """(oldest unrouted pulse, whether it aged out waiting, fresh backlog size).
+
+        A pulse that is high-signal in every way but age, and that crossed the
+        freshness limit *while waiting in this backlog*, is returned flagged
+        rather than filtered out, so it is parked with a reason instead of
+        vanishing. "While waiting" means the cursor is set (a fresh install
+        has no backlog), the pulse is past the cursor, and it was created
+        within the last two age windows (an old pulse re-published today was
+        never waiting). Anything else past the limit is skipped as before.
+        """
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(days=self.max_pulse_age_days)
+        expiry_floor = cutoff - timedelta(days=self.max_pulse_age_days)
+        unrouted = [
             p
-            for p in candidates
+            for p in pulses
             if not cursor.already_routed(p.get("modified", ""), str(p.get("id", "")))
         ]
+        fresh = [p for p in unrouted if _is_high_signal(p, cutoff)]
+        aged: list[dict[str, Any]] = []
+        if cursor.last_modified:
+            for p in unrouted:
+                created = _parse_otx_timestamp(p.get("created", ""))
+                if (
+                    created is not None
+                    and expiry_floor <= created < cutoff
+                    and _is_high_signal(p, expiry_floor)
+                ):
+                    aged.append(p)
+        candidates = sorted([*fresh, *aged], key=_pulse_sort_key)
         if not candidates:
-            return None
-        candidates.sort(key=_pulse_sort_key)
-        return candidates[0]
+            return None, False, 0
+        oldest = candidates[0]
+        return oldest, oldest in aged, len(fresh)
 
 
 def _pulse_sort_key(pulse: dict[str, Any]) -> datetime:

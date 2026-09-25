@@ -93,6 +93,13 @@ def triage(item: CTIItem) -> TriageVerdict:
     publisher category naming a commentary series, or a title in a recurring
     non-technical shape -- never on the absence of one.
     """
+    # A provider flags intel that expired while it waited for a draft slot.
+    # Parking it is the point: silently skipping it is how OTX lost 23
+    # high-signal pulses with no record that they existed.
+    aged_out = item.metadata.get("aged_out")
+    if aged_out:
+        return TriageVerdict(True, f"aged out: {aged_out}")
+
     for category in _categories(item):
         if category in _COMMENTARY_CATEGORIES:
             return TriageVerdict(
