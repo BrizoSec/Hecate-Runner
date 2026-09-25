@@ -589,6 +589,21 @@ def _names_unsupported(
     return not any(word.startswith(stem) for stem in stems for word in evidence_words)
 
 
+def technique_lacks_evidence(
+    technique_id: str, names: tuple[str, ...], cti_text: str, research_text: str = ""
+) -> bool:
+    """True when neither the CTI nor the research describes this technique.
+
+    The same test the audit applies to a finished draft, available before the
+    draft exists, so a model pick that would only be flagged UNSUPPORTED can
+    be kept out of the frontmatter, the tactic list and the Sigma tags instead.
+    """
+    evidence_words = set(_WORD_RE.findall(cti_text.lower())) | set(
+        _WORD_RE.findall(research_text.lower())
+    )
+    return _names_unsupported(names, evidence_words, technique_id.upper())
+
+
 def audit_draft(
     *,
     draft_text: str,
@@ -597,6 +612,7 @@ def audit_draft(
     cti_techniques: list[str] | None = None,
     technique_facts: dict[str, TechniqueFact] | None = None,
     hunt_platforms: list[str] | None = None,
+    matched_techniques: list[str] | None = None,
 ) -> GroundingReport:
     """Classify the draft's checkable claims against the evidence behind it.
 
@@ -607,10 +623,15 @@ def audit_draft(
     ``technique_facts`` carries what the live ATT&CK matrix says about each
     technique ID, so an invented one can be called out instead of passing as
     a hypothesis inference.
+
+    ``matched_techniques`` are the IDs whose names the source's own wording
+    uses (the deterministic phrase match), so they are reported as coming
+    from the source's text rather than from the hypothesis.
     """
     primary = cti_text.lower()
     secondary = research_text.lower()
     asserted_techniques = {t.upper() for t in (cti_techniques or [])}
+    wording_matched = {t.upper() for t in (matched_techniques or [])}
     facts = {k.upper(): v for k, v in (technique_facts or {}).items()}
 
     def grade(value: str) -> tuple[str, str]:
@@ -691,6 +712,18 @@ def audit_draft(
                 upper,
                 "asserted",
                 "sub/parent of a technique the source named" + note_suffix,
+            )
+        elif upper in wording_matched:
+            # Still `derived`: the phrase match is deliberately loose (it
+            # offered T1610 Deploy Container for a VeloCloud advisory), so a
+            # match is a lead, not an assertion. But the old note, "inferred
+            # by the hypothesis", was false for these and contradicted the
+            # run's own trail.
+            add(
+                "technique",
+                upper,
+                "derived",
+                "matched in the source's wording; the source does not name the ID" + note_suffix,
             )
         elif fact is not None and _names_unsupported(fact.names, evidence_words, upper):
             # A real ID on the right platform can still be the wrong

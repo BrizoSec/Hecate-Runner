@@ -1574,7 +1574,9 @@ def test_technique_names_from_the_lookup_reach_the_grounding_audit(
     mock_hecate: MagicMock,
 ) -> None:
     """The name-support check only works if the orchestrator carries the
-    technique's ATT&CK names from the lookup into the audit."""
+    technique's ATT&CK names from the lookup into it. A model pick no source
+    describes is now dropped before drafting rather than flagged after, so
+    the names surface in the grounding section's dropped line."""
     mock_hecate.lookup_technique.return_value = TechniqueMetadata(
         technique_id="T1003.001",
         tactics=["credential-access"],
@@ -1589,7 +1591,37 @@ def test_technique_names_from_the_lookup_reach_the_grounding_audit(
 
     assert result.draft_path is not None
     content = result.draft_path.read_text()
-    assert "nothing in the CTI or research describes 'Process Hollowing'" in content
+    assert "Dropped before drafting" in content
+    assert "Process Hollowing" in content
+    assert "**UNSUPPORTED**" not in content
+
+
+def test_a_technique_the_intel_supports_is_never_dropped_as_unevidenced(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_hecate: MagicMock,
+) -> None:
+    """The drop applies to the model's own picks only. A technique matched in
+    the intel's wording stays even when its ATT&CK name shares no word with
+    the source, and the grounding table says where it came from."""
+    mock_hecate.candidate_techniques.return_value = [("T1003.001", "LSASS Memory")]
+    mock_hecate.lookup_technique.return_value = TechniqueMetadata(
+        technique_id="T1003.001",
+        tactics=["credential-access"],
+        platforms=["Windows"],
+        found=True,
+        name="Process Hollowing",
+        parent_name="Process Injection",
+    )
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
+
+    result = orch.run_once()
+
+    assert result.draft_path is not None
+    content = result.draft_path.read_text()
+    assert "Dropped before drafting" not in content
+    assert 'techniques: ["T1003.001"]' in content
+    assert "matched in the source's wording" in content
 
 
 _OPINION_POST = (

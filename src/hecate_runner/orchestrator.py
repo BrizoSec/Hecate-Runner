@@ -20,7 +20,12 @@ from hecate_runner.config import Settings
 from hecate_runner.context_metrics import measure_tokens
 from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider, get_provider
 from hecate_runner.cti_triage import triage
-from hecate_runner.grounding import TechniqueFact, audit_draft, render_grounding_section
+from hecate_runner.grounding import (
+    TechniqueFact,
+    audit_draft,
+    render_grounding_section,
+    technique_lacks_evidence,
+)
 from hecate_runner.hecate_client import HecateClient, HecateError
 from hecate_runner.hunt_writer import (
     DraftHuntRequest,
@@ -521,6 +526,11 @@ class Orchestrator:
         # Techniques `_resolve_ttps` dropped for contradicting the hunt's
         # platform, so the later drop step does not call them unknown IDs.
         self._platform_dropped: set[str] = set()
+        # This cycle's techniques whose names the intel's wording uses, and
+        # the model picks dropped for having no source at all ("ID Name").
+        # Both are read back when the grounding section is rendered.
+        self._wording_matched: list[str] = []
+        self._unevidenced_dropped: list[str] = []
         # Defaults to a no-op so tests and callers that don't care about
         # notifications don't have to pass one.
         self.notify = notify or (lambda result: None)
@@ -598,6 +608,7 @@ class Orchestrator:
                 cti_techniques=[str(t) for t in (item.metadata.get("techniques") or [])],
                 technique_facts=technique_facts,
                 hunt_platforms=list(req.platforms),
+                matched_techniques=self._wording_matched,
             )
         except Exception as exc:
             log.warning("Grounding audit failed for %s (%s); section left empty.", req.hunt_id, exc)
@@ -621,7 +632,59 @@ class Orchestrator:
                 len(report.unsupported),
                 ", ".join(c.value for c in report.unsupported),
             )
-        return render_grounding_section(report)
+        section = render_grounding_section(report)
+        if self._unevidenced_dropped:
+            section += (
+                "\n> Dropped before drafting, because the model proposed them and nothing "
+                "in the CTI or research describes them: "
+                + ", ".join(f"`{t}`" for t in self._unevidenced_dropped)
+                + "\n"
+            )
+        return section
+
+    def _drop_unevidenced_techniques(
+        self,
+        techniques: list[str],
+        protected: list[str],
+        cti_text: str,
+        research_text: str,
+    ) -> list[str]:
+        """Remove model-picked techniques that no source describes.
+
+        The audit already flagged these, but only after they had been written
+        to the frontmatter, turned into tactics, and used to tag Sigma rules:
+        four of the five drafts on 25 Sep carried one (T1078 twice, T1053,
+        T1059), and H-0013's only rule was tagged T1053 Scheduled Task on a
+        DLL-hijacking hunt. Dropping them here, before any of that is derived,
+        keeps a flagged guess from becoming the hunt's mapping.
+
+        Techniques the intel supports (asserted, or matched in its wording)
+        are never dropped, and nor is anything the matrix cannot resolve --
+        the unknown-ID step handles those under its own name.
+        """
+        shielded = {t.upper() for t in protected}
+        kept: list[str] = []
+        self._unevidenced_dropped = []
+        for technique_id in techniques:
+            upper = technique_id.upper()
+            if upper in shielded or upper.split(".")[0] in shielded:
+                kept.append(technique_id)
+                continue
+            meta = self.hecate.lookup_technique(
+                technique_id, timeout_sec=self.settings.llm_timeout_sec
+            )
+            names = tuple(n for n in (meta.name, meta.parent_name) if n)
+            if meta.found and technique_lacks_evidence(upper, names, cti_text, research_text):
+                self._unevidenced_dropped.append(f"{upper} {meta.name}".strip())
+            else:
+                kept.append(technique_id)
+        if self._unevidenced_dropped:
+            self.trail.step(
+                "techniques",
+                "dropped model picks no source describes: %s",
+                listing(self._unevidenced_dropped),
+            )
+        return kept
 
     def _research_text(self, research_id: str | None) -> str:
         """The research document's text, so its cited sources also count as
@@ -1316,6 +1379,8 @@ class Orchestrator:
         # in directly, after what the CTI asserted and ahead of the model's own
         # picks. An indicator dump gets none: it describes no behaviour.
         candidates: list[tuple[str, str]] = []
+        self._wording_matched = []
+        self._unevidenced_dropped = []
         if not sweep_inventory:
             candidates = self.hecate.candidate_techniques(
                 "\n".join(
@@ -1327,6 +1392,7 @@ class Orchestrator:
                 "matched in the intel's wording: %s",
                 listing(f"{tid} {name}" for tid, name in candidates),
             )
+        self._wording_matched = [tid for tid, _ in candidates]
         hypothesis.techniques = merge_techniques(
             [*cti_techniques, *(tid for tid, _ in candidates)], hypothesis.techniques
         )
@@ -1336,6 +1402,12 @@ class Orchestrator:
             listing(model_techniques),
             listing(cti_techniques),
             listing(hypothesis.techniques),
+        )
+        hypothesis.techniques = self._drop_unevidenced_techniques(
+            hypothesis.techniques,
+            protected=[*cti_techniques, *(tid for tid, _ in candidates)],
+            cti_text=item.content,
+            research_text=self._research_text(research_id),
         )
 
         indicator_types = list((item.metadata.get("indicators") or {}).keys())

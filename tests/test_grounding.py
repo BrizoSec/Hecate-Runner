@@ -17,6 +17,7 @@ from hecate_runner.grounding import (
     _is_path_component,
     audit_draft,
     render_grounding_section,
+    technique_lacks_evidence,
 )
 
 # The real source blurb shape, abridged from MISP event 476.
@@ -131,6 +132,33 @@ def test_technique_the_hypothesis_invented_is_marked_inferred_not_unsupported():
     report = audit_draft(draft_text="T1566", cti_text=CTI, cti_techniques=CTI_TECHNIQUES)
     assert report.claims[0].status == "derived"
     assert report.is_clean
+
+
+def test_technique_matched_in_the_source_wording_is_not_called_a_hypothesis_inference():
+    """25 Sep: the trail said T1566 was "matched in the intel's wording", and
+    the draft's table said "inferred by the hypothesis, not named by the
+    source" -- the same run contradicting itself."""
+    report = audit_draft(
+        draft_text="T1566",
+        cti_text=CTI,
+        cti_techniques=CTI_TECHNIQUES,
+        matched_techniques=["T1566"],
+    )
+    assert report.claims[0].status == "derived"
+    assert "matched in the source's wording" in report.claims[0].note
+    assert "hypothesis" not in report.claims[0].note
+
+
+def test_technique_lacks_evidence_when_no_source_uses_its_name():
+    # H-0015: T1078 Valid Accounts on a fake-website 0-day report.
+    assert technique_lacks_evidence("T1078", ("Valid Accounts",), CTI)
+    assert not technique_lacks_evidence("T1071.001", ("Web Protocols",), CTI + " web protocols")
+
+
+def test_technique_lacks_evidence_counts_the_research_text():
+    assert not technique_lacks_evidence(
+        "T1078", ("Valid Accounts",), CTI, research_text="the actor reused valid accounts"
+    )
 
 
 def test_claims_are_deduplicated():
