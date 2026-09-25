@@ -518,6 +518,9 @@ class Orchestrator:
         # Replaced at the start of every cycle; this one only serves callers
         # that use a stage method directly (tests, `_resolve_ttps`).
         self.trail = CycleTrail()
+        # Techniques `_resolve_ttps` dropped for contradicting the hunt's
+        # platform, so the later drop step does not call them unknown IDs.
+        self._platform_dropped: set[str] = set()
         # Defaults to a no-op so tests and callers that don't care about
         # notifications don't have to pass one.
         self.notify = notify or (lambda result: None)
@@ -764,8 +767,15 @@ class Orchestrator:
         techniques: list[str],
         scope_text: str = "",
         facts: dict[str, TechniqueFact] | None = None,
+        protected: list[str] | None = None,
     ) -> tuple[list[str], list[str]]:
         """Derive real tactics/platforms for a hypothesis's techniques.
+
+        ``protected`` are techniques the intelligence itself supports -- ones
+        the CTI asserted or whose names its wording uses. The hypothesis's
+        platform claim can drop a technique the *model* chose, never one of
+        these; when one runs on a platform the hypothesis did not name, that
+        platform is added instead.
 
         Looks each technique up against live ATT&CK data instead of
         hardcoding a fixed tactic/platform onto every draft regardless of
@@ -824,6 +834,8 @@ class Orchestrator:
         # "compromised Windows systems". Normally only narrows -- a claimed
         # platform that a source-asserted technique contradicts is ignored.
         claimed = platforms_named_in(scope_text)
+        self._platform_dropped = set()
+        shielded = {t.upper() for t in (protected or [])}
         self.trail.step(
             "scope",
             "techniques run on %s; hypothesis names %s",
@@ -847,12 +859,31 @@ class Orchestrator:
                     "scope", "narrowed to what the hypothesis names: %s", listing(scoped)
                 )
 
+            # Evidence-backed techniques first: they widen the platform list
+            # rather than being dropped. H-0014's CTI said "PowerShell-based
+            # collection and staging"; the hypothesis said "Linux servers";
+            # T1059.001 was dropped and the hunt shipped with no techniques.
+            if facts is not None:
+                for tech_id, fact in facts.items():
+                    if tech_id.split(".")[0] not in shielded and tech_id not in shielded:
+                        continue
+                    missing = [p for p in fact.platforms if p not in final_platforms]
+                    if fact.platforms and len(missing) == len(fact.platforms):
+                        final_platforms = [*final_platforms, *missing]
+                        self.trail.step(
+                            "scope",
+                            "keeping %s (the intel names it): adding %s to the platforms",
+                            tech_id,
+                            listing(missing),
+                        )
+
             # Mark any technique that strongly contradicts our final platforms as invalid
             # so it is stripped from the payload and doesn't pollute the Sigma generator
             if facts is not None:
                 for tech_id, fact in facts.items():
                     if fact.platforms and not any(p in final_platforms for p in fact.platforms):
                         fact.valid = False
+                        self._platform_dropped.add(tech_id)
                         self.trail.step(
                             "scope",
                             "%s only runs on %s: dropping it",
@@ -1317,6 +1348,7 @@ class Orchestrator:
             hypothesis.techniques,
             scope_text=" ".join([hypothesis.hypothesis, hypothesis.location]),
             facts=technique_facts,
+            protected=[*cti_techniques, *(tid for tid, _ in candidates)],
         )
 
         # Applied here rather than at merge time: the platform list only
@@ -1349,12 +1381,15 @@ class Orchestrator:
             for t in hypothesis.techniques
             if t.upper() not in technique_facts or technique_facts[t.upper()].valid
         ]
-        if kept_techniques != hypothesis.techniques:
-            self.trail.step(
-                "techniques",
-                "dropped IDs not in ATT&CK: %s",
-                listing(t for t in hypothesis.techniques if t not in kept_techniques),
-            )
+        # Platform drops were already explained at the scope step; only IDs
+        # the matrix does not know are reported here, under the right name.
+        unknown = [
+            t
+            for t in hypothesis.techniques
+            if t not in kept_techniques and t.upper() not in self._platform_dropped
+        ]
+        if unknown:
+            self.trail.step("techniques", "dropped IDs not in ATT&CK: %s", listing(unknown))
         hypothesis.techniques = kept_techniques
 
         try:
