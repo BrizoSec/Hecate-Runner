@@ -539,13 +539,32 @@ _GENERIC_NAME_WORDS = frozenset(
         "match", "module", "modules", "name", "network", "other", "process",
         "protocol", "remote", "resource", "service", "services", "software",
         "standard", "system", "systems", "tool", "tools", "user", "using",
-        "with",
+        "with", "over", "through", "abuse", "deployment", "malicious",
     }
 )  # fmt: skip
 
-#: Stem length for name keywords, so "Masquerading" matches "masquerade" and
-#: "Hollowing" matches "hollowed" without a stemming dependency.
-_STEM_LEN = 6
+#: Suffixes stripped before comparing, so "Masquerading" matches "masquerade"
+#: and "Hollowing" matches "hollowed" without a stemming dependency. Words are
+#: compared by equal stems. The six-letter prefix this replaced let "port"
+#: (T1571 Non-Standard Port) match "public portion" in a VeloCloud advisory.
+#: Kept in step with Hecate's technique_candidates, which stems the same way.
+_SUFFIXES = ("ation", "ated", "ating", "ing", "ion", "ed", "er", "e")
+
+#: Derivational suffixes that leave a different word behind when the root is
+#: short: "portion" is not "port", "region" is not "reg".
+_LONG_ROOT_SUFFIXES = frozenset({"ation", "ion"})
+
+
+def _stem(word: str) -> str:
+    """Reduce a word to the form its variants share ("containers" ->
+    "contain", "obfuscation" -> "obfusc")."""
+    if word.endswith("s") and not word.endswith("ss") and len(word) - 1 >= 4:
+        word = word[:-1]
+    for suffix in _SUFFIXES:
+        floor = 5 if suffix in _LONG_ROOT_SUFFIXES else 4
+        if word.endswith(suffix) and len(word) - len(suffix) >= floor:
+            return word[: -len(suffix)]
+    return word
 
 
 #: How reports describe techniques whose ATT&CK names they rarely use, keyed
@@ -560,15 +579,21 @@ _REPORT_WORDING = {
     "T1105": ("download", "downloader"),
     "T1498": ("ddos", "flood"),
     "T1499": ("ddos", "flood"),
+    # The 25 Sep rerun dropped these three although the intel described them:
+    # DarkMe's "links disguised as images" and "MSI installers", and a ClickFix
+    # driver that ships "to kill Elastic Endpoint".
+    "T1036": ("disguised", "disguise", "impersonating", "impersonates"),
+    "T1218": ("msiexec", "msi", "rundll32", "regsvr32", "mshta", "lolbin", "lolbins"),
+    "T1685": ("kill", "kills", "killer", "tamper", "tampering"),
 }
 
 
 def _name_stems(names: tuple[str, ...], technique_id: str = "") -> set[str]:
-    stems = set(_REPORT_WORDING.get(technique_id.split(".")[0], ()))
+    stems = {_stem(w) for w in _REPORT_WORDING.get(technique_id.split(".")[0], ())}
     for name in names:
         for word in _WORD_RE.findall(name.lower()):
             if len(word) >= 4 and word not in _GENERIC_NAME_WORDS:
-                stems.add(word[:_STEM_LEN])
+                stems.add(_stem(word))
     return stems
 
 
@@ -586,7 +611,7 @@ def _names_unsupported(
     stems = _name_stems(names, technique_id)
     if not stems:
         return False
-    return not any(word.startswith(stem) for stem in stems for word in evidence_words)
+    return not stems & {_stem(word) for word in evidence_words}
 
 
 def technique_lacks_evidence(

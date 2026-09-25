@@ -155,6 +155,37 @@ def test_technique_lacks_evidence_when_no_source_uses_its_name():
     assert not technique_lacks_evidence("T1071.001", ("Web Protocols",), CTI + " web protocols")
 
 
+@pytest.mark.parametrize(
+    ("technique_id", "names", "source"),
+    [
+        # All three were dropped on the 25 Sep rerun though the intel said so.
+        ("T1036", ("Masquerading",), "Victims received links disguised as images."),
+        (
+            "T1218",
+            ("System Binary Proxy Execution",),
+            "The chain used MSI installers and VB6 loaders.",
+        ),
+        ("T1685", ("Disable or Modify Tools",), "It also ships a driver to kill Elastic Endpoint."),
+        # Variants of a name word still count.
+        ("T1055.012", ("Process Hollowing", "Process Injection"), "It hollowed a signed binary."),
+    ],
+)
+def test_a_technique_the_source_describes_in_its_own_words_is_evidenced(
+    technique_id, names, source
+):
+    assert not technique_lacks_evidence(technique_id, names, source)
+
+
+def test_a_word_that_merely_starts_with_the_name_word_is_not_evidence():
+    """T1571 Non-Standard Port was kept on "the public portion of the VeloCloud
+    Edge authentication certificates"."""
+    source = "Attackers need access to the public portion of the Edge certificates."
+    assert technique_lacks_evidence("T1571", ("Non-Standard Port",), source)
+    assert not technique_lacks_evidence(
+        "T1571", ("Non-Standard Port",), "C2 over ports 8443 and 9001."
+    )
+
+
 def test_technique_lacks_evidence_counts_the_research_text():
     assert not technique_lacks_evidence(
         "T1078", ("Valid Accounts",), CTI, research_text="the actor reused valid accounts"
