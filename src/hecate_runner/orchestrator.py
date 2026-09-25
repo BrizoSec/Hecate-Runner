@@ -900,12 +900,17 @@ class Orchestrator:
                 return None, skipped, parked_count
             self.trail.step(
                 "intake",
-                '%s: "%s" (%d chars; indicators: %s; CTI techniques: %s)',
+                '%s: "%s" (%d chars; indicators: %s; CTI techniques: %s)%s',
                 item.source,
                 clip(item.title or (item.content.splitlines() or [""])[0], 80),
                 len(item.content),
                 counts(item.metadata.get("indicators") or {}),
                 listing(item.metadata.get("techniques") or []),
+                (
+                    f"; {item.metadata['backlog']} high-signal waiting in its backlog"
+                    if "backlog" in item.metadata
+                    else ""
+                ),
             )
             if is_actionable(item.content):
                 verdict = triage(item) if self.settings.cti_triage == "park" else None
