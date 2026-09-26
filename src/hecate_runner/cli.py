@@ -3,6 +3,7 @@
 Commands:
     hecate-runner run           Execute one orchestrator cycle
     hecate-runner status        Print state, quota, config summary
+    hecate-runner metrics       Summarize stage latency and LLM usage
     hecate-runner config        Dump effective config (redacts secrets)
     hecate-runner doctor        Sanity-check the deployment
     hecate-runner otx-poll      Route one high-signal OTX pulse into the CTI queue
@@ -44,6 +45,7 @@ from hecate_runner.hunt_audit import (
     research_text_for,
 )
 from hecate_runner.log_rotation import rotate_log_if_needed
+from hecate_runner.metrics import MetricsStore
 from hecate_runner.misp_poller import run_misp_poll
 from hecate_runner.orchestrator import build_default_orchestrator
 from hecate_runner.otx_poller import run_otx_poll
@@ -625,6 +627,54 @@ def status() -> None:
     console.print(table)
 
 
+@app.command()
+def metrics(
+    days: Annotated[
+        int,
+        typer.Option("--days", min=1, max=3650, help="Lookback window in days (default: 30)"),
+    ] = 30,
+    source: Annotated[
+        str | None,
+        typer.Option("--source", help="Filter to one CTI provider, e.g. rss or misp"),
+    ] = None,
+) -> None:
+    """Summarize stage latency and estimated LLM cost by CTI source."""
+    settings = Settings()
+    rows = MetricsStore(settings.metrics_file).aggregate(days=days, source=source)
+    if not rows:
+        console.print("No stage metrics found for that period.")
+        return
+
+    table = Table(title=f"Stage metrics, last {days} day(s)")
+    table.add_column("Source", style="cyan")
+    table.add_column("Stage")
+    table.add_column("Cycles", justify="right")
+    table.add_column("Avg wall", justify="right")
+    table.add_column("LLM calls", justify="right")
+    table.add_column("Input tokens", justify="right")
+    table.add_column("Output tokens", justify="right")
+    table.add_column("Total est.", justify="right")
+    table.add_column("Non-ok", justify="right")
+
+    for row in rows:
+        cost = row["estimated_cost_usd"]
+        avg_seconds = row["avg_duration_ms"] / 1000
+        avg_wall = f"{avg_seconds:.1f}s" if avg_seconds < 60 else f"{avg_seconds / 60:.1f}m"
+        table.add_row(
+            row["source"],
+            row["stage"],
+            str(row["cycles"]),
+            avg_wall,
+            "n/a" if row["llm_calls"] is None else str(row["llm_calls"]),
+            "n/a" if row["input_tokens"] is None else str(row["input_tokens"]),
+            "n/a" if row["output_tokens"] is None else str(row["output_tokens"]),
+            "n/a" if cost is None else f"${cost:.6f}",
+            str(row["errors"]),
+        )
+    console.print(table)
+    console.print("Estimated cost uses Core's model pricing table; it may differ from provider invoices.")
+
+
 parked_app = typer.Typer(help="Inspect and restore CTI held back by intake triage.")
 app.add_typer(parked_app, name="parked")
 
@@ -715,6 +765,76 @@ def parked_restore(
             "[bold]file[/bold] to HECATE_RUNNER_CTI_MULTI_PROVIDERS to have the next "
             "cycle pick this up."
         )
+
+
+@app.command()
+def reset(
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip the confirmation prompt.")] = False,
+    keep_cursors: Annotated[
+        bool,
+        typer.Option(
+            "--keep-cursors",
+            help="Leave CTI cursors alone, so feeds continue where they are instead of re-reading.",
+        ),
+    ] = False,
+    no_archive: Annotated[
+        bool, typer.Option("--no-archive", help="Delete without writing an archive first.")
+    ] = False,
+    archive_dir: Annotated[
+        Path | None,
+        typer.Option(
+            help="Where to write the archive (default: the workspace's parent directory)."
+        ),
+    ] = None,
+) -> None:
+    """Reset the workspace to a blank state for a fresh evaluation.
+
+    Archives, then removes: hunts, research, Sigma rules, LangGraph checkpoints,
+    quota and run state, CTI cursors, parked and processed CTI, pending query
+    proposals and logs. ID counters restart one past the highest ID in git
+    history, so no ID is ever reused. Configuration and knowledge are kept.
+    """
+    from hecate_runner import reset as reset_mod
+
+    settings = Settings()
+    running = reset_mod.running_hecate_processes()
+    if running:
+        console.print("[red]Refusing to reset while hecate is running:[/red]")
+        for line in running:
+            console.print(f"  {line}")
+        raise typer.Exit(1)
+
+    plan = reset_mod.build_plan(settings, keep_cursors=keep_cursors)
+    table = Table(title=f"Reset {plan.workspace}", show_header=True)
+    table.add_column("What")
+    table.add_column("Items", justify="right")
+    for group, paths in plan.groups.items():
+        table.add_row(group, "kept" if group == "CTI cursors" and keep_cursors else str(len(paths)))
+    console.print(table)
+    console.print(
+        f"Next IDs after reset: [bold]H-{plan.hunt_counter + 1:04d}[/bold], "
+        f"[bold]R-{plan.research_counter + 1:04d}[/bold]"
+        + ("" if plan.git_repo else " (workspace is not a git repo: numbering restarts)")
+    )
+    if not keep_cursors:
+        console.print(
+            "[yellow]Cursors reset:[/yellow] feeds are re-read from their start on the next cycle."
+        )
+    if not yes and not typer.confirm("Proceed?", default=False):
+        console.print("Nothing changed.")
+        raise typer.Exit(0)
+
+    # Re-checked: a timer-driven cycle may have started while the prompt was open.
+    if reset_mod.running_hecate_processes():
+        console.print("[red]A hecate process started meanwhile; nothing changed.[/red]")
+        raise typer.Exit(1)
+    if plan.paths and not no_archive:
+        target = reset_mod.archive(plan, archive_dir or plan.workspace.parent)
+        console.print(f"Archived {len(plan.paths)} item(s) to [cyan]{target}[/cyan]")
+    reset_mod.execute(plan, settings)
+    console.print(
+        "[green]Workspace reset.[/green] Run [bold]hecate-runner status[/bold] to confirm."
+    )
 
 
 @app.command()

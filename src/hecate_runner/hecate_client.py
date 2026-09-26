@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from hecate_runner.metrics import LLMUsage
+
 log = logging.getLogger(__name__)
 
 
@@ -36,6 +38,7 @@ class ResearchResult:
     #: no adversary behavior at all -- its judgement of the item, not of the
     #: web results. True whenever that cannot be read, so absence never parks.
     describes_behavior: bool = True
+    usage: LLMUsage | None = None
 
     @property
     def is_empty(self) -> bool:
@@ -59,6 +62,8 @@ class HypothesisResult:
     is_indicator_only: bool = False
     warnings: list[str] = field(default_factory=list)
     raw_output: str = ""
+    usage: LLMUsage | None = None
+    fallback: bool = False
 
     @property
     def is_empty(self) -> bool:
@@ -81,7 +86,9 @@ class TechniqueMetadata:
 
 
 class HecateError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, usage: LLMUsage | None = None):
+        super().__init__(message)
+        self.usage = usage
 
 
 @dataclass
@@ -93,6 +100,7 @@ class SigmaResult:
     rejected: list[str] = field(default_factory=list)
     files: list[Path] = field(default_factory=list)
     rules: list[dict[str, Any]] = field(default_factory=list)
+    usage: LLMUsage | None = None
 
 
 class HecateClient:
@@ -135,7 +143,9 @@ class HecateClient:
             return func(*args, **kwargs)
         except Exception as exc:
             log.exception(f"Hecate API call failed: {exc}")
-            raise HecateError(f"Hecate API error: {exc}") from exc
+            metadata = getattr(exc, "metadata", {})
+            usage = LLMUsage.from_metadata(metadata) if isinstance(metadata, dict) else None
+            raise HecateError(f"Hecate API error: {exc}", usage=usage) from exc
         finally:
             os.chdir(original_cwd)
             os.environ.clear()
@@ -185,6 +195,14 @@ class HecateClient:
                 telemetry_findings
                 and all(f.startswith(_NO_BEHAVIOR_FINDING) for f in telemetry_findings)
             ),
+            usage=LLMUsage(
+                llm_calls=getattr(output, "llm_calls", None),
+                input_tokens=getattr(output, "input_tokens", None),
+                output_tokens=getattr(output, "output_tokens", None),
+                llm_duration_ms=getattr(output, "llm_duration_ms", None),
+                estimated_cost_usd=getattr(output, "total_cost_usd", None),
+                models=list(getattr(output, "llm_models", []) or []),
+            ),
         )
 
     def hypothesis_generator(
@@ -194,15 +212,23 @@ class HecateClient:
         timeout_sec: int | None = None,
         indicators_only: bool = False,
     ) -> HypothesisResult:
-        from hecate_agent.api import generate_hypothesis
+        from hecate_agent import api
 
-        output = self._with_context(
-            generate_hypothesis,
-            threat_intel=threat_intel,
-            research_id=research_id,
-            indicators_only=indicators_only,
-            workspace=self.workspace,
-        )
+        generate_with_metrics = getattr(api, "generate_hypothesis_with_metrics", None)
+        kwargs = {
+            "threat_intel": threat_intel,
+            "research_id": research_id,
+            "indicators_only": indicators_only,
+            "workspace": self.workspace,
+        }
+        if generate_with_metrics is not None:
+            output, metadata = self._with_context(generate_with_metrics, **kwargs)
+            usage = LLMUsage.from_metadata(metadata)
+            fallback = bool(metadata.get("fallback", False))
+        else:  # older Core releases still get wall latency from the Runner
+            output = self._with_context(api.generate_hypothesis, **kwargs)
+            usage = None
+            fallback = False
         return HypothesisResult(
             hypothesis=output.hypothesis,
             justification=output.justification,
@@ -219,6 +245,8 @@ class HecateClient:
             is_indicator_only=output.is_indicator_only,
             warnings=[],
             raw_output="",
+            usage=usage,
+            fallback=fallback,
         )
 
     def sigma_generator(
@@ -227,11 +255,41 @@ class HecateClient:
         out_dir: Path,
         timeout_sec: int | None = None,
     ) -> SigmaResult:
-        from hecate_agent.api import generate_sigma
+        from hecate_agent import api
+
+        generate_with_metrics = getattr(api, "generate_sigma_with_metrics", None)
+        if generate_with_metrics is not None:
+            output, files, metadata = self._with_context(
+                generate_with_metrics,
+                payload=payload,
+                out_dir=out_dir,
+                hunt_id=payload.get("hunt_id"),
+            )
+            usage = LLMUsage.from_metadata(metadata)
+            rules = [
+                {
+                    "logsource_category": rule.logsource_category,
+                    "title": rule.title,
+                    "level": rule.level,
+                    "techniques": rule.techniques,
+                    "rule_yaml": rule.rule_yaml,
+                }
+                for rule in output.rules
+            ]
+            return SigmaResult(
+                success=bool(metadata.get("success", False)),
+                error=metadata.get("error"),
+                warnings=list(metadata.get("warnings") or []),
+                logsources_considered=output.logsources_considered,
+                rejected=output.rejected,
+                files=files,
+                rules=rules,
+                usage=usage,
+            )
 
         def generate() -> Any:
             try:
-                return generate_sigma(
+                return api.generate_sigma(
                     payload=payload, out_dir=out_dir, hunt_id=payload.get("hunt_id")
                 )
             except RuntimeError as exc:

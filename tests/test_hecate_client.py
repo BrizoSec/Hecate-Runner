@@ -83,15 +83,78 @@ _ALL_REJECTED = (
 )
 
 
+_REJECTED = [
+    "file_event: selections match only '.so', which names no particular file, process or host",
+    "process_creation: detection matches on '--query=example.com', which contains the placeholder 'example.com'",
+]
+
+
+def _metrics_result(
+    *, rejected: list[str], error: str | None, success: bool
+) -> tuple[Any, list[Path], dict[str, Any]]:
+    """What Core's generate_sigma_with_metrics returns: output, files, metadata."""
+    from hecate_agent.agents.llm.sigma_generator import SigmaGenerationOutput
+
+    output = SigmaGenerationOutput(logsources_considered=["file_event"], rejected=rejected)
+    return output, [], {"success": success, "error": error, "warnings": []}
+
+
+# --- Core with generate_sigma_with_metrics (the path the client prefers) -----------------
+
+
 def test_every_rule_rejected_is_an_outcome_not_an_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """H-0017: all proposed rules failed validation, and the cycle logged an
     ERROR with a traceback before creating its draft normally."""
+    monkeypatch.setattr(
+        hecate_agent.api,
+        "generate_sigma_with_metrics",
+        lambda payload, out_dir, hunt_id: _metrics_result(
+            rejected=_REJECTED, error="no log source produced a valid rule", success=False
+        ),
+    )
+    client = HecateClient(hecate_bin=Path("hecate-agent"), workspace=tmp_path)
 
+    result = client.sigma_generator({"hunt_id": "H-0017"}, tmp_path / "q")
+
+    assert result.success is False
+    assert result.rules == []
+    assert result.rejected == _REJECTED
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+def test_a_real_sigma_failure_is_reported_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With metrics, Core returns failures in metadata; the orchestrator logs
+    them as a warning and keeps the draft's placeholder query section."""
+    monkeypatch.setattr(
+        hecate_agent.api,
+        "generate_sigma_with_metrics",
+        lambda payload, out_dir, hunt_id: _metrics_result(
+            rejected=[], error="Sigma generation requires an LLM", success=False
+        ),
+    )
+    client = HecateClient(hecate_bin=Path("hecate-agent"), workspace=tmp_path)
+
+    result = client.sigma_generator({"hunt_id": "H-0017"}, tmp_path / "q")
+
+    assert result.success is False
+    assert result.error == "Sigma generation requires an LLM"
+    assert result.rules == []
+
+
+# --- An older Core without it: the generate_sigma fallback -------------------------------
+
+
+def test_fallback_every_rule_rejected_is_an_outcome_not_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     def generate_sigma(payload, out_dir, hunt_id):  # type: ignore[no-untyped-def]
         raise RuntimeError(_ALL_REJECTED)
 
+    monkeypatch.delattr(hecate_agent.api, "generate_sigma_with_metrics", raising=False)
     monkeypatch.setattr(hecate_agent.api, "generate_sigma", generate_sigma)
     client = HecateClient(hecate_bin=Path("hecate-agent"), workspace=tmp_path)
 
@@ -99,19 +162,19 @@ def test_every_rule_rejected_is_an_outcome_not_an_error(
 
     assert result.success is False
     assert result.rules == []
-    assert result.rejected == [
-        "file_event: selections match only '.so', which names no particular file, process or host",
-        "process_creation: detection matches on '--query=example.com', which contains the placeholder 'example.com'",
-    ]
+    assert result.rejected == _REJECTED
     assert not [r for r in caplog.records if r.levelname == "ERROR"]
 
 
-def test_a_real_sigma_failure_still_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fallback_a_real_sigma_failure_still_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from hecate_runner.hecate_client import HecateError
 
     def generate_sigma(payload, out_dir, hunt_id):  # type: ignore[no-untyped-def]
         raise RuntimeError("Sigma generation failed: Sigma generation requires an LLM")
 
+    monkeypatch.delattr(hecate_agent.api, "generate_sigma_with_metrics", raising=False)
     monkeypatch.setattr(hecate_agent.api, "generate_sigma", generate_sigma)
     client = HecateClient(hecate_bin=Path("hecate-agent"), workspace=tmp_path)
 

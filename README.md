@@ -362,6 +362,7 @@ cycle looks wrong:
 
 ```bash
 hecate-runner status     # quota used today, last run, total drafts
+hecate-runner metrics    # stage latency and estimated LLM cost, by CTI source
 hecate-runner doctor     # sanity-check the deployment; non-zero exit if anything is off
 hecate-runner config     # effective settings as JSON, safe to paste into an issue
 hecate-runner parked     # list / show / restore CTI held back by triage
@@ -373,6 +374,13 @@ workspace path, the `hecate-agent` binary, credentials for whichever providers
 are active, and — when `QUERY_PROVIDER=splunk` — that `SPLUNK_HOST`/`SPLUNK_TOKEN`
 are set. It cannot detect an API key that is present and valid but out of quota,
 since that would mean spending a paid call on every run.
+
+Each orchestrator cycle appends stage timings and available LLM usage to
+`logs/stage_metrics.jsonl`. Use `hecate-runner metrics --days 30` to view
+per-stage averages and totals grouped by CTI provider; `--source rss` filters
+to one provider. Cost is an estimate from Hecate's model pricing table, not a
+provider invoice amount. Older Core versions still contribute wall-clock
+timings, while token and cost fields remain unavailable.
 
 `sources reset` re-ingests from a source by rewinding its cursor. Note that
 cursors advance past items the filters skip, so rewinding is also how you revisit
@@ -388,27 +396,6 @@ events an org allowlist or galaxy requirement walked past.
 ### VS Code
 
 Open the folder in VS Code. Recommended extensions live in `.vscode/extensions.json` and will be suggested on first open. Run/debug configs live in `.vscode/launch.json` — pick "Run orchestrator (dry-run)" from the Run panel.
-
-## Roadmap
-
-Done:
-
-- **4a** file-based CTI queue, orchestrator, systemd timer
-- **4b/5** AlienVault OTX provider
-- **4c** RSS/Atom provider, no API key needed (9 verified default feeds; CISA's advisory feed was tried and excluded — it blocks automated requests on every path regardless of User-Agent)
-- **4d** MISP provider, live-verified against a real instance, with galaxy filtering and archive backfill
-- **4e** CISA KEV and abuse.ch ThreatFox providers, both credential-free
-- **4f** intake triage — commentary-shaped CTI is parked rather than drafted or dropped, and is restorable
-- **5b** Slack webhook on draft creation (email still open)
-- **6a** web-search grounding via Tavily, mandatory when enabled — a research failure aborts the cycle rather than falling back to ungrounded
-- **6b** eval harness (`hecate-agent eval`), which is what measured ungrounded generation at ~30% MITRE technique recall and made grounding mandatory rather than a soft fallback
-- **6c** ATT&CK STIX grounding fed into the research skills instead of asking the model to recall technique metadata — closed that ~30% to 100% on the same model
-- **6d** grounding audit written into each draft, plus `hecate-runner audit` to re-grade hunts already on disk
-
-In progress:
-
-- **7a** propose/approve query bridge — guardrails and the approval flow are built and tested; the `splunk` backend is written but has never touched a real SIEM, so `mock` stays the default. Query *authoring* remains human-only.
-- **7b** Level 3 execution — an MCP connector for whichever EDR/SIEM materializes first, so Observe queries can eventually be proposed automatically, still gated by the approval step above
 
 ## License
 

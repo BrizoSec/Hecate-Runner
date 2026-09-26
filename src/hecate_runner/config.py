@@ -442,6 +442,11 @@ class Settings(BaseSettings):
         return self.log_dir / "orchestrator.log"
 
     @property
+    def metrics_file(self) -> Path:
+        """Append-only per-cycle stage metrics used by `hecate-runner metrics`."""
+        return self.log_dir / "stage_metrics.jsonl"
+
+    @property
     def state_file(self) -> Path:
         return self.hecate_workspace / ".orchestrator_state.json"
 

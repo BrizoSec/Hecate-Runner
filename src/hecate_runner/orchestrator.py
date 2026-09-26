@@ -35,6 +35,7 @@ from hecate_runner.hunt_writer import (
     write_draft,
 )
 from hecate_runner.indicator_sweep import build_indicator_sweep, parse_indicator_inventory
+from hecate_runner.metrics import CycleMetrics, MetricsStore
 from hecate_runner.notifications import notify_draft_created
 from hecate_runner.parked_store import park, prune_parked
 from hecate_runner.state import OrchestratorState
@@ -613,6 +614,7 @@ class Orchestrator:
         # Replaced at the start of every cycle; this one only serves callers
         # that use a stage method directly (tests, `_resolve_ttps`).
         self.trail = CycleTrail()
+        self.metrics = CycleMetrics(self.trail.cycle_id)
         # Techniques `_resolve_ttps` dropped for contradicting the hunt's
         # platform, so the later drop step does not call them unknown IDs.
         self._platform_dropped: set[str] = set()
@@ -632,6 +634,8 @@ class Orchestrator:
         log.info("=== Orchestrator cycle starting (dry_run=%s) ===", dry_run)
         state = OrchestratorState.load(self.settings.state_file)
         self.trail = CycleTrail()
+        self.metrics = CycleMetrics(self.trail.cycle_id)
+        result = RunResult(outcome="error", detail="cycle did not complete")
         self.trail.step(
             "start",
             "cycle %s%s; drafts today %d/%d, research runs today %d/%d",
@@ -661,9 +665,22 @@ class Orchestrator:
             log.exception("Cycle failed unexpectedly: %s", exc)
             state.mark_run(success=False)
             self.trail.step("done", "error after %.0fs: %s", self.trail.elapsed, clip(str(exc)))
-            return RunResult(outcome="error", detail=str(exc))
+            result = RunResult(outcome="error", detail=str(exc))
+            return result
         finally:
-            state.save(self.settings.state_file)
+            try:
+                state.save(self.settings.state_file)
+            finally:
+                try:
+                    MetricsStore(self.settings.metrics_file).append(
+                        self.metrics.to_record(
+                            outcome=result.outcome,
+                            hunt_id=result.hunt_id,
+                            research_id=result.research_id,
+                        )
+                    )
+                except Exception as exc:  # telemetry must not change a cycle result
+                    log.warning("Could not persist stage metrics (%s)", exc)
             log.info("=== Orchestrator cycle complete ===")
 
     # --- Internal ----------------------------------------------------------
@@ -691,15 +708,16 @@ class Orchestrator:
             req.grounding_section = previous_section
 
         try:
-            report = audit_draft(
-                draft_text=draft_text,
-                cti_text=item.content,
-                research_text=self._research_text(req.research_id),
-                cti_techniques=[str(t) for t in (item.metadata.get("techniques") or [])],
-                technique_facts=technique_facts,
-                hunt_platforms=list(req.platforms),
-                matched_techniques=self._wording_matched,
-            )
+            with self.metrics.measure("grounding_audit"):
+                report = audit_draft(
+                    draft_text=draft_text,
+                    cti_text=item.content,
+                    research_text=self._research_text(req.research_id),
+                    cti_techniques=[str(t) for t in (item.metadata.get("techniques") or [])],
+                    technique_facts=technique_facts,
+                    hunt_platforms=list(req.platforms),
+                    matched_techniques=self._wording_matched,
+                )
         except Exception as exc:
             log.warning("Grounding audit failed for %s (%s); section left empty.", req.hunt_id, exc)
             return ""
@@ -842,9 +860,13 @@ class Orchestrator:
         )
         sigma_started = self.trail.elapsed
         try:
-            result = self.hecate.sigma_generator(
-                payload, out_dir, timeout_sec=self.settings.sigma_timeout_sec
-            )
+            with self.metrics.measure("sigma_generation") as measured:
+                result = self.hecate.sigma_generator(
+                    payload, out_dir, timeout_sec=self.settings.sigma_timeout_sec
+                )
+                measured.set_usage(result.usage)
+                if not result.success or not result.rules:
+                    measured.set_status("partial")
         except HecateError as exc:
             self.trail.step(
                 "sigma",
@@ -1220,7 +1242,8 @@ class Orchestrator:
         return None, skipped, parked_count
 
     def _run_body(self, state: OrchestratorState, *, dry_run: bool) -> RunResult:
-        item, skipped, parked_count = self._next_actionable_item()
+        with self.metrics.measure("cti_intake"):
+            item, skipped, parked_count = self._next_actionable_item()
         if item is None:
             if skipped:
                 log.info("No actionable CTI this cycle; %d item(s) had nothing to hunt.", skipped)
@@ -1233,6 +1256,7 @@ class Orchestrator:
             return RunResult(outcome="no_cti", parked_count=parked_count)
 
         log.info("Picked up CTI item from %s (%d chars)", item.source, len(item.content))
+        self.metrics.set_source(item.source, item.identifier)
 
         if not state.check_and_reserve_draft(self.settings.max_drafts_per_day):
             log.warning(
@@ -1351,15 +1375,17 @@ class Orchestrator:
             )
 
             try:
-                research_result = self.hecate.research_new(
-                    topic=topic,
-                    technique=technique,
-                    depth=self.settings.research_depth,
-                    timeout_sec=self.settings.llm_timeout_sec,
-                    web_search_enabled=intel_has_narrative,
-                    # The topic is a search label; research needs the report.
-                    source_context=item.content,
-                )
+                with self.metrics.measure("research") as measured:
+                    research_result = self.hecate.research_new(
+                        topic=topic,
+                        technique=technique,
+                        depth=self.settings.research_depth,
+                        timeout_sec=self.settings.llm_timeout_sec,
+                        web_search_enabled=intel_has_narrative,
+                        # The topic is a search label; research needs the report.
+                        source_context=item.content,
+                    )
+                    measured.set_usage(research_result.usage)
             except HecateError as exc:
                 # Cold (ungrounded) generation measured ~30% accuracy on known-
                 # answer fixtures (see `hecate-agent eval`) — a research failure is
@@ -1461,12 +1487,16 @@ class Orchestrator:
                 input_tokens,
             )
             try:
-                hypothesis = self.hecate.hypothesis_generator(
-                    threat_intel=item.content,
-                    research_id=research_id,
-                    timeout_sec=self.settings.llm_timeout_sec,
-                    indicators_only=not intel_has_narrative,
-                )
+                with self.metrics.measure("hypothesis_generation") as measured:
+                    hypothesis = self.hecate.hypothesis_generator(
+                        threat_intel=item.content,
+                        research_id=research_id,
+                        timeout_sec=self.settings.llm_timeout_sec,
+                        indicators_only=not intel_has_narrative,
+                    )
+                    measured.set_usage(hypothesis.usage)
+                    if hypothesis.fallback:
+                        measured.set_status("partial")
             except HecateError as exc:
                 log.error("hecate hypothesis-generator failed: %s", exc)
                 # Refund the quota — the CTI stays in the queue.
@@ -1547,25 +1577,27 @@ class Orchestrator:
         if not sweep_inventory:
             # Research links are stripped: they cite retrieved pages, and a
             # page title is not the intel ("OAuth Traps" proposed T1546.005).
-            candidates = self.hecate.candidate_techniques(
-                "\n".join(
-                    [
-                        item.content,
-                        _LINK_RE.sub(
-                            " ", research_tradecraft_text(self._research_text(research_id))
-                        ),
-                    ]
+            with self.metrics.measure("technique_candidates"):
+                candidates = self.hecate.candidate_techniques(
+                    "\n".join(
+                        [
+                            item.content,
+                            _LINK_RE.sub(
+                                " ", research_tradecraft_text(self._research_text(research_id))
+                            ),
+                        ]
+                    )
                 )
-            )
             self.trail.step(
                 "techniques",
                 "matched in the intel's wording: %s",
                 listing(f"{tid} {name}" for tid, name in candidates),
             )
         self._wording_matched = [tid for tid, _ in candidates]
-        hypothesis.techniques = merge_techniques(
-            [*cti_techniques, *(tid for tid, _ in candidates)], hypothesis.techniques
-        )
+        with self.metrics.measure("technique_validation"):
+            hypothesis.techniques = merge_techniques(
+                [*cti_techniques, *(tid for tid, _ in candidates)], hypothesis.techniques
+            )
         self.trail.step(
             "techniques",
             "model chose %s; CTI asserted %s -> merged %s",
@@ -1573,15 +1605,16 @@ class Orchestrator:
             listing(cti_techniques),
             listing(hypothesis.techniques),
         )
-        hypothesis.techniques = self._drop_unevidenced_techniques(
-            hypothesis.techniques,
-            protected=[*cti_techniques, *(tid for tid, _ in candidates)],
-            cti_text=item.content,
-            # Links stripped, as for the candidates above: a cited page title
-            # is not the intel. "OAuth Traps" in R-0018's sources kept T1546.005
-            # Trap on a Teams vishing hunt.
-            research_text=_LINK_RE.sub(" ", self._research_text(research_id)),
-        )
+        with self.metrics.measure("technique_validation"):
+            hypothesis.techniques = self._drop_unevidenced_techniques(
+                hypothesis.techniques,
+                protected=[*cti_techniques, *(tid for tid, _ in candidates)],
+                cti_text=item.content,
+                # Links stripped, as for the candidates above: a cited page title
+                # is not the intel. "OAuth Traps" in R-0018's sources kept T1546.005
+                # Trap on a Teams vishing hunt.
+                research_text=_LINK_RE.sub(" ", self._research_text(research_id)),
+            )
 
         indicator_types = list((item.metadata.get("indicators") or {}).keys())
         for source in derive_data_sources(hypothesis.techniques, indicator_types):
@@ -1589,16 +1622,17 @@ class Orchestrator:
                 hypothesis.data_sources.append(source)
 
         technique_facts: dict[str, TechniqueFact] = {}
-        tactics, platforms = self._resolve_ttps(
-            hypothesis.techniques,
-            scope_text=" ".join([hypothesis.hypothesis, hypothesis.location]),
-            facts=technique_facts,
-            protected=[*cti_techniques, *(tid for tid, _ in candidates)],
-            asserted=cti_techniques,
-            intel_text="\n".join(
-                [item.content, research_tradecraft_text(self._research_text(research_id))]
-            ),
-        )
+        with self.metrics.measure("attack_lookup"):
+            tactics, platforms = self._resolve_ttps(
+                hypothesis.techniques,
+                scope_text=" ".join([hypothesis.hypothesis, hypothesis.location]),
+                facts=technique_facts,
+                protected=[*cti_techniques, *(tid for tid, _ in candidates)],
+                asserted=cti_techniques,
+                intel_text="\n".join(
+                    [item.content, research_tradecraft_text(self._research_text(research_id))]
+                ),
+            )
 
         # Applied here rather than at merge time: the platform list only
         # exists once the techniques have resolved against the live matrix.
@@ -1696,7 +1730,8 @@ class Orchestrator:
                     related_hunts=related_hunts,
                 )
                 req.grounding_section = self._grounding_section(req, item, technique_facts)
-                path = write_draft(req, self.settings.hunts_root)
+                with self.metrics.measure("draft_write"):
+                    path = write_draft(req, self.settings.hunts_root)
                 self.trail.step("write", "%s written to %s", hunt_id, path)
         except OSError as exc:
             log.error("Failed to allocate/write draft hunt file: %s", exc)
