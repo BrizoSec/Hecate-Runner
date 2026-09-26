@@ -769,3 +769,33 @@ class TestTechniqueNameSupport:
             technique_facts=self.FACTS,
         )
         assert report.claims[0].status == "asserted"
+
+
+def test_a_three_keyword_name_needs_two_of_them_in_the_sources() -> None:
+    """H-0019: T1092 kept on a Tox P2P C2 report because it said "communications"."""
+    cti = "AvisLoader uses the Tox network for command-and-control communications."
+    assert technique_lacks_evidence("T1092", ("Communication Through Removable Media",), cti)
+    assert not technique_lacks_evidence(
+        "T1092", ("Communication Through Removable Media",), cti + " Commands ride removable media."
+    )
+
+
+def test_a_short_name_still_needs_only_one_keyword() -> None:
+    assert not technique_lacks_evidence(
+        "T1547.009", ("Shortcut Modification",), "persistence via a shortcut in Startup"
+    )
+
+
+def test_a_three_keyword_name_is_kept_on_report_wording_alone() -> None:
+    assert not technique_lacks_evidence(
+        "T1218", ("System Binary Proxy Execution",), "the loader runs through rundll32"
+    )
+
+
+def test_container_does_not_match_contains() -> None:
+    """H-0016: T1610 Deploy Container kept on a VeloCloud report that "contains" a flaw."""
+    cti = "VeloCloud Orchestrator deployments contain a critical vulnerability."
+    assert technique_lacks_evidence("T1610", ("Deploy Container",), cti)
+    assert not technique_lacks_evidence(
+        "T1610", ("Deploy Container",), "spawned a new containers stack"
+    )

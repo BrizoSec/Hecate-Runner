@@ -23,6 +23,7 @@ from hecate_runner.indicator_sweep import parse_indicator_inventory
 from hecate_runner.orchestrator import (
     _MAX_SKIPS_PER_CYCLE,
     Orchestrator,
+    attributed_actor,
     derive_data_sources,
     derive_research_topic,
     has_narrative,
@@ -1384,6 +1385,8 @@ def test_draft_never_invents_a_vendor_data_source(
     sample_hypothesis.data_sources = []
     sample_hypothesis.techniques = []
     mock_hecate.hypothesis_generator.return_value = sample_hypothesis
+    # Triage off: with it on, a draft left with no technique and no indicator is parked.
+    settings.cti_triage = "off"
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
         content="RSS: X\nSummary: prose", source="rss", metadata={}
@@ -1419,6 +1422,8 @@ def test_invalid_technique_is_dropped_from_draft(
     """An invented technique ID must be dropped so it doesn't break frontmatter validation."""
     sample_hypothesis.techniques = ["T9999"]
     mock_hecate.hypothesis_generator.return_value = sample_hypothesis
+    # Triage off: with it on, a draft left with no technique and no indicator is parked.
+    settings.cti_triage = "off"
     mock_hecate.lookup_technique.return_value = TechniqueMetadata(technique_id="T9999", found=False)
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
@@ -1660,6 +1665,8 @@ def test_technique_names_from_the_lookup_reach_the_grounding_audit(
     technique's ATT&CK names from the lookup into it. A model pick no source
     describes is now dropped before drafting rather than flagged after, so
     the names surface in the grounding section's dropped line."""
+    # Triage off: with it on, a draft left with no technique and no indicator is parked.
+    settings.cti_triage = "off"
     mock_hecate.lookup_technique.return_value = TechniqueMetadata(
         technique_id="T1003.001",
         tactics=["credential-access"],
@@ -1820,3 +1827,145 @@ def test_triage_off_drafts_what_the_hypothesis_model_calls_commentary(
     orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
 
     assert orch.run_once().outcome == "draft_created"
+
+
+def test_a_draft_with_no_technique_and_no_indicator_is_parked(
+    settings: Settings, mock_hecate: MagicMock, sample_hypothesis: HypothesisResult
+) -> None:
+    """H-0005/H-0006: nothing mapped and nothing to sweep for is not a hunt."""
+    sample_hypothesis.techniques = []
+    mock_hecate.hypothesis_generator.return_value = sample_hypothesis
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="RSS: X\nSummary: prose", source="rss", metadata={}
+    )
+    state_before = OrchestratorState.load(settings.state_file)
+
+    result = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
+
+    assert result.outcome == "parked_no_techniques"
+    assert result.ok
+    assert result.draft_path is None
+    assert not list(settings.hunts_root.rglob("H-*.md"))
+    parked = list_parked(settings.cti_queue_dir_resolved)
+    assert len(parked) == 1
+    assert "no ATT&CK technique" in parked[0].reason
+    provider.acknowledge.assert_called_once()
+    assert OrchestratorState.load(settings.state_file).drafts_today == state_before.drafts_today
+
+
+def test_a_draft_with_no_technique_but_published_indicators_is_still_written(
+    settings: Settings, mock_hecate: MagicMock, sample_hypothesis: HypothesisResult
+) -> None:
+    """H-0014 mapped nothing but carried 18 indicators, and made a useful sweep."""
+    sample_hypothesis.techniques = []
+    mock_hecate.hypothesis_generator.return_value = sample_hypothesis
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="RSS: X\nSummary: prose",
+        source="rss",
+        metadata={"indicators": {"ip-dst": ["104.225.153.141"]}},
+    )
+
+    result = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
+
+    assert result.outcome == "draft_created"
+
+
+def test_an_item_from_an_already_drafted_source_is_parked_before_research(
+    settings: Settings, mock_hecate: MagicMock
+) -> None:
+    """H-0011 and H-0017 were drafted a day apart from one MISP event."""
+    url = "https://misp.example/events/view/1816"
+    earlier = settings.hunts_root / "2026" / "Q3" / "H-0011.md"
+    earlier.parent.mkdir(parents=True, exist_ok=True)
+    earlier.write_text(f"- **CTI Sources & References:** [{url}]({url})\n")
+    provider = MagicMock()
+    provider.next_item.side_effect = [
+        CTIItem(
+            content="MISP Event: Kunai\nSummary: DNS exfiltration via open resolvers",
+            source="misp",
+            title="Kunai",
+            source_url=url,
+        ),
+        None,
+    ]
+
+    result = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
+
+    assert result.outcome == "no_actionable_cti"
+    mock_hecate.research_new.assert_not_called()
+    mock_hecate.hypothesis_generator.assert_not_called()
+    parked = list_parked(settings.cti_queue_dir_resolved)
+    assert len(parked) == 1
+    assert "already drafted as H-0011" in parked[0].reason
+
+
+def test_an_item_from_a_new_source_is_not_held_back_by_other_drafts(
+    settings: Settings, mock_hecate: MagicMock
+) -> None:
+    earlier = settings.hunts_root / "2026" / "Q3" / "H-0011.md"
+    earlier.parent.mkdir(parents=True, exist_ok=True)
+    earlier.write_text("- **CTI Sources & References:** [https://a.test/1](https://a.test/1)\n")
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="APT actor X observed dumping LSASS via comsvcs.dll on Windows endpoints.",
+        source="rss",
+        source_url="https://a.test/10",
+    )
+
+    result = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
+
+    assert result.outcome == "draft_created"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("OTX Pulse: X\nAdversary/Attribution: TraderTraitor\nTags: dprk", "TraderTraitor"),
+        ("OTX Pulse: X\nAdversary/Attribution: Unknown\n", ""),
+        ("MISP Event: X\nOrg: CIRCL\n", ""),
+    ],
+)
+def test_attributed_actor_reads_the_publishers_attribution(content: str, expected: str) -> None:
+    assert attributed_actor(content) == expected
+
+
+def test_the_intels_attribution_fills_an_empty_actor_cell(
+    settings: Settings, mock_hecate: MagicMock, sample_hypothesis: HypothesisResult
+) -> None:
+    sample_hypothesis.actor = ""
+    mock_hecate.hypothesis_generator.return_value = sample_hypothesis
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="OTX Pulse: DarkMe\nAdversary/Attribution: Water Hydra\nDescription: prose",
+        source="otx",
+    )
+
+    content = (
+        Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+        .run_once()
+        .draft_path.read_text()
+    )
+
+    assert "| **Actor** | Water Hydra |" in content
+
+
+def test_the_models_actor_is_not_overwritten_by_the_attribution(
+    settings: Settings, mock_hecate: MagicMock, sample_hypothesis: HypothesisResult
+) -> None:
+    sample_hypothesis.actor = "Lazarus (TraderTraitor subgroup)"
+    mock_hecate.hypothesis_generator.return_value = sample_hypothesis
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="OTX Pulse: X\nAdversary/Attribution: TraderTraitor\nDescription: prose",
+        source="otx",
+    )
+
+    content = (
+        Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider)
+        .run_once()
+        .draft_path.read_text()
+    )
+
+    assert "| **Actor** | Lazarus (TraderTraitor subgroup) |" in content

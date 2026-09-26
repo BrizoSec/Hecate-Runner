@@ -427,6 +427,26 @@ def derive_research_topic(cti_content: str, title: str | None = None) -> tuple[s
     return topic or "Untitled CTI", technique
 
 
+_ATTRIBUTION_RE = re.compile(r"^\s*Adversary/Attribution:\s*(.+?)\s*$", re.MULTILINE)
+_NO_ATTRIBUTION = frozenset({"unknown", "none", "n/a", "unattributed", "-"})
+
+
+def attributed_actor(cti_content: str) -> str:
+    """The actor the intel's own attribution line names, or "".
+
+    OTX pulses carry an ``Adversary/Attribution:`` line, and the hypothesis
+    model left the ABLE Actor cell empty even when it named TraderTraitor
+    (H-0007) or Water Hydra (H-0012). The publisher's attribution is the
+    source's claim, not an inference, so it fills the cell only when the
+    model offered nothing.
+    """
+    match = _ATTRIBUTION_RE.search(cti_content)
+    if not match:
+        return ""
+    value = match.group(1).strip()
+    return "" if value.lower() in _NO_ATTRIBUTION else value
+
+
 def has_narrative(cti_content: str) -> bool:
     """Whether ``cti_content`` carries substance beyond a bare indicator dump.
 
@@ -573,6 +593,7 @@ class RunResult:
             "research_quota_reached",
             "parked_after_research",
             "parked_after_hypothesis",
+            "parked_no_techniques",
         }
 
 
@@ -1081,6 +1102,27 @@ class Orchestrator:
             return False
         return True
 
+    def _drafted_from_same_source(self, item: CTIItem) -> str | None:
+        """The hunt already drafted from this item's source link, if any.
+
+        H-0011 and H-0017 were both drafted from one MISP event (Kunai, open
+        recursive DNS), a day apart, when the event reappeared on the feed.
+        The second draft cost a research run and a review for nothing the
+        first did not already say. Matched on the rendered references link,
+        which every draft writes, so no separate index has to be kept in step.
+        """
+        url = item.source_url.strip()
+        if not url:
+            return None
+        needle = f"]({url})"
+        for path in sorted(self.settings.hunts_root.rglob("H-*.md")):
+            try:
+                if needle in path.read_text(encoding="utf-8"):
+                    return path.stem
+            except OSError:
+                continue
+        return None
+
     def _next_actionable_item(self) -> tuple[CTIItem | None, int, int]:
         """The next CTI item worth drafting, and how many were walked past, and how many parked.
 
@@ -1118,16 +1160,27 @@ class Orchestrator:
             )
             if is_actionable(item.content):
                 verdict = triage(item) if self.settings.cti_triage == "park" else None
-                if verdict is None or not verdict.park:
-                    self.trail.step(
-                        "triage",
-                        "pass (%s)",
-                        "triage off"
-                        if verdict is None
-                        else "no commentary category or title shape",
+                if verdict is not None and verdict.park:
+                    reason = verdict.reason
+                else:
+                    earlier = (
+                        self._drafted_from_same_source(item)
+                        if self.settings.cti_triage == "park"
+                        else None
                     )
-                    return item, skipped, parked_count
-                self.trail.step("triage", "park: %s", verdict.reason)
+                    if earlier is None:
+                        self.trail.step(
+                            "triage",
+                            "pass (%s)",
+                            "triage off"
+                            if verdict is None
+                            else "no commentary category or title shape",
+                        )
+                        return item, skipped, parked_count
+                    reason = (
+                        f"already drafted as {earlier} from the same source ({item.source_url})"
+                    )
+                self.trail.step("triage", "park: %s", reason)
                 # Held back, not dropped: the cursor has already moved past
                 # this item, so the copy written here is the only one left.
                 skipped += 1
@@ -1136,10 +1189,10 @@ class Orchestrator:
                     "Parking CTI item from %s (%s): %s",
                     item.source,
                     item.title[:60] or "untitled",
-                    verdict.reason,
+                    reason,
                 )
                 try:
-                    park(self.settings.cti_queue_dir_resolved, item, verdict.reason)
+                    park(self.settings.cti_queue_dir_resolved, item, reason)
                 except OSError as exc:
                     # Parking is the whole safety net. If it cannot be written,
                     # draft the item rather than losing it.
@@ -1524,7 +1577,10 @@ class Orchestrator:
             hypothesis.techniques,
             protected=[*cti_techniques, *(tid for tid, _ in candidates)],
             cti_text=item.content,
-            research_text=self._research_text(research_id),
+            # Links stripped, as for the candidates above: a cited page title
+            # is not the intel. "OAuth Traps" in R-0018's sources kept T1546.005
+            # Trap on a Teams vishing hunt.
+            research_text=_LINK_RE.sub(" ", self._research_text(research_id)),
         )
 
         indicator_types = list((item.metadata.get("indicators") or {}).keys())
@@ -1584,6 +1640,46 @@ class Orchestrator:
         if unknown:
             self.trail.step("techniques", "dropped IDs not in ATT&CK: %s", listing(unknown))
         hypothesis.techniques = kept_techniques
+
+        # Nothing left to hunt: no technique survived the evidence and matrix
+        # checks, and the intel published no indicator to sweep for. H-0005,
+        # H-0006 and H-0014 reached review with an empty ATT&CK mapping;
+        # H-0014 still carried 18 indicators and made a useful sweep, the
+        # other two carried nothing and were closed unread.
+        if (
+            self.settings.cti_triage == "park"
+            and not hypothesis.techniques
+            and not sweep_inventory
+            and not (item.metadata.get("indicators") or {})
+        ):
+            reason = "no ATT&CK technique survived grounding and the intel names no indicators"
+            try:
+                park(self.settings.cti_queue_dir_resolved, item, reason)
+            except OSError as exc:
+                log.warning("Could not park CTI item (%s); drafting it instead.", exc)
+            else:
+                self.trail.step("techniques", "park: %s; draft slot refunded", reason)
+                log.info(
+                    "Parking CTI item from %s (%s): %s",
+                    item.source,
+                    item.title[:60] or "untitled",
+                    reason,
+                )
+                state.drafts_today -= 1
+                state.total_drafts_ever -= 1
+                self._advance_past(item)
+                return RunResult(
+                    outcome="parked_no_techniques",
+                    detail=reason,
+                    research_id=research_id,
+                    parked_count=parked_count + 1,
+                )
+
+        if not hypothesis.actor.strip():
+            attributed = attributed_actor(item.content)
+            if attributed:
+                self.trail.step("scope", "actor from the intel's attribution: %s", attributed)
+                hypothesis.actor = attributed
 
         try:
             with hunt_id_lock(self.settings.hunts_root):

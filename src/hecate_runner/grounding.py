@@ -555,11 +555,19 @@ _SUFFIXES = ("ation", "ated", "ating", "ing", "ion", "ed", "er", "e")
 _LONG_ROOT_SUFFIXES = frozenset({"ation", "ion"})
 
 
+#: Words whose suffix is part of the meaning: "container" stemmed to
+#: "contain" and matched every "contains", which kept T1610 Deploy Container
+#: on H-0016, a VeloCloud appliance exploit with no container in it.
+_WHOLE_STEMS = frozenset({"container"})
+
+
 def _stem(word: str) -> str:
     """Reduce a word to the form its variants share ("containers" ->
     "contain", "obfuscation" -> "obfusc")."""
     if word.endswith("s") and not word.endswith("ss") and len(word) - 1 >= 4:
         word = word[:-1]
+    if word in _WHOLE_STEMS:
+        return word
     for suffix in _SUFFIXES:
         floor = 5 if suffix in _LONG_ROOT_SUFFIXES else 4
         if word.endswith(suffix) and len(word) - len(suffix) >= floor:
@@ -588,30 +596,48 @@ _REPORT_WORDING = {
 }
 
 
+def _one_name_stems(name: str) -> set[str]:
+    return {
+        _stem(word)
+        for word in _WORD_RE.findall(name.lower())
+        if len(word) >= 4 and word not in _GENERIC_NAME_WORDS
+    }
+
+
 def _name_stems(names: tuple[str, ...], technique_id: str = "") -> set[str]:
     stems = {_stem(w) for w in _REPORT_WORDING.get(technique_id.split(".")[0], ())}
     for name in names:
-        for word in _WORD_RE.findall(name.lower()):
-            if len(word) >= 4 and word not in _GENERIC_NAME_WORDS:
-                stems.add(_stem(word))
+        stems |= _one_name_stems(name)
     return stems
 
 
 def _names_unsupported(
     names: tuple[str, ...], evidence_words: set[str], technique_id: str = ""
 ) -> bool:
-    """True when a technique's names carry keywords and no source uses any of them.
+    """True when a technique's names carry keywords and no source uses enough of them.
 
-    Deliberately lenient -- one shared keyword is enough -- because this can
-    only tell "the sources never mention this behaviour" from "they might".
-    A name made entirely of generic words cannot be judged and is let through.
+    Deliberately lenient, because this can only tell "the sources never
+    mention this behaviour" from "they might": one shared keyword is enough
+    for a name of one or two keywords, and any report wording in
+    ``_REPORT_WORDING`` is enough on its own. A name of three or more
+    keywords needs two, because one of them is often an everyday word: T1092
+    "Communication Through Removable Media" was kept on H-0019, a Tox P2P C2
+    report, because it said "communications". A name made entirely of
+    generic words cannot be judged and is let through.
     """
     if not names:
         return False
-    stems = _name_stems(names, technique_id)
-    if not stems:
+    if not _name_stems(names, technique_id):
         return False
-    return not stems & {_stem(word) for word in evidence_words}
+    evidence = {_stem(word) for word in evidence_words}
+    wording = {_stem(w) for w in _REPORT_WORDING.get(technique_id.split(".")[0], ())}
+    if wording & evidence:
+        return False
+    for name in names:
+        stems = _one_name_stems(name)
+        if stems and len(stems & evidence) >= (2 if len(stems) >= 3 else 1):
+            return False
+    return True
 
 
 def technique_lacks_evidence(
