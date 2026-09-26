@@ -28,13 +28,13 @@ from typing import Annotated
 
 import typer
 from dotenv import dotenv_values
+from hecate_agent.core.grounding import TechniqueFact, render_grounding_section
 from rich.console import Console
 from rich.table import Table
 
 from hecate_runner import __version__
 from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.config import Settings
-from hecate_agent.core.grounding import TechniqueFact, render_grounding_section
 from hecate_runner.hecate_client import HecateClient
 from hecate_runner.hunt_audit import (
     HuntFacts,

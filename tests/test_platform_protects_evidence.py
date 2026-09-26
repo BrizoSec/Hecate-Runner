@@ -13,10 +13,10 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from hecate_agent.core.grounding import TechniqueFact
 
 from hecate_runner.config import Settings
 from hecate_runner.cti.base import CTIItem
-from hecate_agent.core.grounding import TechniqueFact
 from hecate_runner.hecate_client import HypothesisResult, TechniqueMetadata
 from hecate_runner.orchestrator import Orchestrator
 from hecate_runner.trail import LOGGER_NAME
