@@ -291,18 +291,36 @@ _DATA_SOURCE_RESTATEMENTS = frozenset(
 )
 
 
+#: Template values the model writes in place of an observation. H-0018 listed
+#: `C:\path\to\malware.ps1`, `C:\path\to\rat.exe` and
+#: `http://maliciousdomain.com/malware.bin` as what suspicious looks like; they
+#: read as indicators, and the Sigma step, which is handed the observables,
+#: wrote the first into a rule.
+_PLACEHOLDER_OBSERVABLE_RE = re.compile(
+    r"[\\/]path[\\/]to[\\/]"
+    r"|\b(?:malicious-?domain|your-?domain|attacker-?domain)\b"
+    r"|\bexample\.(?:com|org|net|test)\b"
+    r"|(?:^|[\\/\s])(?:malware|malicious|rat|evil|badfile|payload)\.(?:exe|dll|ps1|bin|sh|bat|vbs|js|msi)\b"
+    r"|<[a-z][a-z _-]*>",
+    re.IGNORECASE,
+)
+
+
 def substantive_observables(observables: list[str]) -> list[str]:
-    """Drop "observables" that only restate the telemetry category.
+    """Drop "observables" that restate the telemetry category or are templates.
 
     Kept deliberately narrow: an entry is dropped only when the whole string is
-    a bare category name. "Process execution of an unsigned binary from
-    /tmp" describes something a hunter can look for and stays.
+    a bare category name, or it contains a template value. "Process execution
+    of an unsigned binary from /tmp" describes something a hunter can look for
+    and stays.
     """
     kept: list[str] = []
     for observable in observables:
         text = str(observable).strip()
         normalised = text.lower().rstrip(".").replace("_", " ")
         if normalised in _DATA_SOURCE_RESTATEMENTS:
+            continue
+        if _PLACEHOLDER_OBSERVABLE_RE.search(text):
             continue
         if text:
             kept.append(text)
@@ -1544,7 +1562,7 @@ class Orchestrator:
         kept_observables = substantive_observables(hypothesis.observables)
         if kept_observables != hypothesis.observables:
             log.info(
-                "Dropped %d observable(s) that only restated a telemetry category",
+                "Dropped %d observable(s) that restated a telemetry category or were templates",
                 len(hypothesis.observables) - len(kept_observables),
             )
         hypothesis.observables = kept_observables or ["[none proposed - human to populate]"]

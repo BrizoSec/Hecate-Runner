@@ -1633,6 +1633,23 @@ class TestSubstantiveObservables:
     def test_blank_entries_are_dropped(self):
         assert substantive_observables(["", "   "]) == []
 
+    def test_template_values_are_dropped(self):
+        """H-0018's "What Suspicious Looks Like", which a Sigma rule then copied."""
+        observables = [
+            "powershell.exe -ExecutionPolicy Bypass -File C:\\path\\to\\malware.ps1",
+            "C:\\path\\to\\rat.exe",
+            "http://maliciousdomain.com/malware.bin",
+            "DNS query to <attacker domain>",
+            "Teams call from an external tenant followed by quick assist.exe launch",
+        ]
+        assert substantive_observables(observables) == [
+            "Teams call from an external tenant followed by quick assist.exe launch"
+        ]
+
+    def test_real_paths_and_names_are_kept(self):
+        observables = ["C:\\ProgramData\\USOShared\\svchost.exe", "curl to /tmp/.x/payload_v2"]
+        assert substantive_observables(observables) == observables
+
 
 def test_technique_names_from_the_lookup_reach_the_grounding_audit(
     settings: Settings,
