@@ -86,6 +86,35 @@ _PLATFORM_MENTIONS: dict[str, str] = {
     "iaas": "IaaS",
 }
 
+#: Artifacts that exist on one platform only, read from the *intel* (never the
+#: hypothesis) when the hypothesis names no platform. DarkMe's pulse never says
+#: "Windows", but it describes PIF executables, MSI installers and COM objects;
+#: without these the draft was scoped to every platform its techniques run on,
+#: ESXi and SaaS included. Each entry must be unambiguous: "bash" and "cron"
+#: run on both Linux and macOS, so they are absent.
+_PLATFORM_ARTIFACTS: dict[str, str] = {
+    "powershell": "Windows",
+    "msiexec": "Windows",
+    "msi": "Windows",
+    "rundll32": "Windows",
+    "regsvr32": "Windows",
+    "mshta": "Windows",
+    "wmic": "Windows",
+    "lsass": "Windows",
+    "exe": "Windows",
+    "dll": "Windows",
+    "pif": "Windows",
+    "lnk": "Windows",
+    "hta": "Windows",
+    "launchdaemon": "macOS",
+    "launchagent": "macOS",
+    "applescript": "macOS",
+    "osascript": "macOS",
+    "gatekeeper": "macOS",
+    "elf": "Linux",
+    "systemd": "Linux",
+}
+
 #: Telemetry a technique implies, by ID prefix so sub-techniques inherit. Uses
 #: the same four category names the research document and hypothesis agent
 #: already speak, so a derived source and a model-proposed one are comparable.
@@ -171,6 +200,28 @@ def research_tradecraft_text(research_doc: str) -> str:
     """
     match = _TRADECRAFT_SECTION_RE.search(research_doc or "")
     return match.group(1) if match else ""
+
+
+#: A markdown link or a bare URL. Research lists the pages its web search
+#: returned, and their titles are not the intel: R-0012's list carried a
+#: Kubernetes article and a Linux rule link, which scoped a Windows DLL
+#: hijacking hunt to Linux and Containers too.
+_LINK_RE = re.compile(r"\[[^\]]*\]\([^)]*\)|https?://\S+")
+
+
+def platforms_evidenced_in(*texts: str) -> list[str]:
+    """Platforms the intel names outright or implies by a platform-only artifact.
+
+    Links and URLs are ignored: they cite where something was read, not where
+    the activity happened.
+    """
+    texts = tuple(_LINK_RE.sub(" ", t) for t in texts if t)
+    named = platforms_named_in(*texts)
+    haystack = " ".join(texts).lower()
+    for artifact, platform in _PLATFORM_ARTIFACTS.items():
+        if platform not in named and re.search(r"\b" + re.escape(artifact) + r"\b", haystack):
+            named.append(platform)
+    return named
 
 
 def platforms_named_in(*texts: str) -> list[str]:
@@ -831,8 +882,13 @@ class Orchestrator:
         scope_text: str = "",
         facts: dict[str, TechniqueFact] | None = None,
         protected: list[str] | None = None,
+        intel_text: str = "",
     ) -> tuple[list[str], list[str]]:
         """Derive real tactics/platforms for a hypothesis's techniques.
+
+        ``intel_text`` (the CTI and research tradecraft) scopes the hunt when
+        the hypothesis names no platform: what the intel names or implies
+        outranks the union of everywhere the techniques could run.
 
         ``protected`` are techniques the intelligence itself supports -- ones
         the CTI asserted or whose names its wording uses. The hypothesis's
@@ -897,6 +953,7 @@ class Orchestrator:
         # "compromised Windows systems". Normally only narrows -- a claimed
         # platform that a source-asserted technique contradicts is ignored.
         claimed = platforms_named_in(scope_text)
+        claimant = "the hypothesis"
         self._platform_dropped = set()
         shielded = {t.upper() for t in (protected or [])}
         self.trail.step(
@@ -905,6 +962,16 @@ class Orchestrator:
             listing(platforms, "no narrow platform"),
             listing(claimed),
         )
+        # A hypothesis sentence often names no platform at all ("Adversaries
+        # use phishing campaigns to deliver VB6 malware"), and the union of
+        # everywhere its techniques run is then nearly every platform ATT&CK
+        # has. The intel usually says, or shows by its artifacts, where the
+        # activity happened.
+        if not claimed and intel_text:
+            claimed = platforms_evidenced_in(intel_text)
+            claimant = "the intel"
+            if claimed:
+                self.trail.step("scope", "intel names or implies %s", listing(claimed))
         if claimed:
             scoped = [p for p in platforms if p in claimed]
             # If the resolved techniques have ZERO overlap with what was claimed
@@ -914,13 +981,12 @@ class Orchestrator:
             if not scoped:
                 self.trail.step(
                     "scope",
-                    "no overlap: trusting the hypothesis (%s) over the techniques",
+                    "no overlap: trusting %s (%s) over the techniques",
+                    claimant,
                     listing(claimed),
                 )
             elif scoped != platforms:
-                self.trail.step(
-                    "scope", "narrowed to what the hypothesis names: %s", listing(scoped)
-                )
+                self.trail.step("scope", "narrowed to what %s names: %s", claimant, listing(scoped))
 
             # Evidence-backed techniques first: they widen the platform list
             # rather than being dropped. H-0014's CTI said "PowerShell-based
@@ -1421,6 +1487,9 @@ class Orchestrator:
             scope_text=" ".join([hypothesis.hypothesis, hypothesis.location]),
             facts=technique_facts,
             protected=[*cti_techniques, *(tid for tid, _ in candidates)],
+            intel_text="\n".join(
+                [item.content, research_tradecraft_text(self._research_text(research_id))]
+            ),
         )
 
         # Applied here rather than at merge time: the platform list only

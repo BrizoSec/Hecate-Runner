@@ -28,6 +28,7 @@ from hecate_runner.orchestrator import (
     has_narrative,
     merge_techniques,
     platform_consistent_data_sources,
+    platforms_evidenced_in,
     platforms_named_in,
     substantive_observables,
 )
@@ -1254,6 +1255,71 @@ def test_resolve_ttps_keeps_the_union_when_nothing_is_claimed(
     orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
     _, platforms = orch._resolve_ttps(["T1059"], scope_text="")
     assert platforms == ["Linux", "Windows"]
+
+
+def test_platforms_evidenced_in_reads_platform_only_artifacts() -> None:
+    """DarkMe's pulse never says "Windows"; its PIF and MSI payloads do."""
+    darkme = "delivered PIF executables. The attack chain utilized MSI installers, VB6 loaders"
+    assert platforms_evidenced_in(darkme) == ["Windows"]
+    assert platforms_evidenced_in("sideloads a malicious mscoree.dll") == ["Windows"]
+    assert platforms_evidenced_in("persisted via a LaunchDaemon plist") == ["macOS"]
+    assert platforms_evidenced_in("a cron job running a bash script") == []
+
+
+def test_platforms_evidenced_in_ignores_cited_links() -> None:
+    """R-0012 cited a Kubernetes article; the hunt is a Windows DLL hijack."""
+    research = (
+        "The ClickFix campaign sideloads a malicious mscoree.dll.\n"
+        "- [Correlate Kubernetes audit logs with container runtime data]"
+        "(https://www.elastic.co/security-labs/kubernetes-audit-logs-container-escape)\n"
+        "- https://detection.fyi/elastic/detection-rules/linux/ld_preload"
+    )
+    assert platforms_evidenced_in(research) == ["Windows"]
+
+
+_BROAD_T1036 = TechniqueMetadata(
+    technique_id="T1036",
+    tactics=["stealth"],
+    platforms=["Containers", "ESXi", "Linux", "macOS", "Windows"],
+    found=True,
+)
+
+
+def test_resolve_ttps_scopes_to_the_intel_when_the_hypothesis_names_no_platform(
+    settings: Settings, mock_hecate: MagicMock
+) -> None:
+    """The 26 Sep DarkMe rerun: no platform in the hypothesis sentence, so the
+    draft took all nine platforms its techniques run on."""
+    mock_hecate.lookup_technique.return_value = _BROAD_T1036
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
+    _, platforms = orch._resolve_ttps(
+        ["T1036"],
+        scope_text="Adversaries use phishing to deliver VB6 malware",
+        intel_text="Victims received links that delivered PIF executables and MSI installers.",
+    )
+    assert platforms == ["Windows"]
+
+
+def test_resolve_ttps_prefers_the_hypothesis_claim_over_the_intel(
+    settings: Settings, mock_hecate: MagicMock
+) -> None:
+    mock_hecate.lookup_technique.return_value = _BROAD_T1036
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
+    _, platforms = orch._resolve_ttps(
+        ["T1036"], scope_text="on Linux servers", intel_text="dropped a .exe via PowerShell"
+    )
+    assert platforms == ["Linux"]
+
+
+def test_resolve_ttps_keeps_the_union_when_neither_names_a_platform(
+    settings: Settings, mock_hecate: MagicMock
+) -> None:
+    mock_hecate.lookup_technique.return_value = _BROAD_T1036
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
+    _, platforms = orch._resolve_ttps(
+        ["T1036"], scope_text="", intel_text="The VCO web interface was exploited remotely."
+    )
+    assert platforms == _BROAD_T1036.platforms
 
 
 def test_resolve_ttps_rejects_hallucinated_technique_when_claim_is_explicit(
