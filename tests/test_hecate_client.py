@@ -72,3 +72,48 @@ def test_describes_behavior_reads_the_telemetry_verdict(
         hecate_agent.api, "generate_research", lambda **kw: (_output(findings), Path("r.md"))
     )
     assert client.research_new(topic="t").describes_behavior is expected
+
+
+# --- sigma_generator ---------------------------------------------------------
+
+_ALL_REJECTED = (
+    "Sigma generation failed: no log source produced a valid rule: "
+    "file_event: selections match only '.so', which names no particular file, process or host; "
+    "process_creation: detection matches on '--query=example.com', which contains the placeholder 'example.com'"
+)
+
+
+def test_every_rule_rejected_is_an_outcome_not_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """H-0017: all proposed rules failed validation, and the cycle logged an
+    ERROR with a traceback before creating its draft normally."""
+
+    def generate_sigma(payload, out_dir, hunt_id):  # type: ignore[no-untyped-def]
+        raise RuntimeError(_ALL_REJECTED)
+
+    monkeypatch.setattr(hecate_agent.api, "generate_sigma", generate_sigma)
+    client = HecateClient(hecate_bin=Path("hecate-agent"), workspace=tmp_path)
+
+    result = client.sigma_generator({"hunt_id": "H-0017"}, tmp_path / "q")
+
+    assert result.success is False
+    assert result.rules == []
+    assert result.rejected == [
+        "file_event: selections match only '.so', which names no particular file, process or host",
+        "process_creation: detection matches on '--query=example.com', which contains the placeholder 'example.com'",
+    ]
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+def test_a_real_sigma_failure_still_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from hecate_runner.hecate_client import HecateError
+
+    def generate_sigma(payload, out_dir, hunt_id):  # type: ignore[no-untyped-def]
+        raise RuntimeError("Sigma generation failed: Sigma generation requires an LLM")
+
+    monkeypatch.setattr(hecate_agent.api, "generate_sigma", generate_sigma)
+    client = HecateClient(hecate_bin=Path("hecate-agent"), workspace=tmp_path)
+
+    with pytest.raises(HecateError):
+        client.sigma_generator({"hunt_id": "H-0017"}, tmp_path / "q")

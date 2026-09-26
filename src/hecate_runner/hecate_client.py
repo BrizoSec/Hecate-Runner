@@ -6,6 +6,7 @@ import importlib.util
 import inspect
 import logging
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +18,12 @@ log = logging.getLogger(__name__)
 #: Hecate's research writes this as skill 3's only finding when it judges the
 #: source to describe no adversary behavior (``_NO_TELEMETRY_KEY_FINDING``).
 _NO_BEHAVIOR_FINDING = "No telemetry mapped - the source describes no behavior"
+
+#: How Hecate's Sigma API reports that every proposed rule was rejected
+#: (``SigmaGeneratorAgent.execute``), with the reasons joined by "; ".
+_NO_VALID_RULE_RE = re.compile(
+    r"Sigma generation failed: no log source produced a valid rule: (.*)\Z", re.S
+)
 
 
 @dataclass
@@ -222,12 +229,30 @@ class HecateClient:
     ) -> SigmaResult:
         from hecate_agent.api import generate_sigma
 
-        output, files = self._with_context(
-            generate_sigma,
-            payload=payload,
-            out_dir=out_dir,
-            hunt_id=payload.get("hunt_id"),
-        )
+        def generate() -> Any:
+            try:
+                return generate_sigma(
+                    payload=payload, out_dir=out_dir, hunt_id=payload.get("hunt_id")
+                )
+            except RuntimeError as exc:
+                # Every proposed rule failed validation: an outcome, not a
+                # fault. Raised, it reached `_with_context` and was logged as
+                # an ERROR with a traceback on a cycle that then created its
+                # draft normally -- and the rejection reasons were lost.
+                reasons = _NO_VALID_RULE_RE.match(str(exc))
+                if reasons is None:
+                    raise
+                return SigmaResult(
+                    success=False,
+                    error="no log source produced a valid rule",
+                    warnings=[],
+                    rejected=[r for r in reasons.group(1).split("; ") if r],
+                )
+
+        generated = self._with_context(generate)
+        if isinstance(generated, SigmaResult):
+            return generated
+        output, files = generated
         rules = [
             {
                 "logsource_category": r.logsource_category,
