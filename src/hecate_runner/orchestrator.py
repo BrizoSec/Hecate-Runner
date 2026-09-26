@@ -740,7 +740,7 @@ class Orchestrator:
                 len(report.unsupported),
                 ", ".join(c.value for c in report.unsupported),
             )
-        section = render_grounding_section(report)
+        section: str = render_grounding_section(report)
         if self._unevidenced_dropped:
             section += (
                 "\n> Dropped before drafting, because the model proposed them and nothing "

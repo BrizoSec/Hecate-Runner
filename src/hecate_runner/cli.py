@@ -672,7 +672,9 @@ def metrics(
             str(row["errors"]),
         )
     console.print(table)
-    console.print("Estimated cost uses Core's model pricing table; it may differ from provider invoices.")
+    console.print(
+        "Estimated cost uses Core's model pricing table; it may differ from provider invoices."
+    )
 
 
 parked_app = typer.Typer(help="Inspect and restore CTI held back by intake triage.")

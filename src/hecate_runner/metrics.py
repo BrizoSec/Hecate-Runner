@@ -7,10 +7,11 @@ import logging
 import os
 import time
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Literal
 
 log = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ class StageMeasurement:
     def __enter__(self) -> StageMeasurement:
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> Literal[False]:
         if exc is not None:
             self.status = "error"
             if self.usage is None:
@@ -242,7 +243,12 @@ class MetricsStore:
                         },
                     )
                     combined["duration_ms"] += int(item.get("duration_ms") or 0)
-                    for field_name in ("llm_calls", "input_tokens", "output_tokens", "llm_duration_ms"):
+                    for field_name in (
+                        "llm_calls",
+                        "input_tokens",
+                        "output_tokens",
+                        "llm_duration_ms",
+                    ):
                         value = item.get(field_name)
                         if value is not None:
                             combined[field_name] += int(value)
@@ -259,7 +265,12 @@ class MetricsStore:
                     aggregate["cycles"] += 1
                     aggregate["duration_ms"] += stage["duration_ms"]
                     aggregate["usage_samples"] += int(stage["usage_known"])
-                    for field_name in ("llm_calls", "input_tokens", "output_tokens", "llm_duration_ms"):
+                    for field_name in (
+                        "llm_calls",
+                        "input_tokens",
+                        "output_tokens",
+                        "llm_duration_ms",
+                    ):
                         aggregate[field_name] += stage[field_name]
                     if stage["cost_known"]:
                         aggregate["estimated_cost_usd"] += stage["estimated_cost_usd"]
@@ -282,11 +293,11 @@ class MetricsStore:
                     "llm_calls": values["llm_calls"] if values["usage_samples"] else None,
                     "input_tokens": values["input_tokens"] if values["usage_samples"] else None,
                     "output_tokens": values["output_tokens"] if values["usage_samples"] else None,
-                    "llm_duration_ms": values["llm_duration_ms"] if values["usage_samples"] else None,
+                    "llm_duration_ms": values["llm_duration_ms"]
+                    if values["usage_samples"]
+                    else None,
                     "estimated_cost_usd": (
-                        round(values["estimated_cost_usd"], 6)
-                        if values["cost_samples"]
-                        else None
+                        round(values["estimated_cost_usd"], 6) if values["cost_samples"] else None
                     ),
                     "cost_samples": values["cost_samples"],
                     "models": sorted(values["models"]),
