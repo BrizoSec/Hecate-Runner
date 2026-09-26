@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 from hecate_runner.hecate_client import HypothesisResult
+from hecate_agent.core.hunt_ids import hunt_id_lock, next_hunt_id
 from hecate_runner.hunt_writer import (
     DraftHuntRequest,
     _draft_tags,
@@ -20,8 +21,6 @@ from hecate_runner.hunt_writer import (
     _title_scalar,
     draft_hunt_path,
     embedded_cti,
-    hunt_id_lock,
-    next_hunt_id,
     render_draft,
     write_draft,
 )

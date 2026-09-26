@@ -20,17 +20,16 @@ from hecate_runner.config import Settings
 from hecate_runner.context_metrics import measure_tokens
 from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider, get_provider
 from hecate_runner.cti_triage import triage
-from hecate_runner.grounding import (
+from hecate_agent.core.grounding import (
     TechniqueFact,
     audit_draft,
     render_grounding_section,
     technique_lacks_evidence,
 )
 from hecate_runner.hecate_client import HecateClient, HecateError
+from hecate_agent.core.hunt_ids import hunt_id_lock, next_hunt_id
 from hecate_runner.hunt_writer import (
     DraftHuntRequest,
-    hunt_id_lock,
-    next_hunt_id,
     render_draft,
     write_draft,
 )

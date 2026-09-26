@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from hecate_runner.cti import ATTACK_TECHNIQUE_LINE
-from hecate_runner.grounding import GroundingReport, TechniqueFact, audit_draft
+from hecate_agent.core.grounding import GroundingReport, TechniqueFact, audit_draft
 
 #: The line hunt_writer emits immediately above the embedded CTI blurb.
 _CTI_MARKER = "Source CTI:"
