@@ -25,6 +25,7 @@ _PLATFORMS = {
     "T1059.001": ["Windows"],  # PowerShell
     "T1207": ["Windows"],  # Rogue Domain Controller
     "T1071.004": ["Linux", "macOS", "Windows"],  # DNS
+    "T1546.005": ["Linux", "macOS"],  # Trap
 }
 
 
@@ -68,6 +69,53 @@ def test_the_models_own_contradicting_pick_is_still_dropped(orch: Orchestrator) 
     )
     assert platforms == ["macOS"]
     assert facts["T1207"].valid is False
+
+
+def test_a_wording_match_does_not_widen_onto_platforms_the_intel_never_names(
+    orch: Orchestrator,
+) -> None:
+    """H-0018: T1546.005 Trap, matched on a research source title, added Linux
+    and macOS to a Teams vishing hunt on Windows."""
+    facts: dict[str, TechniqueFact] = {}
+    _, platforms = orch._resolve_ttps(
+        ["T1546.005"],
+        scope_text="compromised Windows systems",
+        facts=facts,
+        protected=["T1546.005"],
+        asserted=[],
+        intel_text="Voice phishing in Microsoft Teams; victims ran a PowerShell one-liner.",
+    )
+    assert platforms == ["Windows"]
+    assert facts["T1546.005"].valid is False
+
+
+def test_a_wording_match_widens_onto_a_platform_the_intel_implies(orch: Orchestrator) -> None:
+    """H-0014 still keeps T1059.001: "PowerShell" is itself evidence of Windows."""
+    facts: dict[str, TechniqueFact] = {}
+    _, platforms = orch._resolve_ttps(
+        ["T1059.001"],
+        scope_text="Linux servers",
+        facts=facts,
+        protected=["T1059.001"],
+        asserted=[],
+        intel_text="systematic data exfiltration using PowerShell-based collection and staging",
+    )
+    assert platforms == ["Linux", "Windows"]
+    assert facts["T1059.001"].valid is True
+
+
+def test_a_technique_the_cti_asserts_widens_whatever_the_text_says(orch: Orchestrator) -> None:
+    facts: dict[str, TechniqueFact] = {}
+    _, platforms = orch._resolve_ttps(
+        ["T1546.005"],
+        scope_text="compromised Windows systems",
+        facts=facts,
+        protected=["T1546.005"],
+        asserted=["T1546.005"],
+        intel_text="no platform words here",
+    )
+    assert platforms == ["Windows", "Linux", "macOS"]
+    assert facts["T1546.005"].valid is True
 
 
 def test_the_kapibala_draft_keeps_its_technique(

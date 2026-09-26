@@ -883,12 +883,18 @@ class Orchestrator:
         facts: dict[str, TechniqueFact] | None = None,
         protected: list[str] | None = None,
         intel_text: str = "",
+        asserted: list[str] | None = None,
     ) -> tuple[list[str], list[str]]:
         """Derive real tactics/platforms for a hypothesis's techniques.
 
         ``intel_text`` (the CTI and research tradecraft) scopes the hunt when
         the hypothesis names no platform: what the intel names or implies
         outranks the union of everywhere the techniques could run.
+
+        ``asserted`` are the protected techniques the CTI itself listed; they
+        may add any platform they run on. The rest of ``protected`` were
+        matched in the intel's wording, and add only platforms the intel names
+        or implies. Omitted, every protected technique counts as asserted.
 
         ``protected`` are techniques the intelligence itself supports -- ones
         the CTI asserted or whose names its wording uses. The hypothesis's
@@ -992,19 +998,39 @@ class Orchestrator:
             # rather than being dropped. H-0014's CTI said "PowerShell-based
             # collection and staging"; the hypothesis said "Linux servers";
             # T1059.001 was dropped and the hunt shipped with no techniques.
+            #
+            # A wording match widens only onto platforms the intel itself
+            # names or implies. Matches are loose: H-0018 (a Teams vishing
+            # campaign on Windows) matched T1546.005 Trap on a research source
+            # title, and it added Linux and macOS. T1059.001 still widens
+            # H-0014, since "PowerShell" is itself evidence of Windows.
+            by_cti = shielded if asserted is None else {t.upper() for t in asserted}
+            evidenced = platforms_evidenced_in(intel_text)
             if facts is not None:
                 for tech_id, fact in facts.items():
                     if tech_id.split(".")[0] not in shielded and tech_id not in shielded:
                         continue
                     missing = [p for p in fact.platforms if p not in final_platforms]
-                    if fact.platforms and len(missing) == len(fact.platforms):
-                        final_platforms = [*final_platforms, *missing]
-                        self.trail.step(
-                            "scope",
-                            "keeping %s (the intel names it): adding %s to the platforms",
-                            tech_id,
-                            listing(missing),
-                        )
+                    if not fact.platforms or len(missing) != len(fact.platforms):
+                        continue
+                    if tech_id not in by_cti and tech_id.split(".")[0] not in by_cti:
+                        missing = [p for p in missing if p in evidenced]
+                        if not missing:
+                            self.trail.step(
+                                "scope",
+                                "not widening for %s: matched in the wording, but the intel "
+                                "names none of %s",
+                                tech_id,
+                                listing(fact.platforms),
+                            )
+                            continue
+                    final_platforms = [*final_platforms, *missing]
+                    self.trail.step(
+                        "scope",
+                        "keeping %s (the intel names it): adding %s to the platforms",
+                        tech_id,
+                        listing(missing),
+                    )
 
             # Mark any technique that strongly contradicts our final platforms as invalid
             # so it is stripped from the payload and doesn't pollute the Sigma generator
@@ -1448,9 +1474,16 @@ class Orchestrator:
         self._wording_matched = []
         self._unevidenced_dropped = []
         if not sweep_inventory:
+            # Research links are stripped: they cite retrieved pages, and a
+            # page title is not the intel ("OAuth Traps" proposed T1546.005).
             candidates = self.hecate.candidate_techniques(
                 "\n".join(
-                    [item.content, research_tradecraft_text(self._research_text(research_id))]
+                    [
+                        item.content,
+                        _LINK_RE.sub(
+                            " ", research_tradecraft_text(self._research_text(research_id))
+                        ),
+                    ]
                 )
             )
             self.trail.step(
@@ -1487,6 +1520,7 @@ class Orchestrator:
             scope_text=" ".join([hypothesis.hypothesis, hypothesis.location]),
             facts=technique_facts,
             protected=[*cti_techniques, *(tid for tid, _ in candidates)],
+            asserted=cti_techniques,
             intel_text="\n".join(
                 [item.content, research_tradecraft_text(self._research_text(research_id))]
             ),
