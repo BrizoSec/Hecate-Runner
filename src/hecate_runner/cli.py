@@ -99,9 +99,19 @@ def _configure_logging(settings: Settings, *, to_stdout: bool = True) -> None:
         max_bytes=settings.log_max_bytes,
         backup_count=settings.log_backup_count,
     )
-    handlers: list[logging.Handler] = [logging.FileHandler(settings.log_file)]
-    if to_stdout and not _stdout_already_targets(settings.log_file):
-        handlers.append(logging.StreamHandler(sys.stdout))
+    # Under systemd, StandardOutput=append: already writes stdout into the log
+    # file, so log through stdout alone. Opening the file here as well is not
+    # just redundant: when the file is missing, systemd creates it root-owned
+    # before dropping to User=, and this process then cannot open it. Every
+    # cycle for three hours on 26 Sep failed with PermissionError that way,
+    # after a state reset had deleted the log.
+    handlers: list[logging.Handler]
+    if to_stdout and _stdout_already_targets(settings.log_file):
+        handlers = [logging.StreamHandler(sys.stdout)]
+    else:
+        handlers = [logging.FileHandler(settings.log_file)]
+        if to_stdout:
+            handlers.append(logging.StreamHandler(sys.stdout))
     logging.basicConfig(
         level=settings.log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

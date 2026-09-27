@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tarfile
 from pathlib import Path
@@ -87,7 +88,7 @@ def test_reset_clears_everything_a_run_produces(settings: Settings, workspace: P
     assert not list(workspace.glob(".*cursor_state.json*"))
     assert not (workspace / ".cursors").exists()
     assert list((workspace / "cti_queue").iterdir()) == []
-    assert list((workspace / "logs").iterdir()) == []
+    assert [p.name for p in (workspace / "logs").iterdir()] == ["orchestrator.log"]
 
 
 def test_reset_keeps_configuration_and_knowledge(settings: Settings, workspace: Path) -> None:
@@ -205,3 +206,13 @@ def test_cli_reset_no_archive_writes_no_tarball(cli_workspace: Path) -> None:
     result = runner.invoke(app, ["reset", "--yes", "--no-archive"])
     assert result.exit_code == 0, result.output
     assert not list(cli_workspace.parent.glob("hecate-reset-archive-*.tar.gz"))
+
+
+def test_reset_leaves_an_empty_log_owned_by_the_caller(settings: Settings, workspace: Path) -> None:
+    """systemd's append: creates a missing log root-owned, which the Runner then
+    cannot open; a reset must not leave the path missing."""
+    _populate(workspace)
+    reset.execute(reset.build_plan(settings, cwd=workspace), settings)
+    assert settings.log_file.exists()
+    assert settings.log_file.read_text() == ""
+    assert settings.log_file.stat().st_uid == os.getuid()

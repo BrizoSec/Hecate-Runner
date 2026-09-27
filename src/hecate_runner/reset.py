@@ -207,6 +207,10 @@ def execute(plan: ResetPlan, settings: Settings) -> None:
                 year.rmdir()
         for directory in (ws / "research", ws / "queries", settings.log_dir):
             directory.mkdir(parents=True, exist_ok=True)
+        # The service appends to this path with systemd's StandardOutput=append:,
+        # which creates a missing file as root; recreating it here keeps it
+        # owned by whoever runs the Runner.
+        settings.log_file.touch()
         settings.cti_queue_dir_resolved.mkdir(parents=True, exist_ok=True)
         (ws / "hunts" / ".hunt_id_counter").write_text(f"{plan.hunt_counter}\n")
         (ws / "research" / ".research_id_counter").write_text(

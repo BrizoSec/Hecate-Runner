@@ -7,6 +7,7 @@ protecting.
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -86,6 +87,51 @@ def test_stdout_target_check_non_file_stdout_is_false_not_error(
     log_file.write_text("")
     monkeypatch.setattr(sys, "stdout", io.StringIO())
     assert _stdout_already_targets(log_file) is False
+
+
+def _reset_root_logging() -> None:
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        handler.close()
+
+
+def test_under_systemd_logging_never_opens_the_log_file(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """26 Sep: a reset deleted the log, systemd recreated it root-owned for the
+    append: redirection, and every cycle died opening it with PermissionError.
+    With stdout already that file, logging must go through stdout alone."""
+    from hecate_runner.cli import _configure_logging
+
+    settings.log_dir.mkdir(parents=True, exist_ok=True)
+    with open(settings.log_file, "a") as stdout:  # what systemd hands the process
+        settings.log_file.chmod(0o444)  # this user can no longer open it
+        monkeypatch.setattr(sys, "stdout", stdout)
+        try:
+            _configure_logging(settings)
+            logging.getLogger("hecate_runner.test").warning("cycle ran")
+            stdout.flush()
+        finally:
+            _reset_root_logging()
+            settings.log_file.chmod(0o644)
+    assert settings.log_file.read_text().count("cycle ran") == 1
+
+
+def test_outside_systemd_logging_writes_the_log_file(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+
+    from hecate_runner.cli import _configure_logging
+
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    try:
+        _configure_logging(settings)
+        logging.getLogger("hecate_runner.test").warning("manual run")
+    finally:
+        _reset_root_logging()
+    assert "manual run" in settings.log_file.read_text()
 
 
 def test_effective_model_reads_the_workspace_when_unset(
