@@ -271,6 +271,7 @@ def _render_sigma_section(req: DraftHuntRequest) -> str:
 _RULE_PLACEMENT_NOTE = {
     "archive": "none: an archive never runs as a process",
     "document": "none: a document is not a process image",
+    "script": "none: a script runs as its interpreter, which carries the interpreter's hash",
     "network_content": "none: network content, not a file on disk",
     "memory_only": "none: exists only in memory",
     "historical": "none: historical, not this intrusion",
