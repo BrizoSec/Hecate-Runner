@@ -800,7 +800,7 @@ class Orchestrator:
         self._technique_evidence = evidence
         return kept
 
-    def _audit_claims(self, hypothesis: HypothesisResult) -> None:
+    def _audit_claims(self, hypothesis: HypothesisResult, source_text: str = "") -> None:
         """Remove observables that cannot be observed; soften capability stated as fact.
 
         Runs on the final technique list: persistence, exfiltration, lateral
@@ -837,6 +837,8 @@ class Orchestrator:
             },
             {t.upper() for t in hypothesis.techniques},
             on_disk,
+            source_text=source_text,
+            unobservable=self._unobservable_values(),
         )
         hypothesis.hypothesis = prose["hypothesis"]
         hypothesis.justification = prose["justification"]
@@ -2212,7 +2214,7 @@ class Orchestrator:
         if unknown:
             self.trail.step("techniques", "dropped IDs not in ATT&CK: %s", listing(unknown))
         hypothesis.techniques = kept_techniques
-        self._audit_claims(hypothesis)
+        self._audit_claims(hypothesis, self._primary_evidence_text(item))
 
         # Nothing left to hunt: no technique survived the evidence and matrix
         # checks, and the intel published no indicator to sweep for. H-0005,
