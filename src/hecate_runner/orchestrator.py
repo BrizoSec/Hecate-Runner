@@ -10,10 +10,12 @@ from __future__ import annotations
 import functools
 import logging
 import re
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from hecate_agent.core.grounding import (
     TechniqueFact,
@@ -28,7 +30,7 @@ from hecate_runner.config import Settings
 from hecate_runner.context_metrics import measure_tokens
 from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider, get_provider
 from hecate_runner.cti_triage import triage
-from hecate_runner.hecate_client import HecateClient, HecateError
+from hecate_runner.hecate_client import HecateClient, HecateError, HypothesisResult
 from hecate_runner.hunt_writer import (
     DraftHuntRequest,
     render_draft,
@@ -304,6 +306,15 @@ _PLACEHOLDER_OBSERVABLE_RE = re.compile(
     r"|(?:^|[\\/\s])(?:malware|malicious|rat|evil|badfile|payload)\.(?:exe|dll|ps1|bin|sh|bat|vbs|js|msi)\b"
     r"|<[a-z][a-z _-]*>",
     re.IGNORECASE,
+)
+
+
+_NO_OBSERVABLES = "[none proposed - human to populate]"
+
+
+#: Values in a rule that are indicators, not behaviour: IPv4 addresses and MD5/SHA-1/SHA-256 hashes.
+_RULE_IOC_RE = re.compile(
+    r"\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[0-9a-f]{64}\b|\b[0-9a-f]{40}\b|\b[0-9a-f]{32}\b"
 )
 
 
@@ -622,7 +633,25 @@ class Orchestrator:
         # the model picks dropped for having no source at all ("ID Name").
         # Both are read back when the grounding section is rendered.
         self._wording_matched: list[str] = []
+        #: Supporting passage per technique (hecate_agent.core.technique_evidence
+        #: TechniqueEvidence dicts), including techniques dropped as capability-only.
+        self._technique_evidence: list[dict[str, str]] = []
         self._unevidenced_dropped: list[str] = []
+        #: ClaimFinding dicts from the claim audit (hecate_agent.core.claim_audit).
+        self._claim_audit: list[dict[str, str]] = []
+        # hecate_agent.core.source_evidence.SourceEvidence and the feed's
+        # indicators typed against it (IndicatorRecord); reset every cycle.
+        self._source_evidence: Any = None
+        self._indicator_records: list[Any] = []
+        #: The source's detection guidance (hecate_agent.core.detection_guidance
+        #: GuidanceItem dicts): cited, routed, and fed to Sigma drafting.
+        self._detection_guidance: list[dict[str, Any]] = []
+        #: Platforms the specimen's evidence shows (platform_evidence), and the markers.
+        self._specimen: list[str] = []
+        self._platform_evidence: dict[str, Any] = {}
+        #: The cycle's research grounding: "", "independent" or "source-only".
+        self._research_grounding = ""
+        self._research_grounding_label = ""
         # Defaults to a no-op so tests and callers that don't care about
         # notifications don't have to pass one.
         self.notify = notify or (lambda result: None)
@@ -685,6 +714,399 @@ class Orchestrator:
 
     # --- Internal ----------------------------------------------------------
 
+    def _evidence_texts(self, item: CTIItem, research_id: str | None) -> list[tuple[str, str]]:
+        """(source label, text) that may evidence a technique, most authoritative first.
+
+        Research counts only when it searched independently; source-only
+        research restates the item and adds nothing a mapping could rest on.
+        """
+        texts = [("cti", item.content)]
+        if self._source_evidence is not None and self._source_evidence.text:
+            texts.append(("primary source", self._source_evidence.text))
+        research = self._evidence_research_text(research_id)
+        if research:
+            texts.append(("research", _LINK_RE.sub(" ", research_tradecraft_text(research))))
+        return texts
+
+    def _gate_on_observed_use(
+        self,
+        techniques: list[str],
+        asserted: list[str],
+        behaviour: list[Any],
+        texts: list[tuple[str, str]],
+    ) -> list[str]:
+        """Keep techniques the sources show in use; record the passage for each.
+
+        - A technique whose every mention describes what a tool *can* do
+          (H-0618's T1113 Screen Capture, from a VShell feature list) is
+          dropped as capability-only.
+        - A sub-technique the text does not support, whose parent it does, is
+          generalised to the parent (T1036.001 Invalid Code Signature on a
+          report that only says "disguised as a resume" becomes T1036).
+        - Techniques the CTI names by ID are kept as asserted.
+        """
+        from hecate_agent.core.technique_evidence import technique_support
+
+        by_id = {e.technique_id: e for e in behaviour}
+        combined = "\n".join(text for _, text in texts)
+        shielded = {t.upper() for t in asserted}
+        kept: list[str] = []
+        evidence: list[dict[str, str]] = []
+        dropped: list[str] = []
+        for technique_id in techniques:
+            upper = technique_id.upper()
+            found = by_id.get(upper)
+            if found is None and upper not in shielded:
+                meta = self.hecate.lookup_technique(
+                    upper, timeout_sec=self.settings.llm_timeout_sec
+                )
+                found = technique_support(
+                    upper, [meta.name] if meta.found and meta.name else [], combined
+                )
+                parent = upper.split(".")[0]
+                if (
+                    found is None
+                    and "." in upper
+                    and parent in by_id
+                    and by_id[parent].status == "observed"
+                ):
+                    self.trail.step(
+                        "techniques", "%s unsupported; generalised to %s", upper, parent
+                    )
+                    upper, found = parent, by_id[parent]
+            if found is not None and found.status == "capability" and upper not in shielded:
+                dropped.append(upper)
+                evidence.append({**found.to_dict(), "technique_id": upper, "status": "capability"})
+                continue
+            if upper in kept:
+                continue
+            kept.append(upper)
+            if found is not None:
+                evidence.append({**found.to_dict(), "technique_id": upper})
+            elif upper in shielded:
+                evidence.append(
+                    {
+                        "technique_id": upper,
+                        "status": "asserted",
+                        "passage": "",
+                        "source": "cti",
+                        "behaviour": "named by ID",
+                    }
+                )
+        if dropped:
+            self.trail.step(
+                "techniques", "dropped as capability only, not observed use: %s", listing(dropped)
+            )
+        self._technique_evidence = evidence
+        return kept
+
+    def _audit_claims(self, hypothesis: HypothesisResult) -> None:
+        """Remove observables that cannot be observed; soften capability stated as fact.
+
+        Runs on the final technique list: persistence, exfiltration, lateral
+        movement or credential theft may be stated as fact only when a
+        technique of that kind survived the evidence gate. H-0618 said VShell
+        "enables persistent, stealthy access" with no persistence technique
+        observed, and called its on-disk Go loader "fileless".
+        """
+        from hecate_agent.core.claim_audit import audit_observables, audit_prose
+
+        findings = []
+        # The empty-section sentinel `substantive_observables` left is not a claim.
+        observables = [o for o in hypothesis.observables if o != _NO_OBSERVABLES]
+        hypothesis.observables, removed = audit_observables(
+            observables, "observables", self._unobservable_values()
+        )
+        findings += removed
+        hypothesis.false_positives, removed = audit_observables(
+            hypothesis.false_positives, "normal baseline"
+        )
+        findings += removed
+        if not hypothesis.observables:
+            hypothesis.observables = [_NO_OBSERVABLES]
+        on_disk = any(
+            r.role == "executable" and r.status != "historical" for r in self._indicator_records
+        )
+        prose, rewritten = audit_prose(
+            {
+                "hypothesis": hypothesis.hypothesis,
+                "justification": hypothesis.justification,
+                "behavior": hypothesis.behavior,
+                "location": hypothesis.location,
+                "evidence": hypothesis.evidence,
+            },
+            {t.upper() for t in hypothesis.techniques},
+            on_disk,
+        )
+        hypothesis.hypothesis = prose["hypothesis"]
+        hypothesis.justification = prose["justification"]
+        hypothesis.behavior = prose["behavior"]
+        hypothesis.location = prose["location"]
+        hypothesis.evidence = prose["evidence"]
+        findings += rewritten
+        findings += self._unsupported_platform_claims(hypothesis)
+        self._claim_audit = [f.to_dict() for f in findings]
+        if findings:
+            counts = Counter(f.action for f in findings)
+            self.trail.step(
+                "claims",
+                "audit: %s",
+                ", ".join(f"{n} {action}" for action, n in sorted(counts.items())),
+            )
+
+    def _unobservable_values(self) -> dict[str, str]:
+        """Values the pipeline already knows no log can show, with the reason.
+
+        The A3 replay's observables listed a hash that exists only in memory,
+        another that is network content, and ``personal_resume.exe`` from the
+        report's closing joke.
+        """
+        reasons = {
+            "memory_only": "exists only in memory; no log records it as a file",
+            "network_content": "is network content, not a file on disk; no file or process event carries it",
+            "historical": "is historical infrastructure, not this intrusion",
+        }
+        out: dict[str, str] = {}
+        for record in self._indicator_records:
+            why = reasons.get(record.role) or reasons.get(record.status)
+            if why:
+                out[record.value] = why
+        evidence = self._source_evidence
+        for artifact in getattr(evidence, "artifacts", []) or []:
+            if artifact.status != "active":
+                out.setdefault(
+                    artifact.value,
+                    f"the source does not tie it to this intrusion ({artifact.role or 'no role'})",
+                )
+        return out
+
+    def _unsupported_platform_claims(self, hypothesis: HypothesisResult) -> list[Any]:
+        """Prose naming a platform the specimen's evidence does not show; flagged, not rewritten."""
+        from hecate_agent.core.claim_audit import ClaimFinding
+
+        if not self._specimen:
+            return []
+        flagged = []
+        for name, text in (
+            ("location", hypothesis.location),
+            ("hypothesis", hypothesis.hypothesis),
+        ):
+            extra = [p for p in platforms_named_in(text) if p not in self._specimen]
+            if extra:
+                flagged.append(
+                    ClaimFinding(
+                        name,
+                        text,
+                        "flagged",
+                        f"names {listing(extra)}, but the specimen's evidence shows only "
+                        f"{listing(self._specimen)}; the hunt is scoped to the evidence",
+                    )
+                )
+        return flagged
+
+    def _primary_evidence_text(self, item: CTIItem) -> str:
+        """The feed item plus the primary report's text: what the source actually says."""
+        if self._source_evidence is not None and self._source_evidence.text:
+            return f"{item.content}\n{self._source_evidence.text}"
+        return item.content
+
+    def _evidence_research_text(self, research_id: str | None) -> str:
+        """Research text that may count as evidence: none when research was source-only.
+
+        Source-only research rephrases the item it was given, so a claim found
+        only there was supplied by the model, not corroborated by a source.
+        """
+        if self._research_grounding == "source-only":
+            return ""
+        return self._research_text(research_id)
+
+    def _gather_source_evidence(self, item: CTIItem) -> None:
+        """Fetch the item's report, extract verified evidence, and type its indicators.
+
+        Never fails the cycle: without a report link, with the step disabled,
+        or on a fetch or model failure the draft proceeds from the feed item
+        and its indicators keep unknown roles.
+        """
+        indicators = dict(item.metadata.get("indicators") or {})
+        if not self.settings.source_evidence_enabled:
+            return
+        from hecate_agent.core.source_evidence import report_urls
+
+        urls = report_urls(item.content, item.source_url)
+        if not urls:
+            self.trail.step("source", "no report link in the item; drafting from the feed text")
+            return
+        started = self.trail.elapsed
+        try:
+            with self.metrics.measure("source_evidence"):
+                evidence = self.hecate.source_evidence(urls[0])
+                self._source_evidence = evidence
+                if evidence.text:
+                    self._indicator_records = self.hecate.indicator_records(indicators, evidence)
+        except Exception as exc:  # evidence is an aid; never fatal
+            log.warning("Source evidence failed for %s: %s", urls[0], exc)
+            self.trail.step(
+                "source", "failed for %s: %s; drafting from the feed text", urls[0], exc
+            )
+            return
+        if evidence.error and not evidence.artifacts:
+            self.trail.step(
+                "source", "%s: %s; drafting from the feed text", urls[0], clip(evidence.error, 120)
+            )
+            return
+        typed = [r for r in self._indicator_records if r.role != "unknown" or r.status != "unknown"]
+        historical = [r.value for r in self._indicator_records if r.status == "historical"]
+        self.trail.step(
+            "source",
+            "%s (%d chars, %d chunk(s)) in %.0fs: %d artifact(s) verified, %d dropped; "
+            "%d/%d indicator(s) typed; historical: %s",
+            urls[0],
+            evidence.chars,
+            evidence.chunks,
+            self.trail.elapsed - started,
+            len(evidence.artifacts),
+            len(evidence.dropped),
+            len(typed),
+            len(self._indicator_records),
+            listing(historical, "none"),
+        )
+        self._read_detection_guidance(evidence)
+
+    def _source_artifacts(self) -> list[dict[str, Any]]:
+        """The primary source's verified artifacts, for two-pass Sigma generation."""
+        from dataclasses import asdict
+
+        if self._source_evidence is None:
+            return []
+        return [asdict(a) for a in getattr(self._source_evidence, "artifacts", []) or []]
+
+    def _log_query_literals(self, artifacts: list[dict[str, Any]]) -> None:
+        """Pass one of rule generation: the exact values rules may match."""
+        from hecate_agent.core.query_literals import literals_from_artifacts
+
+        literals = literals_from_artifacts(artifacts)
+        if literals:
+            self.trail.step(
+                "sigma",
+                "pass 1: %d exact value(s) from the source rules may match: %s",
+                len(literals),
+                listing([lit.sigma for lit in literals]),
+            )
+        else:
+            self.trail.step(
+                "sigma", "pass 1: no verified source values; model rules are not held to a list"
+            )
+
+    def _log_rule_review(self, rules: list[dict[str, Any]], gaps: list[dict[str, str]]) -> None:
+        """A2: what the reviewer said about each model rule, and what no rule covers."""
+        if not self.settings.sigma_review_enabled:
+            return
+        import yaml
+
+        verdicts: list[str] = []
+        for rule in rules:
+            try:
+                review = (yaml.safe_load(str(rule.get("rule_yaml", ""))) or {}).get("hecate_review")
+            except yaml.YAMLError:
+                continue
+            if review:
+                verdicts.append(f"{rule.get('title', 'untitled')}: {review.get('verdict')}")
+        self.trail.step(
+            "review",
+            "%d model rule(s) reviewed%s; %d uncovered behaviour(s)%s",
+            len(verdicts),
+            f" ({'; '.join(verdicts)})" if verdicts else "",
+            len(gaps),
+            f": {listing([g.get('behaviour', '') for g in gaps])}" if gaps else "",
+        )
+
+    def _audit_rule_provenance(self, rules: list[dict[str, Any]]) -> None:
+        """Every address and hash a rule matches must say where it came from.
+
+        Rules carry a ``hecate_provenance`` list (role, status, source and the
+        typing passage per indicator). The generator already rejects invented
+        indicators; an address or hash with no entry here means one slipped
+        through, and the reviewer is told which.
+        """
+        import yaml
+
+        traced = 0
+        untraced: list[str] = []
+        for rule in rules:
+            try:
+                document = yaml.safe_load(str(rule.get("rule_yaml", ""))) or {}
+            except yaml.YAMLError:
+                continue
+            known = {
+                str(e.get("value", "")).lower() for e in document.get("hecate_provenance") or []
+            }
+            traced += len(known)
+            text = yaml.safe_dump(document.get("detection") or {}).lower()
+            for value in set(_RULE_IOC_RE.findall(text)):
+                if not any(value in k or k in value for k in known if k):
+                    untraced.append(f"{value} ({rule.get('title', 'untitled')})")
+        if untraced:
+            self.trail.step(
+                "provenance", "untraced indicator(s) in rules: %s", listing(sorted(untraced))
+            )
+            log.warning(
+                "Sigma rules match indicators with no provenance: %s", ", ".join(sorted(untraced))
+            )
+        else:
+            self.trail.step(
+                "provenance",
+                "%d indicator(s) across %d rule(s), each traced to its source",
+                traced,
+                len(rules),
+            )
+
+    def _specimen_platforms(self, item: CTIItem) -> list[str]:
+        """Platforms the item and its primary source show in observed activity, with the markers logged."""
+        from hecate_agent.core.platform_evidence import platform_evidence
+
+        evidence = platform_evidence([self._primary_evidence_text(item)])
+        self._platform_evidence = evidence.to_dict()
+        supported: list[str] = list(evidence.supported)
+        if supported:
+            self.trail.step(
+                "scope",
+                "the specimen's evidence shows %s: %s",
+                listing(supported),
+                "; ".join(
+                    f"{p} ({', '.join(m['marker'] for m in evidence.markers[p][:6])})"
+                    for p in supported
+                ),
+            )
+        elif evidence.markers:
+            self.trail.step(
+                "scope",
+                "platform evidence too thin to scope on: %s",
+                listing(sorted(evidence.markers)),
+            )
+        self._specimen = supported
+        return supported
+
+    def _read_detection_guidance(self, evidence: Any) -> None:
+        """Extract the report's own detection guidance and log where each item can run."""
+        from hecate_agent.core.detection_guidance import extract_guidance
+
+        items = extract_guidance(
+            getattr(evidence, "text", "") or "", getattr(evidence, "url", "") or ""
+        )
+        self._detection_guidance = [g.to_dict() for g in items]
+        if not items:
+            self.trail.step("guidance", "the source publishes no detection guidance section")
+            return
+        routes = Counter(g.route for g in items)
+        candidates = sum(len(g.candidates) for g in items)
+        self.trail.step(
+            "guidance",
+            "%d item(s) from the source: %s; %d Sigma candidate(s)",
+            len(items),
+            ", ".join(f"{n} {route}" for route, n in sorted(routes.items())),
+            candidates,
+        )
+
     def _grounding_section(
         self,
         req: DraftHuntRequest,
@@ -711,8 +1133,8 @@ class Orchestrator:
             with self.metrics.measure("grounding_audit"):
                 report = audit_draft(
                     draft_text=draft_text,
-                    cti_text=item.content,
-                    research_text=self._research_text(req.research_id),
+                    cti_text=self._primary_evidence_text(item),
+                    research_text=self._evidence_research_text(req.research_id),
                     cti_techniques=[str(t) for t in (item.metadata.get("techniques") or [])],
                     technique_facts=technique_facts,
                     hunt_platforms=list(req.platforms),
@@ -824,6 +1246,18 @@ class Orchestrator:
         """
         techniques = list(req.hypothesis.techniques)
         indicators = dict(item.metadata.get("indicators") or {})
+        records = [r.to_dict() for r in self._indicator_records]
+        if records:
+            # The model may only use indicators a rule can observe; historical
+            # hosts and in-memory hashes are then rejected as invented.
+            from hecate_agent.core.provenance import routable_indicators
+
+            indicators = routable_indicators(self._indicator_records)
+        source_observables = (
+            [a.value for a in self._source_evidence.behaviours]
+            if self._source_evidence is not None
+            else []
+        )
         out_dir = self.settings.hecate_workspace / "queries" / req.hunt_id
 
         payload = {
@@ -838,8 +1272,14 @@ class Orchestrator:
             # research found -- H-0002's `nvidia-sysruntime.exe` -- which the
             # generator otherwise never sees, so it invented `.nvidia.exe`.
             "observables": [
-                o for o in [*req.hypothesis.observables, req.hypothesis.evidence] if o and o.strip()
+                o
+                for o in [*req.hypothesis.observables, req.hypothesis.evidence, *source_observables]
+                if o and o.strip()
             ],
+            "indicator_records": records,
+            "detection_guidance": self._detection_guidance,
+            "source_artifacts": self._source_artifacts(),
+            "review_rules": self.settings.sigma_review_enabled,
         }
         import json
 
@@ -851,6 +1291,7 @@ class Orchestrator:
             "Context Window Metrics: Executing sigma_generator with ~%d input tokens", input_tokens
         )
 
+        self._log_query_literals(self._source_artifacts())
         self.trail.step(
             "sigma",
             "drafting rules from techniques %s, indicator types %s, platforms %s",
@@ -896,6 +1337,9 @@ class Orchestrator:
             len(result.rejected),
         )
 
+        self._audit_rule_provenance(result.rules or [])
+        self._log_rule_review(result.rules or [], result.review_gaps)
+
         if not result.success or not result.rules:
             log.warning(
                 "Sigma drafting produced no usable rules for %s (%s); draft keeps its placeholder query section.",
@@ -908,6 +1352,7 @@ class Orchestrator:
             log.info("Sigma drafting note for %s: %s", req.hunt_id, warning)
 
         req.sigma_rules = result.rules
+        req.review_gaps = result.review_gaps
         try:
             req.sigma_rule_dir = str(out_dir.relative_to(self.settings.hecate_workspace))
         except ValueError:  # out_dir outside the workspace -- show it whole
@@ -945,8 +1390,14 @@ class Orchestrator:
         protected: list[str] | None = None,
         intel_text: str = "",
         asserted: list[str] | None = None,
+        specimen: list[str] | None = None,
     ) -> tuple[list[str], list[str]]:
         """Derive real tactics/platforms for a hypothesis's techniques.
+
+        ``specimen`` is the platforms the specimen's own evidence shows
+        (hecate_agent.core.platform_evidence). When set it outranks the
+        hypothesis: H-0618's Location said "Linux and Windows workstations"
+        for a Windows-only chain, and the hunt was scoped to both.
 
         ``intel_text`` (the CTI and research tradecraft) scopes the hunt when
         the hypothesis names no platform: what the intel names or implies
@@ -1029,6 +1480,20 @@ class Orchestrator:
             listing(platforms, "no narrow platform"),
             listing(claimed),
         )
+        if specimen:
+            unsupported = [p for p in claimed if p not in specimen]
+            if unsupported:
+                self.trail.step(
+                    "scope",
+                    "hypothesis names %s; the specimen's evidence shows only %s: not scoping to %s",
+                    listing(claimed),
+                    listing(specimen),
+                    listing(unsupported),
+                )
+            kept = [p for p in claimed if p in specimen]
+            if not kept:
+                claimant = "the specimen's evidence"
+            claimed = kept or list(specimen)
         # A hypothesis sentence often names no platform at all ("Adversaries
         # use phishing campaigns to deliver VB6 malware"), and the union of
         # everywhere its techniques run is then nearly every platform ATT&CK
@@ -1074,6 +1539,16 @@ class Orchestrator:
                     missing = [p for p in fact.platforms if p not in final_platforms]
                     if not fact.platforms or len(missing) != len(fact.platforms):
                         continue
+                    if specimen and not any(p in specimen for p in missing):
+                        self.trail.step(
+                            "scope",
+                            "not widening for %s: the specimen's evidence shows only %s",
+                            tech_id,
+                            listing(specimen),
+                        )
+                        continue
+                    if specimen:
+                        missing = [p for p in missing if p in specimen]
                     if tech_id not in by_cti and tech_id.split(".")[0] not in by_cti:
                         missing = [p for p in missing if p in evidenced]
                         if not missing:
@@ -1242,6 +1717,16 @@ class Orchestrator:
         return None, skipped, parked_count
 
     def _run_body(self, state: OrchestratorState, *, dry_run: bool) -> RunResult:
+        # Primary-source evidence for this cycle's item; see _gather_source_evidence.
+        self._source_evidence = None
+        self._indicator_records = []
+        self._detection_guidance = []
+        self._specimen = []
+        self._platform_evidence = {}
+        self._research_grounding = ""
+        self._research_grounding_label = ""
+        self._technique_evidence = []
+        self._claim_audit = []
         with self.metrics.measure("cti_intake"):
             item, skipped, parked_count = self._next_actionable_item()
         if item is None:
@@ -1320,6 +1805,17 @@ class Orchestrator:
             route = "no narrative -> research without web search -> indicator-only hypothesis"
         self.trail.step("route", "%s", route)
 
+        # The report the item links to carries what the feed summary drops:
+        # process tree, paths, ports, and what each indicator is. H-0618 was
+        # drafted from a 2,194-character blurb of a 32,920-character report.
+        self._gather_source_evidence(item)
+        source_block = (
+            self._source_evidence.summary_block()
+            if self._source_evidence is not None and self._source_evidence.artifacts
+            else ""
+        )
+        intel_for_models = f"{item.content}\n\n{source_block}" if source_block else item.content
+
         research_id: str | None = None
         related_hunts: list[str] = []
         if sweep_inventory:
@@ -1361,14 +1857,14 @@ class Orchestrator:
                 clip(topic, 80),
                 f", technique {technique}" if technique else "",
                 "on" if intel_has_narrative else "off",
-                len(item.content),
+                len(intel_for_models),
             )
             research_started = self.trail.elapsed
 
             # Measure context usage for optimization. Research is sent the
             # CTI body as source_context as well as the topic, so count both.
             input_tokens = measure_tokens(
-                f"{topic}\n{item.content}", model_name=self.settings.hecate_llm_model or "gpt-4"
+                f"{topic}\n{intel_for_models}", model_name=self.settings.hecate_llm_model or "gpt-4"
             )
             log.info(
                 "Context Window Metrics: Executing research_new with ~%d input tokens", input_tokens
@@ -1382,8 +1878,9 @@ class Orchestrator:
                         depth=self.settings.research_depth,
                         timeout_sec=self.settings.llm_timeout_sec,
                         web_search_enabled=intel_has_narrative,
-                        # The topic is a search label; research needs the report.
-                        source_context=item.content,
+                        # The topic is a search label; research needs the report,
+                        # and the primary source's verified artifacts with it.
+                        source_context=intel_for_models,
                     )
                     measured.set_usage(research_result.usage)
             except HecateError as exc:
@@ -1411,14 +1908,30 @@ class Orchestrator:
 
             research_id = research_result.research_id
             related_hunts = research_result.related_hunts
+            self._research_grounding = research_result.grounding
+            self._research_grounding_label = research_result.grounding_label()
             self.trail.step(
                 "research",
-                "%s done in %.0fs; describes adversary behavior: %s; related hunts: %s",
+                "%s done in %.0fs; grounding: %s; describes adversary behavior: %s; related hunts: %s",
                 research_id,
                 self.trail.elapsed - research_started,
+                self._research_grounding_label,
                 "yes" if research_result.describes_behavior else "NO",
                 listing(related_hunts),
             )
+            if intel_has_narrative and research_result.grounding == "source-only":
+                # Not parked: the item is still actionable. Research is just
+                # not allowed to stand in for evidence it never gathered.
+                log.warning(
+                    "Research %s ran source-only (%s); it will not count as evidence for techniques or grounding.",
+                    research_id,
+                    research_result.web_search_note or "no web searches",
+                )
+                self.trail.step(
+                    "research",
+                    "SOURCE-ONLY: web search was requested but none succeeded; "
+                    "research is not counted as evidence this cycle",
+                )
 
             # Intake triage matches publisher categories and title shapes, so
             # it cannot see that a post with a fresh category is commentary:
@@ -1489,7 +2002,7 @@ class Orchestrator:
             try:
                 with self.metrics.measure("hypothesis_generation") as measured:
                     hypothesis = self.hecate.hypothesis_generator(
-                        threat_intel=item.content,
+                        threat_intel=intel_for_models,
                         research_id=research_id,
                         timeout_sec=self.settings.llm_timeout_sec,
                         indicators_only=not intel_has_narrative,
@@ -1594,9 +2107,28 @@ class Orchestrator:
                 listing(f"{tid} {name}" for tid, name in candidates),
             )
         self._wording_matched = [tid for tid, _ in candidates]
+        # Described behaviour, not just ATT&CK's names: "sandbox detection, CPU
+        # checks, and sleep-timer evasion" is T1497 though no name appears.
+        # Only observed use proposes a technique; a tool's capability does not.
+        behaviour: list[Any] = []
+        evidence_texts = self._evidence_texts(item, research_id)
+        if not sweep_inventory:
+            from hecate_agent.core.technique_evidence import map_behaviours
+
+            behaviour = map_behaviours(evidence_texts)
+            observed = [e.technique_id for e in behaviour if e.status == "observed"]
+            self.trail.step(
+                "techniques",
+                "described behaviour observed: %s; capability only: %s",
+                listing(observed),
+                listing(e.technique_id for e in behaviour if e.status == "capability"),
+            )
+            self._wording_matched = list(dict.fromkeys([*self._wording_matched, *observed]))
+        observed_ids = [e.technique_id for e in behaviour if e.status == "observed"]
         with self.metrics.measure("technique_validation"):
             hypothesis.techniques = merge_techniques(
-                [*cti_techniques, *(tid for tid, _ in candidates)], hypothesis.techniques
+                [*cti_techniques, *(tid for tid, _ in candidates), *observed_ids],
+                hypothesis.techniques,
             )
         self.trail.step(
             "techniques",
@@ -1608,13 +2140,18 @@ class Orchestrator:
         with self.metrics.measure("technique_validation"):
             hypothesis.techniques = self._drop_unevidenced_techniques(
                 hypothesis.techniques,
-                protected=[*cti_techniques, *(tid for tid, _ in candidates)],
-                cti_text=item.content,
+                protected=[*cti_techniques, *(tid for tid, _ in candidates), *observed_ids],
+                cti_text=self._primary_evidence_text(item),
                 # Links stripped, as for the candidates above: a cited page title
                 # is not the intel. "OAuth Traps" in R-0018's sources kept T1546.005
                 # Trap on a Teams vishing hunt.
-                research_text=_LINK_RE.sub(" ", self._research_text(research_id)),
+                research_text=_LINK_RE.sub(" ", self._evidence_research_text(research_id)),
             )
+
+            if not sweep_inventory:
+                hypothesis.techniques = self._gate_on_observed_use(
+                    hypothesis.techniques, cti_techniques, behaviour, evidence_texts
+                )
 
         indicator_types = list((item.metadata.get("indicators") or {}).keys())
         for source in derive_data_sources(hypothesis.techniques, indicator_types):
@@ -1627,11 +2164,12 @@ class Orchestrator:
                 hypothesis.techniques,
                 scope_text=" ".join([hypothesis.hypothesis, hypothesis.location]),
                 facts=technique_facts,
-                protected=[*cti_techniques, *(tid for tid, _ in candidates)],
+                protected=[*cti_techniques, *(tid for tid, _ in candidates), *observed_ids],
                 asserted=cti_techniques,
                 intel_text="\n".join(
                     [item.content, research_tradecraft_text(self._research_text(research_id))]
                 ),
+                specimen=self._specimen_platforms(item),
             )
 
         # Applied here rather than at merge time: the platform list only
@@ -1655,7 +2193,7 @@ class Orchestrator:
                 "Dropped %d observable(s) that restated a telemetry category or were templates",
                 len(hypothesis.observables) - len(kept_observables),
             )
-        hypothesis.observables = kept_observables or ["[none proposed - human to populate]"]
+        hypothesis.observables = kept_observables or [_NO_OBSERVABLES]
 
         # 4.2 Drop unresolvable technique IDs from the draft so they don't
         # reach the frontmatter and break `hunt validate` downstream.
@@ -1674,6 +2212,7 @@ class Orchestrator:
         if unknown:
             self.trail.step("techniques", "dropped IDs not in ATT&CK: %s", listing(unknown))
         hypothesis.techniques = kept_techniques
+        self._audit_claims(hypothesis)
 
         # Nothing left to hunt: no technique survived the evidence and matrix
         # checks, and the intel published no indicator to sweep for. H-0005,
@@ -1728,6 +2267,14 @@ class Orchestrator:
                     platforms=platforms,
                     source_url=item.source_url,
                     related_hunts=related_hunts,
+                    source_evidence=(
+                        self._source_evidence.to_dict() if self._source_evidence is not None else {}
+                    ),
+                    indicator_records=[r.to_dict() for r in self._indicator_records],
+                    research_grounding=self._research_grounding_label,
+                    technique_evidence=self._technique_evidence,
+                    claim_audit=self._claim_audit,
+                    detection_guidance=self._detection_guidance,
                 )
                 req.grounding_section = self._grounding_section(req, item, technique_facts)
                 with self.metrics.measure("draft_write"):

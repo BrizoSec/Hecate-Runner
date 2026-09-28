@@ -39,10 +39,28 @@ class ResearchResult:
     #: web results. True whenever that cannot be read, so absence never parks.
     describes_behavior: bool = True
     usage: LLMUsage | None = None
+    #: Web searches that succeeded, and why there were none when that is 0.
+    web_searches: int = 0
+    web_search_note: str = ""
 
     @property
     def is_empty(self) -> bool:
         return not self.research_id.strip()
+
+    @property
+    def grounding(self) -> str:
+        """``independent`` with at least one web search, else ``source-only``.
+
+        Source-only research restates the item it was given, so it cannot
+        corroborate that item and is not counted as evidence.
+        """
+        return "independent" if self.web_searches > 0 else "source-only"
+
+    def grounding_label(self) -> str:
+        if self.grounding == "independent":
+            return f"independent research, {self.web_searches} web search(es)"
+        note = f": {self.web_search_note}" if self.web_search_note else ""
+        return f"source-only synthesis, 0 web searches{note}"
 
 
 @dataclass
@@ -101,6 +119,8 @@ class SigmaResult:
     files: list[Path] = field(default_factory=list)
     rules: list[dict[str, Any]] = field(default_factory=list)
     usage: LLMUsage | None = None
+    #: Behaviours the rule reviewer found no rule for (each with a verified quote).
+    review_gaps: list[dict[str, str]] = field(default_factory=list)
 
 
 class HecateClient:
@@ -151,6 +171,23 @@ class HecateClient:
             os.environ.clear()
             os.environ.update(original_env)
 
+    def source_evidence(self, url: str) -> Any:
+        """Verified artifacts from the report at ``url`` (hecate_agent.core.source_evidence).
+
+        In-process, under the workspace environment so the extraction uses the
+        workspace's model. Never raises for a fetch or model failure; those
+        come back on the result's ``error``.
+        """
+        from hecate_agent.core.source_evidence import extract_source_evidence
+
+        return self._with_context(extract_source_evidence, url)
+
+    def indicator_records(self, indicators: dict[str, list[str]], evidence: Any) -> list[Any]:
+        """The feed's indicators typed by role and status against ``evidence``."""
+        from hecate_agent.core.source_evidence import build_indicator_records
+
+        return list(self._with_context(build_indicator_records, indicators, evidence))
+
     def research_new(
         self,
         topic: str,
@@ -191,6 +228,8 @@ class HecateClient:
             recommended_hypothesis=output.recommended_hypothesis or "",
             related_hunts=related_hunts,
             raw_output="",
+            web_searches=int(getattr(output, "web_searches_performed", 0) or 0),
+            web_search_note=str(getattr(output, "web_search_note", "") or ""),
             describes_behavior=not (
                 telemetry_findings
                 and all(f.startswith(_NO_BEHAVIOR_FINDING) for f in telemetry_findings)
@@ -285,6 +324,7 @@ class HecateClient:
                 files=files,
                 rules=rules,
                 usage=usage,
+                review_gaps=list(getattr(output, "review_gaps", []) or []),
             )
 
         def generate() -> Any:

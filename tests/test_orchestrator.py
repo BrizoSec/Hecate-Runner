@@ -1667,9 +1667,12 @@ def test_technique_names_from_the_lookup_reach_the_grounding_audit(
     the names surface in the grounding section's dropped line."""
     # Triage off: with it on, a draft left with no technique and no indicator is parked.
     settings.cti_triage = "off"
+    # A pick the CTI does not describe: it says "dumping LSASS" (T1003.001,
+    # which behaviour mapping now keeps), nothing about process hollowing.
+    mock_hecate.hypothesis_generator.return_value.techniques = ["T1055.012"]
     mock_hecate.lookup_technique.return_value = TechniqueMetadata(
-        technique_id="T1003.001",
-        tactics=["credential-access"],
+        technique_id="T1055.012",
+        tactics=["defense-evasion"],
         platforms=["Windows"],
         found=True,
         name="Process Hollowing",

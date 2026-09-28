@@ -44,12 +44,13 @@ def test_a_drafted_cycle_logs_every_stage_in_order(
 
     trail = _trail(caplog)
     stages = list(dict.fromkeys(stage for _, stage, _ in trail))
-    assert stages[:9] == [
+    assert stages[:10] == [
         "start",
         "intake",
         "triage",
         "quota",
         "route",
+        "source",
         "research",
         "hypothesis",
         "techniques",

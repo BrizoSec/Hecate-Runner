@@ -139,6 +139,27 @@ class Settings(BaseSettings):
     )
 
     # --- Research grounding (Phase 6) ---------------------------------------
+    sigma_review_enabled: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_SIGMA_REVIEW_ENABLED",
+        description=(
+            "Review each model-drafted Sigma rule against the hypothesis and the "
+            "verified source passages, and list behaviours no rule covers. A rule is "
+            "dropped only for a contradiction the reviewer quotes verbatim from the "
+            "source. Costs one model call per model rule plus one."
+        ),
+    )
+    source_evidence_enabled: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_SOURCE_EVIDENCE_ENABLED",
+        description=(
+            "Fetch the report a CTI item links to and extract artifacts verified "
+            "verbatim against it (process tree, paths, ports, and each indicator's "
+            "role and current-versus-historical status) before research and "
+            "drafting. A failed fetch drafts from the feed item as before. Adds a "
+            "few local-model calls per cycle; set false to skip."
+        ),
+    )
     research_enabled: bool = Field(
         default=True,
         alias="HECATE_RUNNER_RESEARCH_ENABLED",

@@ -152,6 +152,15 @@ def mock_hecate(
     mock.sigma_generator.return_value = SigmaResult(
         success=False, error="sigma generation not configured in this test"
     )
+    # The primary-source step degrades the same way: a failed fetch, so drafts
+    # come from the feed text and indicators stay untyped unless a test says
+    # otherwise.
+    from hecate_agent.core.source_evidence import SourceEvidence
+
+    mock.source_evidence.side_effect = lambda url: SourceEvidence(
+        url=url, error="source fetch not configured in this test"
+    )
+    mock.indicator_records.return_value = []
     return mock
 
 

@@ -42,6 +42,27 @@ class DraftHuntRequest:
     #: a draft written before the audit runs is simply missing the section
     #: rather than claiming a clean result it never computed.
     grounding_section: str = ""
+    #: Primary-source evidence (hecate_agent.core.source_evidence.SourceEvidence
+    #: .to_dict()) and the feed's indicators typed against it
+    #: (IndicatorRecord dicts). Empty renders no evidence section.
+    source_evidence: dict[str, Any] = field(default_factory=dict)
+    indicator_records: list[dict[str, Any]] = field(default_factory=list)
+    #: How the research was grounded (ResearchResult.grounding_label()), shown
+    #: beside the research link so a source-only document is not read as
+    #: independent confirmation. Empty when no research ran.
+    research_grounding: str = ""
+    #: Supporting passage per technique (TechniqueEvidence dicts from the
+    #: orchestrator), including techniques dropped as capability-only.
+    technique_evidence: list[dict[str, Any]] = field(default_factory=list)
+    #: What the claim audit removed or rewrote (hecate_agent.core.claim_audit
+    #: ClaimFinding dicts). Rendered under Grounding, so the quoted originals
+    #: are shown as audit record, not as the draft's own claims.
+    claim_audit: list[dict[str, Any]] = field(default_factory=list)
+    #: The source's detection guidance (GuidanceItem dicts): each item quoted,
+    #: with the telemetry that can see it and the rule drafted from it.
+    detection_guidance: list[dict[str, Any]] = field(default_factory=list)
+    #: Behaviours the rule reviewer found no rule for, each with its verified quote.
+    review_gaps: list[dict[str, str]] = field(default_factory=list)
 
 
 #: Ceiling on the CTI blurb embedded in a draft. Generous on purpose: the
@@ -190,7 +211,8 @@ def _research_document_line(req: DraftHuntRequest) -> str:
     """
     if req.research_id:
         target = _research_link_target(req.research_id, req.generated_at)
-        return f"- **Research Document:** See [{req.research_id}]({target}) for detailed pre-hunt research"
+        grounding = f" ({req.research_grounding})" if req.research_grounding else ""
+        return f"- **Research Document:** See [{req.research_id}]({target}) for detailed pre-hunt research{grounding}"
     if req.hypothesis.is_indicator_only:
         return (
             "- **Research Document:** None — an indicator sweep needs no research "
@@ -244,6 +266,172 @@ def _render_sigma_section(req: DraftHuntRequest) -> str:
         parts.append("")
 
     return "\n".join(parts)
+
+
+_RULE_PLACEMENT_NOTE = {
+    "archive": "none: an archive never runs as a process",
+    "document": "none: a document is not a process image",
+    "network_content": "none: network content, not a file on disk",
+    "memory_only": "none: exists only in memory",
+    "historical": "none: historical, not this intrusion",
+}
+
+
+def _cell(text: str, limit: int = 160) -> str:
+    text = " ".join(str(text).split()).replace("|", "\\|")
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _render_source_evidence(req: DraftHuntRequest) -> str:
+    """The primary report's verified artifacts and each indicator's role, as the draft's own content."""
+    ev = req.source_evidence
+    if not ev:
+        return ""
+    url = ev.get("url", "")
+    if ev.get("error") and not ev.get("artifacts"):
+        return f"### Primary Source Evidence\n\nNot extracted from {url}: {_cell(ev['error'])}\n\n"
+    lines = [
+        "### Primary Source Evidence",
+        "",
+        f"Extracted from [{url}]({url}) ({ev.get('chars', 0):,} characters). Every value below appears "
+        "verbatim in the report. A role or status without a quoted passage is recorded as unknown. "
+        "This is the report's account, not independent confirmation.",
+        "",
+    ]
+    behaviours = [a for a in ev.get("artifacts", []) if a.get("kind") not in _INDICATOR_KINDS]
+    if behaviours:
+        lines += ["| Artifact | Kind | Role | Status | Evidence |", "|---|---|---|---|---|"]
+        for a in behaviours:
+            evidence = f'"{_cell(a["evidence"])}"' if a.get("evidence") else "unverified"
+            lines.append(
+                f"| `{_cell(a['value'], 90)}` | {a['kind']} | {_cell(a['role'], 40)} | {a['status']} | {evidence} |"
+            )
+        lines.append("")
+    records = req.indicator_records
+    if records:
+        lines += [
+            "**Indicators by role** (the feed's indicators, typed against the report):",
+            "",
+            "| Indicator | Type | Role | Status | Confidence | Rules |",
+            "|---|---|---|---|---|---|",
+        ]
+        for r in records:
+            if r.get("status") == "historical" or r.get("role") == "historical":
+                rules = _RULE_PLACEMENT_NOTE["historical"]
+            elif r.get("type") in ("md5", "sha1", "sha256", "imphash"):
+                rules = _RULE_PLACEMENT_NOTE.get(r.get("role", ""), "process_creation")
+                rules = "image_load" if r.get("role") == "library" else rules
+            elif r.get("type") == "url":
+                rules = "proxy"
+            else:
+                rules = "network_connection" + (
+                    " on " + ", ".join(str(p) for p in r["ports"]) if r.get("ports") else ""
+                )
+                rules += ", dns_query" if r.get("type") in ("domain", "hostname") else ""
+            lines.append(
+                f"| `{_cell(r['value'], 70)}` | {r['type']} | {r.get('role', 'unknown')} | "
+                f"{r.get('status', 'unknown')} | {r.get('confidence', 'unknown')} | {rules} |"
+            )
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _render_claim_audit(req: DraftHuntRequest) -> str:
+    """Every observable the audit removed and every sentence it rewrote, with the reason."""
+    if not req.claim_audit:
+        return ""
+    lines = ["", "", "#### Claim Audit", ""]
+    for f in req.claim_audit:
+        lines.append(
+            f'- {f["action"]} ({f["field"]}): "{_cell(f["text"], 200)}" - {_cell(f["reason"], 160)}'
+        )
+    return "\n".join(lines)
+
+
+_GUIDANCE_ROUTES = {
+    "sigma": "Sigma",
+    "edr": "EDR query",
+    "network-content": "IDS/NDR signature",
+    "indicator": "IOC sweep",
+    "review": "Review",
+}
+
+
+def _render_review_gaps(req: DraftHuntRequest) -> str:
+    """Behaviours the reviewer found no rule for, quoted from the hypothesis or the source."""
+    if not req.review_gaps:
+        return ""
+    lines = ["", "", "#### Not Covered by Any Rule (rule review)", ""]
+    for gap in req.review_gaps:
+        lines.append(
+            f'- {_cell(gap.get("behaviour", ""), 160)}: "{_cell(gap.get("quote", ""), 200)}"'
+        )
+    return "\n".join(lines)
+
+
+def _render_detection_guidance(req: DraftHuntRequest) -> str:
+    """The source's own detection guidance, each item routed to the telemetry that can see it."""
+    if not req.detection_guidance:
+        return ""
+    source = next((g.get("source") for g in req.detection_guidance if g.get("source")), "")
+    titles = [str(r.get("title", "")) for r in req.sigma_rules]
+    lines = [
+        "### Detection Guidance from the Source",
+        "",
+        f"Quoted from the detection section of {source}."
+        if source
+        else "Quoted from the source's detection section.",
+        "",
+        "| ID | Guidance | Runs in | Analytic |",
+        "|---|---|---|---|",
+    ]
+    for g in req.detection_guidance:
+        route = str(g.get("route", "review"))
+        if route == "sigma":
+            drafted = [
+                t.split(": ", 1)[-1]
+                for t in titles
+                if t.startswith(f"Source guidance {g.get('id')}:")
+            ]
+            analytic = "; ".join(drafted) if drafted else "no rule drafted; write one by hand"
+        elif route == "indicator":
+            analytic = "covered by the IOC rules"
+        else:
+            analytic = str(g.get("reason", ""))
+        lines.append(
+            f'| {g.get("id")} | "{_cell(str(g.get("text", "")), 200)}" | {_GUIDANCE_ROUTES.get(route, route)} | '
+            f"{_cell(analytic, 160)} |"
+        )
+    return "\n".join(lines) + "\n\n"
+
+
+def _render_technique_evidence(req: DraftHuntRequest) -> str:
+    """Why each technique is mapped, and which were left out as capability only."""
+    rows = [e for e in req.technique_evidence if e.get("status") != "capability"]
+    capability = [e for e in req.technique_evidence if e.get("status") == "capability"]
+    if not rows and not capability:
+        return ""
+    lines = ["", "#### Technique Evidence", ""]
+    if rows:
+        lines += ["| Technique | Status | Evidence | Source |", "|---|---|---|---|"]
+        for e in rows:
+            passage = f'"{_cell(e["passage"], 220)}"' if e.get("passage") else "—"
+            basis = f" ({_cell(e['behaviour'], 40)})" if e.get("behaviour") else ""
+            lines.append(
+                f"| {e['technique_id']} | {e.get('status', '')} | {passage}{basis} | {e.get('source', '')} |"
+            )
+    if capability:
+        lines += [
+            "",
+            "Not mapped, capability only (the source describes what a tool can do, not what happened):",
+            "",
+        ]
+        for e in capability:
+            lines.append(f'- {e["technique_id"]}: "{_cell(e.get("passage", ""), 220)}"')
+    return "\n".join(lines) + "\n"
+
+
+_INDICATOR_KINDS = frozenset({"sha256", "sha1", "md5", "ipv4", "domain", "hostname", "url"})
 
 
 def render_draft(req: DraftHuntRequest) -> str:
@@ -344,7 +532,7 @@ Source CTI:
 
 > {embedded_cti(req.threat_intel)}
 
-### Justification
+{_render_source_evidence(req)}### Justification
 
 {hyp.justification or "[No justification generated]"}
 
@@ -362,10 +550,10 @@ Source CTI:
 - **MITRE ATT&CK Techniques:** {techniques_display}
 - **CTI Sources & References:** {f"[{req.source_url}]({req.source_url})" if req.source_url else "[Review CTI and populate]"}
 {_research_document_line(req)}
-
+{_render_technique_evidence(req)}
 ### Grounding
 
-{req.grounding_section or "Not yet audited."}
+{req.grounding_section or "Not yet audited."}{_render_claim_audit(req)}
 
 ### Related Tickets
 
@@ -401,9 +589,9 @@ Source CTI:
 - **Events Analyzed:** 0 (draft - not yet executed)
 - **Data Quality:** N/A
 
-### Hunting Queries
+{_render_detection_guidance(req)}### Hunting Queries
 
-{_render_sigma_section(req)}
+{_render_sigma_section(req)}{_render_review_gaps(req)}
 
 ---
 
