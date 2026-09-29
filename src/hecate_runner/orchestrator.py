@@ -974,6 +974,22 @@ class Orchestrator:
         )
         self._read_detection_guidance(evidence)
 
+    def _observed_commands(self, item: CTIItem, platforms: list[str]) -> list[dict[str, Any]]:
+        """Commands the source shows being run, each a process-rule candidate."""
+        from hecate_agent.core.command_rules import command_candidates
+
+        candidates: list[dict[str, Any]] = list(
+            command_candidates(self._primary_evidence_text(item), platforms)
+        )
+        if candidates:
+            self.trail.step(
+                "sigma",
+                "%d command(s) the source shows being run: %s",
+                len(candidates),
+                listing([str(c.get("title", "")) for c in candidates]),
+            )
+        return candidates
+
     def _source_artifacts(self) -> list[dict[str, Any]]:
         """The primary source's verified artifacts, for two-pass Sigma generation."""
         from dataclasses import asdict
@@ -1282,6 +1298,7 @@ class Orchestrator:
             "detection_guidance": self._detection_guidance,
             "source_artifacts": self._source_artifacts(),
             "review_rules": self.settings.sigma_review_enabled,
+            "observed_commands": self._observed_commands(item, req.platforms),
         }
         import json
 

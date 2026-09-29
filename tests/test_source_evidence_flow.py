@@ -173,3 +173,24 @@ def test_observables_the_pipeline_knows_are_unobservable_are_removed(
     suspicious = draft.split("### What Suspicious Looks Like", 1)[1].split("###", 1)[0]
     assert "cmd.exe" in suspicious and DECODED not in suspicious
     assert f'- removed (observables): "{DECODED}" - exists only in memory' in draft
+
+
+def test_sigma_gets_the_commands_the_source_shows_being_run(
+    settings: Settings, evidence_hecate: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    evidence_hecate.source_evidence.return_value = SourceEvidence(
+        url=REPORT,
+        chars=100,
+        chunks=1,
+        # Two macOS markers (Mach-O, osascript) scope the hunt to macOS, where xattr runs.
+        text="The Mach-O loader then ran xattr -d com.apple.quarantine $HOME/Library/x/y. "
+        "An osascript dialog prompted the victim for a password.",
+    )
+    _run(settings, evidence_hecate)
+    payload = evidence_hecate.sigma_generator.call_args.args[0]
+    assert [c["title"] for c in payload["observed_commands"]] == ["xattr -d com.apple.quarantine"]
+    trail = [r.getMessage() for r in caplog.records if r.name == LOGGER_NAME]
+    assert any(
+        "1 command(s) the source shows being run: xattr -d com.apple.quarantine" in m for m in trail
+    )
