@@ -194,3 +194,46 @@ def test_sigma_gets_the_commands_the_source_shows_being_run(
     assert any(
         "1 command(s) the source shows being run: xattr -d com.apple.quarantine" in m for m in trail
     )
+
+
+TOKEN = "f90c8b1dcd374d4f552744ee1765583d"
+
+
+def test_a_token_a_target_and_an_attacker_side_file_are_explained_and_kept_out_of_sigma(
+    settings: Settings, evidence_hecate: MagicMock
+) -> None:
+    """The Redis botnet replay: a C2 bearer token listed as an MD5, a QA target typed as C2, the operator's own file."""
+    evidence_hecate.indicator_records.return_value = [
+        *RECORDS,
+        IndicatorRecord(
+            TOKEN, "md5", "non_file", "active", source=REPORT, evidence=f"C2_TOKEN={TOKEN}"
+        ),
+        IndicatorRecord(
+            "47.250.92.230", "ipv4", "target", "active", source=REPORT, evidence="QA target"
+        ),
+    ]
+    evidence_hecate.source_evidence.return_value = SourceEvidence(
+        url=REPORT,
+        chars=EVIDENCE.chars,
+        chunks=EVIDENCE.chunks,
+        text=EVIDENCE.text,
+        artifacts=[
+            *EVIDENCE.artifacts,
+            SourceArtifact(
+                "redis_fleet.txt",
+                "file_path",
+                "attacker-side",
+                "unknown",
+                "unknown",
+                "The operator works from redis_fleet.txt, sitting in the directory.",
+            ),
+        ],
+        indicators=EVIDENCE.indicators,
+    )
+    draft = _run(settings, evidence_hecate).draft_path.read_text()
+    section = draft.split("### Primary Source Evidence", 1)[1].split("### Justification", 1)[0]
+    assert "none: a token, key or certificate fingerprint, not the hash of a file" in section
+    assert "none: an address the actor targeted, not infrastructure a host connects to" in section
+    payload = evidence_hecate.sigma_generator.call_args.args[0]
+    assert payload["indicators"] == {"sha256": [LOADER]}
+    assert "redis_fleet.txt" not in payload["observables"] and "cmd.exe" in payload["observables"]

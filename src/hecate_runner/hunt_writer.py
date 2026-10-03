@@ -275,6 +275,8 @@ _RULE_PLACEMENT_NOTE = {
     "network_content": "none: network content, not a file on disk",
     "memory_only": "none: exists only in memory",
     "historical": "none: historical, not this intrusion",
+    "non_file": "none: a token, key or certificate fingerprint, not the hash of a file",
+    "target": "none: an address the actor targeted, not infrastructure a host connects to",
 }
 
 
@@ -319,6 +321,8 @@ def _render_source_evidence(req: DraftHuntRequest) -> str:
         for r in records:
             if r.get("status") == "historical" or r.get("role") == "historical":
                 rules = _RULE_PLACEMENT_NOTE["historical"]
+            elif r.get("role") == "target":
+                rules = _RULE_PLACEMENT_NOTE["target"]
             elif r.get("type") in ("md5", "sha1", "sha256", "imphash"):
                 rules = _RULE_PLACEMENT_NOTE.get(r.get("role", ""), "process_creation")
                 rules = "image_load" if r.get("role") == "library" else rules

@@ -867,6 +867,8 @@ class Orchestrator:
             "memory_only": "exists only in memory; no log records it as a file",
             "network_content": "is network content, not a file on disk; no file or process event carries it",
             "historical": "is historical infrastructure, not this intrusion",
+            "non_file": "is a token, key or certificate fingerprint, not the hash of a file",
+            "target": "is an address the actor targeted, not infrastructure a host connects to",
         }
         out: dict[str, str] = {}
         for record in self._indicator_records:
@@ -998,11 +1000,11 @@ class Orchestrator:
             return []
         return [asdict(a) for a in getattr(self._source_evidence, "artifacts", []) or []]
 
-    def _log_query_literals(self, artifacts: list[dict[str, Any]]) -> None:
+    def _log_query_literals(self, artifacts: list[dict[str, Any]], platforms: list[str]) -> None:
         """Pass one of rule generation: the exact values rules may match."""
         from hecate_agent.core.query_literals import literals_from_artifacts
 
-        literals = literals_from_artifacts(artifacts)
+        literals = literals_from_artifacts(artifacts, platforms)
         if literals:
             self.trail.step(
                 "sigma",
@@ -1271,8 +1273,9 @@ class Orchestrator:
             from hecate_agent.core.provenance import routable_indicators
 
             indicators = routable_indicators(self._indicator_records)
+        # Artifacts on the actor's own machine are not something this hunt can observe.
         source_observables = (
-            [a.value for a in self._source_evidence.behaviours]
+            [a.value for a in self._source_evidence.behaviours if a.role != "attacker-side"]
             if self._source_evidence is not None
             else []
         )
@@ -1310,7 +1313,7 @@ class Orchestrator:
             "Context Window Metrics: Executing sigma_generator with ~%d input tokens", input_tokens
         )
 
-        self._log_query_literals(self._source_artifacts())
+        self._log_query_literals(self._source_artifacts(), req.platforms)
         self.trail.step(
             "sigma",
             "drafting rules from techniques %s, indicator types %s, platforms %s",
