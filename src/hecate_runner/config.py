@@ -468,6 +468,11 @@ class Settings(BaseSettings):
         return self.log_dir / "stage_metrics.jsonl"
 
     @property
+    def llm_calls_file(self) -> Path:
+        """The running cycle's provider calls, written by Core as each starts and ends."""
+        return self.log_dir / "llm_calls.jsonl"
+
+    @property
     def state_file(self) -> Path:
         return self.hecate_workspace / ".orchestrator_state.json"
 
@@ -529,7 +534,10 @@ class Settings(BaseSettings):
         passed here wins over the workspace's own .env -- omitting the unset
         ones is what lets that file stay authoritative.
         """
-        env = {"HECATE_WORKSPACE": str(self.hecate_workspace)}
+        env = {
+            "HECATE_WORKSPACE": str(self.hecate_workspace),
+            "HECATE_LLM_CALL_LOG": str(self.llm_calls_file),
+        }
         if self.hecate_llm_provider:
             env["HECATE_LLM_PROVIDER"] = self.hecate_llm_provider
         if self.hecate_llm_model:

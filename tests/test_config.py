@@ -40,6 +40,12 @@ def test_env_for_hecate_omits_unset_llm_keys(settings: Settings) -> None:
     assert "HECATE_LLM_MODEL" not in env
 
 
+def test_env_for_hecate_names_the_live_call_log(settings: Settings) -> None:
+    # Core writes each model call there as it happens; the monitor reads it mid-cycle.
+    assert settings.env_for_hecate()["HECATE_LLM_CALL_LOG"] == str(settings.llm_calls_file)
+    assert settings.llm_calls_file.parent == settings.log_dir
+
+
 def test_env_for_hecate_passes_explicit_llm_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HECATE_WORKSPACE", "/tmp/hecate")
     monkeypatch.setenv("HECATE_LLM_PROVIDER", "ollama")

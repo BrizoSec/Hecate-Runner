@@ -664,6 +664,7 @@ class Orchestrator:
         state = OrchestratorState.load(self.settings.state_file)
         self.trail = CycleTrail()
         self.metrics = CycleMetrics(self.trail.cycle_id)
+        self._reset_llm_call_log()
         result = RunResult(outcome="error", detail="cycle did not complete")
         self.trail.step(
             "start",
@@ -949,6 +950,14 @@ class Orchestrator:
         if self._research_grounding == "source-only":
             return ""
         return self._research_text(research_id)
+
+    def _reset_llm_call_log(self) -> None:
+        """Start the live call log empty, so the monitor counts this cycle's calls only."""
+        try:
+            self.settings.log_dir.mkdir(parents=True, exist_ok=True)
+            self.settings.llm_calls_file.write_text("", encoding="utf-8")
+        except OSError as exc:  # the log is for watching; a cycle runs without it
+            log.debug("Could not reset %s: %s", self.settings.llm_calls_file, exc)
 
     def _gather_source_evidence(self, item: CTIItem) -> None:
         """Fetch the item's report, extract verified evidence, and type its indicators.

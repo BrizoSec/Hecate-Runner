@@ -130,6 +130,7 @@ def build_plan(
             [
                 *settings.log_dir.glob(f"{settings.log_file.name}*"),
                 *settings.log_dir.glob(f"{settings.metrics_file.name}*"),
+                *settings.log_dir.glob(f"{settings.llm_calls_file.name}*"),
             ]
         ),
     }

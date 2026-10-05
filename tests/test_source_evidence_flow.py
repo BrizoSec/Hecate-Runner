@@ -319,3 +319,12 @@ def test_a_spent_research_quota_stops_the_cycle_before_the_source_is_read(
     assert result.outcome == "research_quota_reached"
     evidence_hecate.source_evidence.assert_not_called()
     evidence_hecate.research_new.assert_not_called()
+
+
+def test_each_cycle_starts_with_an_empty_call_log(
+    settings: Settings, evidence_hecate: MagicMock
+) -> None:
+    settings.log_dir.mkdir(parents=True, exist_ok=True)
+    settings.llm_calls_file.write_text('{"event": "start", "ts": 1}\n')
+    _run(settings, evidence_hecate)
+    assert settings.llm_calls_file.read_text() == ""
