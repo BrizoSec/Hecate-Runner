@@ -310,9 +310,11 @@ def test_the_source_read_is_announced_before_it_runs(
 
 
 def test_a_spent_research_quota_stops_the_cycle_before_the_source_is_read(
-    evidence_hecate: MagicMock, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, evidence_hecate: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The read is minutes of model time; a cycle that cannot research must not spend it.
+    # `settings` is requested for its environment: it points HECATE_WORKSPACE at the
+    # fake workspace, which the Settings built below must inherit.
     monkeypatch.setenv("HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY", "0")
     monkeypatch.setattr("hecate_runner.orchestrator.has_narrative", lambda _content: True)
     result = _run(Settings(_env_file=None), evidence_hecate)  # type: ignore[call-arg]

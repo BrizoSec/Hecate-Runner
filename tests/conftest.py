@@ -36,6 +36,20 @@ def workspace(tmp_path: Path) -> Path:
     return ws
 
 
+@pytest.fixture(autouse=True)
+def _never_the_live_workspace(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Point every test at a throwaway workspace unless it sets its own.
+
+    Settings() falls back to the real Hecate workspace when HECATE_WORKSPACE is
+    unset. A test that built its own Settings without the `settings` fixture
+    ran a cycle against it: it appended rows to the live stage metrics, emptied
+    the live call log and rewrote the orchestrator state.
+    """
+    monkeypatch.setenv("HECATE_WORKSPACE", str(tmp_path_factory.mktemp("unset-workspace")))
+
+
 @pytest.fixture
 def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
     """Settings pointing at the fake workspace."""
