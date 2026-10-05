@@ -237,3 +237,31 @@ def test_a_token_a_target_and_an_attacker_side_file_are_explained_and_kept_out_o
     payload = evidence_hecate.sigma_generator.call_args.args[0]
     assert payload["indicators"] == {"sha256": [LOADER]}
     assert "redis_fleet.txt" not in payload["observables"] and "cmd.exe" in payload["observables"]
+
+
+def test_values_the_model_names_from_the_actors_side_or_another_platform_are_removed(
+    settings: Settings, evidence_hecate: MagicMock
+) -> None:
+    """The Redis botnet draft listed the operator's C2 script and python.exe on a Linux hunt."""
+    report = (
+        "An exposed directory held the operator's entire working toolkit, and everything here "
+        "traces back to the operator's own files. A batch script launches c2_persist.py, the C2 "
+        "server. On each victim the cron job writes /tmp/.cache and runs it."
+    )
+    evidence_hecate.source_evidence.return_value = SourceEvidence(
+        url=REPORT, chars=len(report), chunks=1, text=report, artifacts=EVIDENCE.artifacts
+    )
+    evidence_hecate.lookup_technique.return_value.platforms = ["Linux"]
+    hypothesis = evidence_hecate.hypothesis_generator.return_value
+    hypothesis.observables = ["c2_persist.py", "python.exe", "/tmp/.cache"]
+    hypothesis.location = "Linux servers"
+    draft = _run(settings, evidence_hecate).draft_path.read_text()
+    assert (
+        '- removed (observables): "c2_persist.py" - the source places it on the actor\'s own side'
+        in draft
+    )
+    assert (
+        '- removed (observables): "python.exe" - is a Windows artifact; this hunt covers' in draft
+    )
+    suspicious = draft.split("### What Suspicious Looks Like", 1)[1].split("###", 1)[0]
+    assert "/tmp/.cache" in suspicious and "python.exe" not in suspicious

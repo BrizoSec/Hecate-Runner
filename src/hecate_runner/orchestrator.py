@@ -800,7 +800,12 @@ class Orchestrator:
         self._technique_evidence = evidence
         return kept
 
-    def _audit_claims(self, hypothesis: HypothesisResult, source_text: str = "") -> None:
+    def _audit_claims(
+        self,
+        hypothesis: HypothesisResult,
+        source_text: str = "",
+        platforms: list[str] | None = None,
+    ) -> None:
         """Remove observables that cannot be observed; soften capability stated as fact.
 
         Runs on the final technique list: persistence, exfiltration, lateral
@@ -809,13 +814,34 @@ class Orchestrator:
         "enables persistent, stealthy access" with no persistence technique
         observed, and called its on-disk Go loader "fileless".
         """
-        from hecate_agent.core.claim_audit import audit_observables, audit_prose
+        from hecate_agent.core.claim_audit import (
+            audit_observables,
+            audit_prose,
+            prose_value_reasons,
+        )
 
         findings = []
         # The empty-section sentinel `substantive_observables` left is not a claim.
         observables = [o for o in hypothesis.observables if o != _NO_OBSERVABLES]
+        # What the model named that extraction never returned: a file on the
+        # actor's own machine, or one no covered platform can show.
+        unobservable = {
+            **prose_value_reasons(
+                [
+                    *observables,
+                    hypothesis.hypothesis,
+                    hypothesis.justification,
+                    hypothesis.behavior,
+                    hypothesis.location,
+                    hypothesis.evidence,
+                ],
+                source_text,
+                platforms or [],
+            ),
+            **self._unobservable_values(),
+        }
         hypothesis.observables, removed = audit_observables(
-            observables, "observables", self._unobservable_values()
+            observables, "observables", unobservable
         )
         findings += removed
         hypothesis.false_positives, removed = audit_observables(
@@ -838,7 +864,7 @@ class Orchestrator:
             {t.upper() for t in hypothesis.techniques},
             on_disk,
             source_text=source_text,
-            unobservable=self._unobservable_values(),
+            unobservable=unobservable,
         )
         hypothesis.hypothesis = prose["hypothesis"]
         hypothesis.justification = prose["justification"]
@@ -2234,7 +2260,7 @@ class Orchestrator:
         if unknown:
             self.trail.step("techniques", "dropped IDs not in ATT&CK: %s", listing(unknown))
         hypothesis.techniques = kept_techniques
-        self._audit_claims(hypothesis, self._primary_evidence_text(item))
+        self._audit_claims(hypothesis, self._primary_evidence_text(item), platforms)
 
         # Nothing left to hunt: no technique survived the evidence and matrix
         # checks, and the intel published no indicator to sweep for. H-0005,
