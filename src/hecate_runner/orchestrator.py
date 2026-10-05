@@ -2444,3 +2444,25 @@ def build_default_orchestrator(settings: Settings) -> Orchestrator:
     cti = get_provider(settings.cti_provider, settings=settings)
     notify = functools.partial(notify_draft_created, settings)
     return Orchestrator(settings=settings, hecate=hecate, cti_provider=cti, notify=notify)
+
+
+def build_orchestrator_for_item(settings: Settings, item: CTIItem) -> Orchestrator:
+    """The standard orchestrator, reading one supplied item in place of the configured feeds.
+
+    Only intake differs from a scheduled cycle. Triage is off, since someone
+    chose this item; the quotas, the drafting stages and every check after
+    them are the cycle's own.
+    """
+    from hecate_runner.cti.single import SingleItemProvider
+
+    settings = settings.model_copy(update={"cti_triage": "off"})
+    hecate = HecateClient(
+        hecate_bin=settings.hecate_bin_resolved,
+        workspace=settings.hecate_workspace,
+        env_overrides=settings.env_for_hecate(),
+        default_timeout_sec=settings.llm_timeout_sec,
+    )
+    notify = functools.partial(notify_draft_created, settings)
+    return Orchestrator(
+        settings=settings, hecate=hecate, cti_provider=SingleItemProvider(item), notify=notify
+    )

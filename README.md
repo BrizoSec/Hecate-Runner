@@ -13,7 +13,7 @@ for the design and its diagrams. This README is the operating reference.
 3. Writes a structured draft hunt, with candidate Sigma rules and a grounding audit, into your Hecate workspace
 4. Never auto-executes queries — a human proposes a bounded query and separately approves running it (see [Query execution](#query-execution-propose-dont-run) below); nothing runs unattended
 
-Runs as a systemd timer on a hunting host, or manually via `hecate-runner run`.
+Runs as a systemd timer on a hunting host, or by hand: `hecate-runner run` takes the next item from the configured feeds, and `hecate-runner draft` takes intelligence you supply. Both go through the same cycle.
 
 ## Design principles
 
@@ -188,6 +188,9 @@ uv run hecate-runner run --dry-run
 
 # Real run (researches, generates a hypothesis and writes a draft hunt)
 uv run hecate-runner run
+
+# Or draft from intelligence you already have, skipping the feeds
+uv run hecate-runner draft --file intel.txt --url https://example.com/the-report
 ```
 
 ## Deploy to k3s-core
@@ -363,6 +366,7 @@ Beyond `run` and the pollers, the CLI covers the things you reach for when a
 cycle looks wrong:
 
 ```bash
+hecate-runner draft      # draft from intelligence you supply (text, --file or stdin), same cycle as `run`
 hecate-runner watch      # follow the decision trail of the running cycle, line by line
 hecate-runner status     # quota used today, last run, total drafts
 hecate-runner metrics    # stage latency and estimated LLM cost, by CTI source

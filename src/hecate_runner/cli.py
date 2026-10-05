@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -36,6 +37,7 @@ from rich.table import Table
 from hecate_runner import __version__
 from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.config import Settings
+from hecate_runner.cti.base import CTIItem
 from hecate_runner.hecate_client import HecateClient
 from hecate_runner.hunt_audit import (
     HuntFacts,
@@ -47,7 +49,11 @@ from hecate_runner.hunt_audit import (
 from hecate_runner.log_rotation import rotate_log_if_needed
 from hecate_runner.metrics import MetricsStore
 from hecate_runner.misp_poller import run_misp_poll
-from hecate_runner.orchestrator import build_default_orchestrator
+from hecate_runner.orchestrator import (
+    RunResult,
+    build_default_orchestrator,
+    build_orchestrator_for_item,
+)
 from hecate_runner.otx_poller import run_otx_poll
 from hecate_runner.parked_store import get_parked, list_parked, parked_dir, restore
 from hecate_runner.query_execution import ProposedQuery, get_provider, validate_guardrails
@@ -140,7 +146,11 @@ def run(
 
     orch = build_default_orchestrator(settings)
     result = orch.run_once(dry_run=dry_run)
+    _print_result(result)
+    raise typer.Exit(code=0 if result.ok else 1)
 
+
+def _print_result(result: RunResult) -> None:
     console.print()
     console.print(f"[bold]Outcome:[/bold] {result.outcome}")
     if result.detail:
@@ -152,6 +162,79 @@ def run(
     if result.draft_path:
         console.print(f"[bold]Draft path:[/bold] {result.draft_path}")
 
+
+@app.command()
+def draft(
+    text: Annotated[
+        str | None,
+        typer.Argument(
+            help="The intelligence to draft from. Omit to read --file or standard input."
+        ),
+    ] = None,
+    file: Annotated[
+        Path | None,
+        typer.Option(
+            "--file",
+            "-f",
+            help="Read the intelligence from this file.",
+            exists=True,
+            dir_okay=False,
+        ),
+    ] = None,
+    url: Annotated[
+        str,
+        typer.Option(
+            "--url",
+            help="The report this intelligence summarises; it is fetched for source evidence.",
+        ),
+    ] = "",
+    title: Annotated[
+        str, typer.Option("--title", help="A title for the item; used as the research topic.")
+    ] = "",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Show what would happen without calling hecate."),
+    ] = False,
+) -> None:
+    """Draft a hunt from intelligence you supply, through the same cycle a feed item takes.
+
+    The feeds and their cursors are not touched and triage is skipped, since
+    you chose the item. Everything after intake is the scheduled cycle: source
+    evidence, research, the hypothesis, technique and platform checks, the
+    claim and grounding audits, and Sigma drafting. The draft counts against
+    the daily draft and research quotas.
+    """
+    if text is not None and file is not None:
+        console.print("[red]Give the intelligence as an argument or with --file, not both.[/red]")
+        raise typer.Exit(code=2)
+    if file is not None:
+        content = file.read_text(encoding="utf-8")
+    elif text is not None:
+        content = text
+    elif not sys.stdin.isatty():
+        content = sys.stdin.read()
+    else:
+        console.print(
+            "[red]No intelligence given: pass it as an argument, with --file, or on standard input.[/red]"
+        )
+        raise typer.Exit(code=2)
+    content = content.strip()
+    if not content:
+        console.print("[red]The intelligence is empty.[/red]")
+        raise typer.Exit(code=2)
+
+    settings = Settings()
+    _configure_logging(settings)
+    item = CTIItem(
+        content=content,
+        source="manual",
+        received_at=datetime.now(UTC),
+        identifier=str(file) if file is not None else "manual",
+        title=title.strip(),
+        source_url=url.strip(),
+    )
+    result = build_orchestrator_for_item(settings, item).run_once(dry_run=dry_run)
+    _print_result(result)
     raise typer.Exit(code=0 if result.ok else 1)
 
 

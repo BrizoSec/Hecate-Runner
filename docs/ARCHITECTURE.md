@@ -109,6 +109,15 @@ announcements, vendor commentary and similar non-actionable items into
 `cti_queue/parked/` with a reason attached. `hecate-runner parked` lists them
 and `parked restore` puts one back. Nothing is ever thrown away.
 
+**Starting from intelligence in hand.** `hecate-runner draft` takes text an
+operator supplies (an argument, a file or standard input, with an optional
+report URL) in place of a feed item. It is a different way in, not a different
+pipeline: the item goes through the cycle below unchanged, with triage skipped
+because someone chose it, and it counts against the same quotas. Core also has
+an older LangGraph graph behind `hecate-agent orchestrate`; that one is
+experimental, lacks most of the stages below and is not scored against the
+gold cases.
+
 **The narrative gate.** `has_narrative()` asks whether an item carries anything
 beyond a bare indicator dump and a title: a human-written summary or
 description, or an explicit ATT&CK technique list. This one answer decides the
