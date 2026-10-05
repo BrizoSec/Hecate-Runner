@@ -1,48 +1,47 @@
 # hecate-runner
 
-Autonomous hunt draft orchestrator for the Agentic Threat Hunting Framework (Hecate), whose workspace lives in [Hecate-Core](https://github.com/BrizoSec/Hecate-Core).
+Autonomous hunt draft orchestrator for Hecate, whose workspace lives in [Hecate-Core](https://github.com/BrizoSec/Hecate-Core).
+
+**New here?** Start with the [onboarding guide](https://github.com/BrizoSec/Hecate-Core/blob/main/docs/ONBOARDING.md)
+for the point of the project and a first run, then [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+for the design and its diagrams. This README is the operating reference.
 
 `hecate-runner` sits on top of Hecate and turns it into a persistent, 24/7 hunting loop:
 
 1. Pulls fresh CTI from a configured source (file queue, AlienVault OTX, RSS/Atom feeds, MISP, CISA KEV, or abuse.ch ThreatFox)
-2. Calls the Hecate `hypothesis-generator` agent (which uses a local Ollama-served LLM)
-3. Writes structured draft hunt records into your Hecate workspace
+2. Reads the report the item links to, researches the technique, and generates a grounded hypothesis, using Hecate-Core's agents and the LLM configured in the workspace
+3. Writes a structured draft hunt, with candidate Sigma rules and a grounding audit, into your Hecate workspace
 4. Never auto-executes queries — a human proposes a bounded query and separately approves running it (see [Query execution](#query-execution-propose-dont-run) below); nothing runs unattended
 
 Runs as a systemd timer on a hunting host, or manually via `hecate-runner run`.
 
 ## Design principles
 
-- **Read-context, not hard dependency on Hecate.** `hecate-runner` shells out to the `hecate-agent` CLI; it does not import Hecate as a library. Hecate and `hecate-runner` version independently.
+- **Core is a library, the workspace is shared.** `hecate-runner` imports `hecate_agent` and calls it in-process; it does not shell out to the `hecate-agent` CLI. Core's optional dependencies must therefore be installed in the Runner's environment, which `uv sync` does from the sibling `../Hecate-Core` checkout.
+- **The model proposes, deterministic code disposes.** Every model output is checked by ordinary code before it reaches a draft.
 - **Human-in-the-loop by default.** Every generated hunt is `status: planning` with a "review required" banner. Nothing auto-executes.
-- **Guardrails first.** Daily draft quotas, hard timeouts on LLM calls, structured logs, per-run state persistence.
-- **Testable in isolation.** No network, no LLM, no Hecate required to run unit tests locally.
+- **Guardrails first.** Daily draft and research quotas, hard timeouts on LLM calls, structured logs, per-run state persistence.
+- **Testable in isolation.** No network and no LLM are needed to run the unit tests locally.
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    CTI["CTI provider<br/>file | otx | rss | misp |<br/>cisa_kev | abuse_ch | multi"] --> RUN
+    TIMER["systemd timer<br/>hourly, 2 min after boot"] --> RUN["hecate-runner run"]
+    RUN --> SRC["Source evidence<br/>read the linked report"]
+    SRC --> RES["Research<br/>5 skills, Tavily web search"]
+    RES --> HYP["Hypothesis"]
+    HYP --> DRAFT["Draft hunt<br/>hunts/YYYY/Qn/H-XXXX.md"]
+    DRAFT --> SIG["Sigma rules<br/>queries/H-XXXX/*.yml"]
+    RES --> RDOC["research/R-XXXX.md"]
+    SRC -.-> LLM["LLM (workspace .env)"]
+    RES -.-> LLM
+    HYP -.-> LLM
+    SIG -.-> LLM
 ```
-  CTI provider: file | otx | rss | misp | cisa_kev | abuse_ch | multi
-  (file reads cti_queue/next.txt; the rest poll their source directly)
-                                |
-                                v
-+------------------+     +---------------+     +-----------------------+     +----------------+
-| systemd timer    | --> | hecate-runner | --> | hecate-agent research new     | --> | Ollama (local) |
-| hourly + 2m boot |     | run           |     | (5-skill, web-search  |     | qwen2.5:14b    |
-+------------------+     +---------------+     |  grounded via Tavily) |     +----------------+
-                                |              +-----------------------+
-                                |                        |
-                                |                 research_id (R-XXXX)
-                                v                        |
-                     +---------------------------+       |
-                     | hecate hypothesis-generator | <-----+
-                     +---------------------------+
-                                |
-                                v
-                     hunts/YYYY/QN/H-XXXX.md   (spawned_from: R-XXXX)
-                     research/R-XXXX.md
-                     logs/orchestrator.log
-                     .orchestrator_state.json
-```
+
+The full cycle, with every branch and outcome, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Research grounding runs before hypothesis generation on every cycle by default (`HECATE_RUNNER_RESEARCH_ENABLED=true`). **A research failure aborts the cycle** (refunds the quota, leaves the CTI queued for retry) rather than falling back to an ungrounded hypothesis: `hecate-agent eval` measured ungrounded generation at ~30% accuracy on known-answer MITRE technique fixtures, so an ungrounded draft isn't a degraded-but-useful fallback, it's an unreliable one. Set `HECATE_RUNNER_RESEARCH_ENABLED=false` to explicitly opt out of research and always generate ungrounded (e.g. for offline testing) — that's a deliberate choice, different from a research call failing mid-cycle.
 
@@ -102,7 +101,7 @@ A generated hunt is only worth acting on if its claims trace back to evidence. T
 | `derived` | In no source text but legitimately inferable — a technique the hypothesis reasoned to |
 | `unsupported` | Specific, checkable, and absent from every source — the fabrication class, including ATT&CK IDs that do not exist |
 
-**Expect RSS-sourced hunts to score lower, by design.** MISP and OTX items carry structured indicators; RSS entries do not — measured across 30 live entries, feed summaries contained no IPs, hashes or domains at all. Those indicators live in the linked article, and fetching it is deliberately not done: it would mean making outbound requests to arbitrary third-party URLs. So an RSS hunt derives its data sources from ATT&CK techniques alone and shows fewer `asserted` claims. That is the source being poorer in checkable facts, not the audit misfiring.
+**The linked report is read, and only what it says verbatim is kept.** A feed item is usually a short summary: measured across 30 live RSS entries, the summaries contained no IPs, hashes or domains at all. Those live in the linked article. With `HECATE_RUNNER_SOURCE_EVIDENCE_ENABLED=true` (the default) the cycle fetches that one report, has the model extract artifacts from it, and keeps only those whose value and quoted passage appear verbatim in the page. This makes one outbound request to a URL the feed supplied; set the variable to `false` to make none. Without it, or when the fetch fails, an RSS hunt derives its data sources from ATT&CK techniques alone and shows fewer `asserted` claims. That is the source being poorer in checkable facts, not the audit misfiring.
 
 Evidence is ranked because it is not equally trustworthy. Treating a research document as proof lets a fabrication launder itself: a CVE invented during research and written into `R-0611` came back as "asserted" in any hunt built from that research, which is circular. The CTI exists independently of this pipeline; the research does not.
 
@@ -116,7 +115,7 @@ Two separate things live here, and the distinction is the whole design: **detect
 
 ### Sigma drafting (automatic, before review)
 
-After the hypothesis lands, the orchestrator runs `hecate-agent agent run sigma-generator` and writes one Sigma rule per applicable log source into `$HECATE_WORKSPACE/queries/H-XXXX/`, embedding them in the draft's CHECK section. An operator therefore reviews a hunt that already has candidate detection logic rather than an empty query block.
+After the hypothesis lands, the orchestrator calls Core's Sigma generator and writes one Sigma rule per applicable log source into `$HECATE_WORKSPACE/queries/H-XXXX/`, embedding them in the draft's CHECK section. An operator therefore reviews a hunt that already has candidate detection logic rather than an empty query block.
 
 Sigma rather than SPL or KQL because this program has no committed query platform. `sigma convert -t <backend>` retargets a rule to Splunk, Elastic, CrowdStrike or Defender later, so drafting now commits to nothing — and correspondingly, **a Sigma rule cannot be executed by the propose/approve path below.** It is review material, not a runnable query.
 
@@ -138,7 +137,7 @@ hecate-runner audit --strict        # exit 1 if any claim traces to no source
 hecate-runner audit --check-attack  # also validate technique IDs against ATT&CK
 ```
 
-`--check-attack` is opt-in because it costs one `hecate-agent` subprocess per technique.
+`--check-attack` is opt-in because it costs one ATT&CK lookup per technique.
 A hunt whose CTI cannot be recovered is reported as such rather than scored —
 every claim would grade unsupported for want of evidence, which reads like a
 fabrication finding and is not one.
@@ -164,12 +163,13 @@ QueryProvider.execute()  -->  mock (default) | splunk (shells out to `hecate-age
 
 Guardrails (`HECATE_RUNNER_MAX_QUERY_TIME_RANGE_DAYS`, default 7; `HECATE_RUNNER_MAX_QUERY_LIMIT`, default 1000) mirror Hecate's own `AGENTS.md` Query Guardrails section, and are re-checked at `approve` time, not just at `propose` time — if the staged file was hand-edited or the ceilings changed in between, `approve` refuses rather than trusting the earlier check.
 
-**`HECATE_RUNNER_QUERY_PROVIDER=mock` is the default and, as of this writing, the only backend that's actually been run.** There is no live Splunk instance in this environment to validate `SplunkQueryProvider` against yet — it shells out to `hecate-agent splunk search` (same subprocess pattern as `HecateClient`) and is unit-tested against a fake `hecate-agent` binary, but nothing here has touched a real SIEM. Treat it as ready-to-wire, not proven, until it has. Switching from mock to a real backend is meant to be a config change (`HECATE_RUNNER_QUERY_PROVIDER=splunk` + `SPLUNK_HOST`/`SPLUNK_TOKEN` in the Hecate workspace `.env`), not new code — `hecate-runner doctor` checks for both when the provider is set to `splunk`.
+**`HECATE_RUNNER_QUERY_PROVIDER=mock` is the default and, as of this writing, the only backend that's actually been run.** There is no live Splunk instance in this environment to validate `SplunkQueryProvider` against yet — it shells out to `hecate-agent splunk search` (the one place the Runner uses the CLI rather than the library) and is unit-tested against a fake `hecate-agent` binary, but nothing here has touched a real SIEM. Treat it as ready-to-wire, not proven, until it has. Switching from mock to a real backend is meant to be a config change (`HECATE_RUNNER_QUERY_PROVIDER=splunk` + `SPLUNK_HOST`/`SPLUNK_TOKEN` in the Hecate workspace `.env`), not new code — `hecate-runner doctor` checks for both when the provider is set to `splunk`.
 
 ## Quickstart (local dev)
 
 ```bash
-# Clone
+# Clone both repositories side by side: the Runner depends on ../Hecate-Core
+git clone https://github.com/BrizoSec/Hecate-Core.git
 git clone https://github.com/BrizoSec/Hecate-Runner.git
 cd Hecate-Runner
 
@@ -186,7 +186,7 @@ uv run pytest
 # Preview an orchestrator cycle (uses your local Hecate workspace)
 uv run hecate-runner run --dry-run
 
-# Real run (invokes hecate hypothesis-generator + writes a draft hunt)
+# Real run (researches, generates a hypothesis and writes a draft hunt)
 uv run hecate-runner run
 ```
 
@@ -315,7 +315,7 @@ indicator-sweep hunts, not hypotheses.
 
 All config comes from environment variables (or a `.env` file in the working directory). See [.env.example](.env.example) for the full list.
 
-**Two `.env` files, different jobs.** This repo's `.env` configures the orchestrator. The Hecate workspace has its own, which `hecate-agent` loads itself — that is where `TAVILY_API_KEY`, `HECATE_LLM_PROVIDER` and `HECATE_LLM_MODEL` belong, so manual `hecate-agent` runs and orchestrated ones use the same model. `hecate-runner` passes only `HECATE_WORKSPACE` through by default. No variable appears in both `.env.example` files, so there is never a question of which copy wins — the settings still exist to override `HECATE_LLM_*` from here, but they are deliberately absent from the example, since setting them splits manual and orchestrated runs onto different models.
+**Two `.env` files, different jobs.** This repo's `.env` configures the orchestrator. The Hecate workspace has its own, which `hecate-agent` loads itself — that is where `TAVILY_API_KEY`, `HECATE_LLM_PROVIDER` and `HECATE_LLM_MODEL` belong, so manual `hecate-agent` runs and orchestrated ones use the same model. `hecate-runner` passes only `HECATE_WORKSPACE` and the live call log path (`HECATE_LLM_CALL_LOG`) through by default. No variable appears in both `.env.example` files, so there is never a question of which copy wins — the settings still exist to override `HECATE_LLM_*` from here, but they are deliberately absent from the example, since setting them splits manual and orchestrated runs onto different models.
 
 Key ones:
 
@@ -324,9 +324,10 @@ Key ones:
 | `HECATE_WORKSPACE` | Path to the Hecate workspace (Hecate-Core) | `~/betas/Hecate-Core` |
 | `HECATE_BIN` | Path to the `hecate-agent` CLI | `<workspace>/.venv/bin/hecate-agent` |
 | `HECATE_RUNNER_MAX_DRAFTS_PER_DAY` | Cap on drafts per 24h | `4` |
-| `HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY` | Cap on web-searching research runs per UTC day; not refunded on a failed cycle, so retries can't drain the Tavily quota | `7` |
-| `HECATE_RUNNER_LLM_TIMEOUT_SEC` | Hard timeout on any single `hecate-agent` invocation (research call and hypothesis call each get their own budget) | `1500` |
-| `HECATE_RUNNER_RESEARCH_ENABLED` | Run `hecate-agent research new` (web-grounded) before hypothesis generation | `true` |
+| `HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY` | Cap on web-searching research runs per UTC day, checked before the source read; not refunded on a failed cycle, so retries can't drain the Tavily quota | `7` |
+| `HECATE_RUNNER_LLM_TIMEOUT_SEC` | Hard timeout on any single call into Core (research call and hypothesis call each get their own budget) | `1500` |
+| `HECATE_RUNNER_SOURCE_EVIDENCE_ENABLED` | Fetch the report a CTI item links to and keep the artifacts verified verbatim against it, before research and drafting | `true` |
+| `HECATE_RUNNER_RESEARCH_ENABLED` | Run web-grounded research before hypothesis generation | `true` |
 | `HECATE_RUNNER_RESEARCH_DEPTH` | `basic` (~5 min) or `advanced` (~15-20 min) research depth | `advanced` |
 | `HECATE_RUNNER_CTI_PROVIDER` | Which CTI source to use (`file`, `otx`, `rss`, `misp`, `cisa_kev`, `abuse_ch`, or `multi`) | `file` |
 | `HECATE_RUNNER_CTI_MULTI_PROVIDERS` | Sub-providers to rotate through when `CTI_PROVIDER=multi` | `rss,otx,misp` |
@@ -345,7 +346,8 @@ Key ones:
 | `HECATE_RUNNER_LOG_MAX_BYTES` | Rotate the orchestrator log past this size (copy-and-truncate, since systemd co-writes the file) | `5242880` |
 | `HECATE_RUNNER_LOG_BACKUP_COUNT` | Rotated logs to keep | `5` |
 | `HECATE_RUNNER_SIGMA_GENERATION_ENABLED` | Draft Sigma rules per applicable log source before operator review | `true` |
-| `HECATE_RUNNER_SIGMA_TIMEOUT_SEC` | Timeout for the Sigma drafting subprocess (one LLM call per log source) | `1800` |
+| `HECATE_RUNNER_SIGMA_TIMEOUT_SEC` | Timeout for Sigma drafting (one LLM call per log source) | `1800` |
+| `HECATE_RUNNER_SIGMA_REVIEW_ENABLED` | Review each model-drafted rule against the hypothesis and the verified source passages; costs one model call per rule plus one | `true` |
 | `HECATE_RUNNER_MISP_REQUIRE_ATTACK_TECHNIQUE` | Only route MISP events that map to an ATT&CK technique — stricter than the galaxy check, which any cluster satisfies | `false` |
 | `HECATE_RUNNER_MISP_ORG_ALLOWLIST` | Comma-separated MISP org names; only these are routable. Empty = every org. Keeps one high-volume feed from burying the rest | _(empty)_ |
 | `HECATE_RUNNER_MISP_BACKFILL` | Ignore the freshness floor and walk the MISP archive oldest-first. Reset the cursor file to start from the beginning | `false` |
@@ -361,13 +363,18 @@ Beyond `run` and the pollers, the CLI covers the things you reach for when a
 cycle looks wrong:
 
 ```bash
+hecate-runner watch      # follow the decision trail of the running cycle, line by line
 hecate-runner status     # quota used today, last run, total drafts
 hecate-runner metrics    # stage latency and estimated LLM cost, by CTI source
 hecate-runner doctor     # sanity-check the deployment; non-zero exit if anything is off
 hecate-runner config     # effective settings as JSON, safe to paste into an issue
 hecate-runner parked     # list / show / restore CTI held back by triage
 hecate-runner sources    # list / enable / disable / reset cursors, editing .env in place
+hecate-runner reset      # return the workspace to a blank state for a fresh evaluation
 ```
+
+For a full-screen view of a running cycle, run `hecate-agent monitor` from the
+workspace: the stage in hand, the trail, host load, the queue, and model usage.
 
 `doctor` is the first thing to run after any deployment change: it checks the
 workspace path, the `hecate-agent` binary, credentials for whichever providers
@@ -381,6 +388,11 @@ per-stage averages and totals grouped by CTI provider; `--source rss` filters
 to one provider. Cost is an estimate from Hecate's model pricing table, not a
 provider invoice amount. Older Core versions still contribute wall-clock
 timings, while token and cost fields remain unavailable.
+
+Those totals are written when a cycle ends. To see model usage while one is
+still running, the Runner has Core append every model call to
+`logs/llm_calls.jsonl` as it starts and as it returns; the file is emptied at
+the start of each cycle and is what the monitor's usage panel reads mid-cycle.
 
 `sources reset` re-ingests from a source by rewinding its cursor. Note that
 cursors advance past items the filters skip, so rewinding is also how you revisit
