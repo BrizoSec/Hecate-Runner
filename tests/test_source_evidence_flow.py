@@ -118,11 +118,12 @@ def test_the_trail_reports_what_the_source_step_found(
 ) -> None:
     caplog.set_level(logging.INFO, logger=LOGGER_NAME)
     _run(settings, evidence_hecate)
-    line = next(
+    started, line = [
         r.getMessage()
         for r in caplog.records
         if r.name == LOGGER_NAME and " source " in r.getMessage()
-    )
+    ][:2]
+    assert f"starting: reading {REPORT}" in started
     assert "2 artifact(s) verified" in line and "2/2 indicator(s) typed" in line
 
 
@@ -265,3 +266,56 @@ def test_values_the_model_names_from_the_actors_side_or_another_platform_are_rem
     )
     suspicious = draft.split("### What Suspicious Looks Like", 1)[1].split("###", 1)[0]
     assert "/tmp/.cache" in suspicious and "python.exe" not in suspicious
+
+
+def test_the_source_read_reports_its_model_usage(
+    settings: Settings, evidence_hecate: MagicMock
+) -> None:
+    import json
+    from dataclasses import replace
+
+    usage = {
+        "llm_calls": 5,
+        "input_tokens": 9000,
+        "output_tokens": 700,
+        "llm_duration_ms": 750000,
+        "estimated_cost_usd": None,
+        "models": ["ollama/qwen"],
+    }
+    evidence = replace(EVIDENCE)
+    evidence.usage_metadata = lambda: usage  # type: ignore[method-assign]
+    evidence_hecate.source_evidence.return_value = evidence
+    _run(settings, evidence_hecate)
+    cycle = json.loads(settings.metrics_file.read_text().splitlines()[-1])
+    stage = next(s for s in cycle["stages"] if s["stage"] == "source_evidence")
+    assert stage["llm_calls"] == 5
+    assert stage["input_tokens"] == 9000
+    assert stage["output_tokens"] == 700
+    assert stage["models"] == ["ollama/qwen"]
+
+
+def test_the_source_read_is_announced_before_it_runs(
+    settings: Settings, evidence_hecate: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    seen: list[str] = []
+
+    def read(url: str) -> SourceEvidence:
+        seen.extend(r.getMessage() for r in caplog.records if r.name == LOGGER_NAME)
+        return EVIDENCE
+
+    evidence_hecate.source_evidence.side_effect = read
+    with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
+        _run(settings, evidence_hecate)
+    assert any(f"starting: reading {REPORT}" in line for line in seen)
+
+
+def test_a_spent_research_quota_stops_the_cycle_before_the_source_is_read(
+    evidence_hecate: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The read is minutes of model time; a cycle that cannot research must not spend it.
+    monkeypatch.setenv("HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY", "0")
+    monkeypatch.setattr("hecate_runner.orchestrator.has_narrative", lambda _content: True)
+    result = _run(Settings(_env_file=None), evidence_hecate)  # type: ignore[call-arg]
+    assert result.outcome == "research_quota_reached"
+    evidence_hecate.source_evidence.assert_not_called()
+    evidence_hecate.research_new.assert_not_called()

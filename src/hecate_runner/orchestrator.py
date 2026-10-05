@@ -37,7 +37,7 @@ from hecate_runner.hunt_writer import (
     write_draft,
 )
 from hecate_runner.indicator_sweep import build_indicator_sweep, parse_indicator_inventory
-from hecate_runner.metrics import CycleMetrics, MetricsStore
+from hecate_runner.metrics import CycleMetrics, LLMUsage, MetricsStore
 from hecate_runner.notifications import notify_draft_created
 from hecate_runner.parked_store import park, prune_parked
 from hecate_runner.state import OrchestratorState
@@ -966,13 +966,22 @@ class Orchestrator:
         if not urls:
             self.trail.step("source", "no report link in the item; drafting from the feed text")
             return
+        self.trail.step("source", "starting: reading %s", urls[0])
         started = self.trail.elapsed
         try:
-            with self.metrics.measure("source_evidence"):
+            with self.metrics.measure("source_evidence") as measured:
                 evidence = self.hecate.source_evidence(urls[0])
                 self._source_evidence = evidence
-                if evidence.text:
-                    self._indicator_records = self.hecate.indicator_records(indicators, evidence)
+                try:
+                    if evidence.text:
+                        self._indicator_records = self.hecate.indicator_records(
+                            indicators, evidence
+                        )
+                finally:
+                    # Typing the indicators calls the model too; count both passes.
+                    metadata: Any = getattr(evidence, "usage_metadata", dict)()
+                    if isinstance(metadata, dict) and metadata:
+                        measured.set_usage(LLMUsage.from_metadata(metadata))
         except Exception as exc:  # evidence is an aid; never fatal
             log.warning("Source evidence failed for %s: %s", urls[0], exc)
             self.trail.step(
@@ -1853,6 +1862,29 @@ class Orchestrator:
             route = "no narrative -> research without web search -> indicator-only hypothesis"
         self.trail.step("route", "%s", route)
 
+        # Only a narrative search spends Tavily credits, so only that counts.
+        # Refused rather than drafted ungrounded, for the same reason a
+        # research failure is: the CTI waits for tomorrow's quota. Checked
+        # ahead of the source read, which is minutes of model time that a
+        # refused cycle would throw away.
+        if (
+            not sweep_inventory
+            and self.settings.research_enabled
+            and intel_has_narrative
+            and not state.check_and_reserve_research(self.settings.max_research_runs_per_day)
+        ):
+            log.warning(
+                "Daily research quota reached (%d). Leaving CTI in queue for next cycle.",
+                self.settings.max_research_runs_per_day,
+            )
+            state.drafts_today -= 1
+            state.total_drafts_ever -= 1
+            return RunResult(
+                outcome="research_quota_reached",
+                detail=f"{state.research_runs_today}/{self.settings.max_research_runs_per_day}",
+                parked_count=parked_count,
+            )
+
         # The report the item links to carries what the feed summary drops:
         # process tree, paths, ports, and what each indicator is. H-0618 was
         # drafted from a 2,194-character blurb of a 32,920-character report.
@@ -1881,23 +1913,6 @@ class Orchestrator:
             # grounded (ungrounded generation measured ~30% accuracy).
             log.info("CTI is a parseable indicator dump; skipping research grounding.")
         elif self.settings.research_enabled:
-            # Only a narrative search spends Tavily credits, so only that
-            # counts. Refused rather than drafted ungrounded, for the same
-            # reason a research failure is: the CTI waits for tomorrow's quota.
-            if intel_has_narrative and not state.check_and_reserve_research(
-                self.settings.max_research_runs_per_day
-            ):
-                log.warning(
-                    "Daily research quota reached (%d). Leaving CTI in queue for next cycle.",
-                    self.settings.max_research_runs_per_day,
-                )
-                state.drafts_today -= 1
-                state.total_drafts_ever -= 1
-                return RunResult(
-                    outcome="research_quota_reached",
-                    detail=f"{state.research_runs_today}/{self.settings.max_research_runs_per_day}",
-                    parked_count=parked_count,
-                )
             topic, technique = derive_research_topic(item.content, title=item.title or None)
             self.trail.step(
                 "research",
