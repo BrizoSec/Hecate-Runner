@@ -936,10 +936,9 @@ class Orchestrator:
         return flagged
 
     def _primary_evidence_text(self, item: CTIItem) -> str:
-        """The feed item plus the primary report's text: what the source actually says."""
-        if self._source_evidence is not None and self._source_evidence.text:
-            return f"{item.content}\n{self._source_evidence.text}"
-        return item.content
+        """The feed item plus the primary report's text and any OSINT enrichment."""
+        base_text = f"{item.content}\n{self._source_evidence.text}" if (self._source_evidence is not None and self._source_evidence.text) else item.content
+        return f"{base_text}\n{self._enriched_context}" if hasattr(self, '_enriched_context') and self._enriched_context else base_text
 
     def _evidence_research_text(self, research_id: str | None) -> str:
         """Research text that may count as evidence: none when research was source-only.
@@ -979,7 +978,15 @@ class Orchestrator:
         started = self.trail.elapsed
         try:
             with self.metrics.measure("source_evidence") as measured:
-                evidence = self.hecate.source_evidence(urls[0])
+                import concurrent.futures
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = executor.submit(self.hecate.source_evidence, urls[0])
+                try:
+                    evidence = future.result(timeout=300)
+                except concurrent.futures.TimeoutError as exc:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise TimeoutError(f"Timed out after 300 seconds reading {urls[0]}") from exc
+                
                 self._source_evidence = evidence
                 try:
                     if evidence.text:
@@ -1785,6 +1792,7 @@ class Orchestrator:
     def _run_body(self, state: OrchestratorState, *, dry_run: bool) -> RunResult:
         # Primary-source evidence for this cycle's item; see _gather_source_evidence.
         self._source_evidence = None
+        self._enriched_context = ""
         self._indicator_records = []
         self._detection_guidance = []
         self._specimen = []
@@ -1903,7 +1911,13 @@ class Orchestrator:
             if self._source_evidence is not None and self._source_evidence.artifacts
             else ""
         )
-        intel_for_models = f"{item.content}\n\n{source_block}" if source_block else item.content
+
+        # Enrich the CTI using external OSINT sources (VT, MISP, etc.)
+        from hecate_agent.api import generate_enrichment_summary
+        log.info("Enriching CTI observables via OSINT sources...")
+        self._enriched_context = generate_enrichment_summary(item.content)
+
+        intel_for_models = f"{item.content}\n\n{source_block}\n\n{self._enriched_context}" if source_block else f"{item.content}\n\n{self._enriched_context}"
 
         research_id: str | None = None
         related_hunts: list[str] = []
