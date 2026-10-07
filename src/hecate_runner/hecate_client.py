@@ -78,6 +78,7 @@ class HypothesisResult:
     is_threat_report: bool = True
     low_confidence_reason: str = ""
     is_indicator_only: bool = False
+    indicator_records: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     raw_output: str = ""
     usage: LLMUsage | None = None
@@ -282,6 +283,7 @@ class HecateClient:
             is_threat_report=output.is_threat_report,
             low_confidence_reason=output.low_confidence_reason or "",
             is_indicator_only=output.is_indicator_only,
+            indicator_records=getattr(output, "indicator_records", []),
             warnings=[],
             raw_output="",
             usage=usage,

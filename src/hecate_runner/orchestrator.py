@@ -2108,6 +2108,22 @@ class Orchestrator:
             log.info("Filled empty [source] slot in indicator-sweep hypothesis from CTI title.")
             hypothesis.hypothesis = repaired
 
+        if getattr(hypothesis, "indicator_records", None):
+            from hecate_agent.core.provenance import IndicatorRecord
+            added = 0
+            for r in hypothesis.indicator_records:
+                try:
+                    if "source" not in r:
+                        r["source"] = "cti"
+                    rec = IndicatorRecord.from_dict(r)
+                    if not any(e.value == rec.value and e.type == rec.type for e in self._indicator_records):
+                        self._indicator_records.append(rec)
+                        added += 1
+                except Exception as exc:
+                    log.warning("Failed to parse indicator record from hypothesis: %s", exc)
+            if added > 0:
+                log.info("Appended %d structured indicator(s) from hypothesis extraction.", added)
+
         if not sweep_inventory:
             self.trail.step(
                 "hypothesis",
