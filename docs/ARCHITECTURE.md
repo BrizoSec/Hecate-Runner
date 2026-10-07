@@ -286,8 +286,11 @@ Every model output passes through a deterministic check before it reaches a
 draft. A generated Sigma rule is rejected if it matches on scaffolding values,
 reproduces a supplied indicator only as a fragment, excludes the hypothesis's
 own attack path, or puts a hostname in an address field. Empty filter blocks
-are repaired rather than rejected. A rejected rule is not retried, so the draft
-keeps a placeholder query section instead of a wrong rule.
+are repaired rather than rejected. Rejected rules are immediately fed back into a
+retry loop where the model is prompted with the specific validation failure or
+`RuleReviewer` critique so it can self-correct, dramatically reducing empty
+query sections. Furthermore, structured IOCs extracted directly from the CTI are
+routed to dedicated indicator rules, ensuring high-fidelity extraction without TTP conflation.
 
 ---
 
