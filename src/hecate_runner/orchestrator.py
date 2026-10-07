@@ -986,7 +986,7 @@ class Orchestrator:
                 except concurrent.futures.TimeoutError as exc:
                     executor.shutdown(wait=False, cancel_futures=True)
                     raise TimeoutError(f"Timed out after 300 seconds reading {urls[0]}") from exc
-                
+
                 self._source_evidence = evidence
                 try:
                     if evidence.text:
