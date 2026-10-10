@@ -1343,6 +1343,7 @@ class Orchestrator:
 
         payload = {
             "hunt_id": req.hunt_id,
+            "threat_intel": item.content,
             "hypothesis": req.hypothesis.hypothesis,
             "justification": req.hypothesis.justification,
             "techniques": techniques,

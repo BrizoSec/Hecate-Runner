@@ -28,7 +28,7 @@ from typing import Any
 import httpx
 
 from hecate_runner.atomic_write import atomic_write_text
-from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
+from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider, extract_article_text
 
 log = logging.getLogger(__name__)
 
@@ -416,14 +416,23 @@ def _pulse_to_blurb(pulse: dict[str, Any]) -> str:
     indicator_summary = ", ".join(
         f"{itype} ({count})" for itype, count in sorted(indicator_counts.items())
     )
+    
+    extracted_text = ""
+    if references:
+        extracted_text = extract_article_text(references[0])
 
     lines = [f"OTX Pulse: {name}", f"Adversary/Attribution: {adversary}"]
     if tags:
         lines.append(f"Tags: {', '.join(tags)}")
     if techniques:
         lines.append(f"{ATTACK_TECHNIQUE_LINE} {', '.join(techniques)}")
-    if description:
+    
+    if extracted_text:
         lines.append(f"Description: {description[:1500]}")
+        lines.append(f"Reference Article Content:\n{extracted_text}")
+    elif description:
+        lines.append(f"Description: {description[:1500]}")
+        
     if indicators:
         lines.append(f"Indicators ({len(indicators)} total): {indicator_summary}")
         lines.extend(_indicator_detail_lines(pulse))

@@ -361,13 +361,19 @@ def _entry_to_cti_item(feed_url: str, entry: dict[str, Any]) -> CTIItem:
     )
 
 
+from hecate_runner.cti.base import extract_article_text
+
 def _entry_to_blurb(feed_url: str, entry: dict[str, Any]) -> str:
     """Condense an RSS/Atom entry into a text blurb for hypothesis-generator."""
     title = _real_text(entry.get("title")) or "Untitled"
     link = entry.get("link") or ""
     summary = _real_text(entry.get("summary"))[:1500]
     tags = [t.get("term", "") for t in entry.get("tags", []) if t.get("term")]
-    techniques = sorted(set(_TECHNIQUE_RE.findall(f"{title}\n{summary}")))
+    
+    extracted_text = extract_article_text(link) if link else ""
+    
+    content_for_techniques = f"{title}\n{summary}\n{extracted_text}"
+    techniques = sorted(set(_TECHNIQUE_RE.findall(content_for_techniques)))
     feed_title = entry.get("feed_title") or _feed_domain(feed_url)
 
     lines = [f"RSS: {title}", f"Source: {feed_title}"]
@@ -375,13 +381,16 @@ def _entry_to_blurb(feed_url: str, entry: dict[str, Any]) -> str:
         lines.append(f"Tags: {', '.join(tags[:10])}")
     if techniques:
         lines.append(f"{ATTACK_TECHNIQUE_LINE} {', '.join(techniques)}")
-    if summary:
+    
+    if extracted_text:
+        lines.append(f"Article Content:\n{extracted_text}")
+    elif summary:
         lines.append(f"Summary: {summary}")
+        
     if link:
         lines.append(f"Link: {link}")
 
     return "\n".join(lines)
-
 
 def _feed_domain(feed_url: str) -> str:
     return re.sub(r"^https?://(www\.)?", "", feed_url).split("/")[0]
