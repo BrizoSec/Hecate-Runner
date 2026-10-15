@@ -27,12 +27,12 @@ class Settings(BaseSettings):
         # ~/agentic-threat-hunting-framework, which no longer exists -- so a
         # deployment with no HECATE_WORKSPACE set resolved hecate_bin and
         # cti_queue_dir under a missing directory instead of failing clearly.
-        default=Path.home() / "betas" / "Hecate-Core",
-        description="Path to the Hecate workspace directory (Hecate-Core)",
+        default=Path.home() / "betas" / "Hecate-Workspace",
+        description="Path to the Hecate workspace directory (Hecate-Workspace)",
     )
     hecate_bin: Path | None = Field(
-        default=None,
-        description="Path to the hecate-agent CLI. Defaults to <workspace>/.venv/bin/hecate-agent",
+        default=Path.home() / "betas" / "Hecate-Core" / ".venv" / "bin" / "hecate-agent",
+        description="Path to the hecate-agent CLI. Defaults to Hecate-Core/.venv/bin/hecate-agent",
     )
 
     # --- LLM provider (passed through to hecate via env) ---------------------
