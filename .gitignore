@@ -69,10 +69,12 @@ dmypy.json
 
 # Environment
 .env
+*.env
 .env.local
 .env.*.local
 # Backups and variants (sed -i.bak, editor copies) hold the same secrets.
 .env.*
+*.env.*
 !.env.example
 
 # Runtime state (should live in the Hecate workspace, not the repo)
