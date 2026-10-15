@@ -80,6 +80,8 @@ dmypy.json
 # Runtime state (should live in the Hecate workspace, not the repo)
 logs/
 *.log
+*.sqlite
+hunts/
 .orchestrator_state.json
 
 # OS
