@@ -1263,6 +1263,8 @@ def test_platforms_evidenced_in_reads_platform_only_artifacts() -> None:
     darkme = "delivered PIF executables. The attack chain utilized MSI installers, VB6 loaders"
     assert platforms_evidenced_in(darkme) == ["Windows"]
     assert platforms_evidenced_in("sideloads a malicious mscoree.dll") == ["Windows"]
+    assert platforms_evidenced_in("downloads a decoy resume.docx") == ["Windows"]
+    assert platforms_evidenced_in("executes a scheduled task via schtasks") == ["Windows"]
     assert platforms_evidenced_in("persisted via a LaunchDaemon plist") == ["macOS"]
     assert platforms_evidenced_in("a cron job running a bash script") == []
 
