@@ -49,6 +49,7 @@ from hecate_runner.hunt_audit import (
 from hecate_runner.log_rotation import rotate_log_if_needed
 from hecate_runner.metrics import MetricsStore
 from hecate_runner.misp_poller import run_misp_poll
+from hecate_runner.notifications import send_test_notification
 from hecate_runner.orchestrator import (
     RunResult,
     build_default_orchestrator,
@@ -946,6 +947,23 @@ def config() -> None:
         "state_file": str(settings.state_file),
     }
     console.print_json(json.dumps(dumped))
+
+
+@app.command(name="slack-test")
+def slack_test() -> None:
+    """Send a test alert to the configured Slack incoming webhook."""
+    settings = Settings()
+    if not settings.slack_webhook_url:
+        console.print("[red]HECATE_RUNNER_SLACK_WEBHOOK_URL is not set in .env[/red]")
+        raise typer.Exit(code=1)
+
+    console.print("[dim]Sending test notification to Slack...[/dim]")
+    success, msg = send_test_notification(settings)
+    if success:
+        console.print(f"[green]✓ {msg}[/green]")
+    else:
+        console.print(f"[red]✗ {msg}[/red]")
+        raise typer.Exit(code=1)
 
 
 @app.command()

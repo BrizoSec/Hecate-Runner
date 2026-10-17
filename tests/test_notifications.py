@@ -136,3 +136,38 @@ def test_non_2xx_response_is_swallowed_not_raised(
     result = RunResult(outcome="draft_created", hunt_id="H-0042", draft_path=Path("/tmp/H-0042.md"))
     # Must not raise.
     notify_draft_created(settings, result)
+
+
+def test_send_test_notification_unconfigured(settings: Settings) -> None:
+    from hecate_runner.notifications import send_test_notification
+    settings = settings.model_copy(update={"slack_webhook_url": None})
+    success, msg = send_test_notification(settings)
+    assert not success
+    assert "not configured" in msg
+
+
+def test_send_test_notification_success(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    from hecate_runner.notifications import send_test_notification
+    settings = settings.model_copy(update={"slack_webhook_url": "https://hooks.slack.com/services/test"})
+    
+    class OkResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: OkResponse())
+    success, msg = send_test_notification(settings)
+    assert success
+    assert "successfully" in msg
+
+
+def test_send_test_notification_failure(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    from hecate_runner.notifications import send_test_notification
+    settings = settings.model_copy(update={"slack_webhook_url": "https://hooks.slack.com/services/test"})
+
+    def fake_post(*a, **kw):
+        raise httpx.ConnectError("network unreachable")
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    success, msg = send_test_notification(settings)
+    assert not success
+    assert "failed" in msg

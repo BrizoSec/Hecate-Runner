@@ -49,3 +49,20 @@ def notify_draft_created(settings: Settings, result: RunResult) -> None:
         # around self.notify(result), but this module shouldn't rely on its
         # caller to keep a promise it makes itself.
         log.warning("Slack notification failed (%s); draft was still created successfully", exc)
+
+
+def send_test_notification(settings: Settings) -> tuple[bool, str]:
+    """Send a test message to verify the Slack webhook. Returns (success, message)."""
+    if not settings.slack_webhook_url:
+        return False, "HECATE_RUNNER_SLACK_WEBHOOK_URL is not configured."
+
+    text = (
+        ":white_check_mark: *Hecate Pipeline Notification Test*\n"
+        "Slack webhook connectivity verified successfully from Hecate-Runner."
+    )
+    try:
+        response = httpx.post(settings.slack_webhook_url, json={"text": text}, timeout=10.0)
+        response.raise_for_status()
+        return True, "Notification sent successfully."
+    except Exception as exc:
+        return False, f"Slack notification failed: {exc}"
