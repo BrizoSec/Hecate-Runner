@@ -513,7 +513,20 @@ def _render_soc_triage_playbook(req: DraftHuntRequest) -> str:
 
     # Cloud / SaaS / Identity Triage Playbook
     if any(
-        p in ("iaas", "saas", "cloud", "aws", "gcp", "azure", "office365", "m365", "entra id", "google workspace", "okta")
+        p
+        in (
+            "iaas",
+            "saas",
+            "cloud",
+            "aws",
+            "gcp",
+            "azure",
+            "office365",
+            "m365",
+            "entra id",
+            "google workspace",
+            "okta",
+        )
         for p in platforms_lower
     ):
         return (
