@@ -1927,10 +1927,30 @@ class Orchestrator:
             else ""
         )
 
-        # Enrich the CTI using external OSINT sources (VT, MISP, etc.)
-        from hecate_agent.api import generate_enrichment_summary
+        # Enrich the CTI using external OSINT sources (VT, Shodan, Censys, ThreatFox, MISP)
+        from hecate_agent.api import extract_indicators, generate_enrichment_summary
 
         log.info("Enriching CTI observables via OSINT sources...")
+        try:
+            indicators = extract_indicators(item.content)
+            ips_count = len(indicators.get("ips", []))
+            hashes_count = len(indicators.get("hashes", []))
+            domains_count = len(indicators.get("domains", []))
+            total_obs = ips_count + hashes_count + domains_count
+            if total_obs:
+                self.trail.step(
+                    "enrichment",
+                    "%d observable(s) (%d ip, %d hash, %d domain) checked via VT, Shodan, Censys, ThreatFox",
+                    total_obs,
+                    ips_count,
+                    hashes_count,
+                    domains_count,
+                )
+            else:
+                self.trail.step("enrichment", "no observable IPs/hashes/domains in source")
+        except Exception as exc:
+            log.warning("Indicator extraction failed before enrichment: %s", exc)
+
         self._enriched_context = generate_enrichment_summary(item.content)
 
         intel_for_models = (
