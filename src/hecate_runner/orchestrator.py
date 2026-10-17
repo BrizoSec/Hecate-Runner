@@ -1102,8 +1102,13 @@ class Orchestrator:
     def _observed_commands(self, item: CTIItem, platforms: list[str]) -> list[dict[str, Any]]:
         """Commands the source shows being run, each a process-rule candidate."""
         from hecate_agent.core.command_rules import command_candidates
+        from hecate_agent.core.technique_evidence import extract_primary_actor
 
-        primary_actor = attributed_actor(item.content) or None
+        primary_actor = (
+            extract_primary_actor(self._primary_evidence_text(item))
+            or attributed_actor(item.content)
+            or None
+        )
         candidates: list[dict[str, Any]] = list(
             command_candidates(
                 self._primary_evidence_text(item), platforms, primary_actor=primary_actor
@@ -2007,6 +2012,25 @@ class Orchestrator:
                     hashes_count,
                     domains_count,
                 )
+                item_inds = item.metadata.setdefault("indicators", {})
+                norm = {"ipv4": indicators.get("ips", []), "domain": indicators.get("domains", [])}
+                for h in indicators.get("hashes", []):
+                    htype = "sha256" if len(h) == 64 else ("sha1" if len(h) == 40 else "md5")
+                    norm.setdefault(htype, []).append(h)
+                for k, vs in norm.items():
+                    item_inds.setdefault(k, [])
+                    for v in vs:
+                        if v not in item_inds[k]:
+                            item_inds[k].append(v)
+
+                from hecate_agent.core.provenance import records_from_cti
+
+                cti_records = records_from_cti(norm)
+                for rec in cti_records:
+                    if not any(
+                        e.value == rec.value and e.type == rec.type for e in self._indicator_records
+                    ):
+                        self._indicator_records.append(rec)
             else:
                 self.trail.step("enrichment", "no observable IPs/hashes/domains in source")
         except Exception as exc:
