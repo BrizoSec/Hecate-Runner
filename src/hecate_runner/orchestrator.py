@@ -2021,7 +2021,7 @@ class Orchestrator:
             if total_obs:
                 self.trail.step(
                     "enrichment",
-                    "%d observable(s) (%d ip, %d hash, %d domain) checked via VT, GreyNoise, Shodan, Censys, ThreatFox",
+                    "%d observable(s) (%d ip, %d hash, %d domain) checked via VT, GreyNoise, AbuseIPDB, Shodan, Censys, Abuse.ch, RDAP",
                     total_obs,
                     ips_count,
                     hashes_count,
