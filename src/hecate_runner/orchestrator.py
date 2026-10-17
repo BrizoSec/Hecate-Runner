@@ -1103,8 +1103,11 @@ class Orchestrator:
         """Commands the source shows being run, each a process-rule candidate."""
         from hecate_agent.core.command_rules import command_candidates
 
+        primary_actor = attributed_actor(item.content) or None
         candidates: list[dict[str, Any]] = list(
-            command_candidates(self._primary_evidence_text(item), platforms)
+            command_candidates(
+                self._primary_evidence_text(item), platforms, primary_actor=primary_actor
+            )
         )
         if candidates:
             self.trail.step(
