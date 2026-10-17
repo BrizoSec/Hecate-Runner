@@ -121,6 +121,7 @@ class SigmaResult:
     warnings: list[str] = field(default_factory=list)
     logsources_considered: list[str] = field(default_factory=list)
     rejected: list[str] = field(default_factory=list)
+    omitted: list[str] = field(default_factory=list)
     files: list[Path] = field(default_factory=list)
     rules: list[dict[str, Any]] = field(default_factory=list)
     usage: LLMUsage | None = None
@@ -331,6 +332,7 @@ class HecateClient:
                 warnings=list(metadata.get("warnings") or []),
                 logsources_considered=output.logsources_considered,
                 rejected=output.rejected,
+                omitted=list(getattr(output, "omitted", []) or []),
                 files=files,
                 rules=rules,
                 usage=usage,

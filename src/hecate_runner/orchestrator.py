@@ -1477,18 +1477,30 @@ class Orchestrator:
             return
 
         # A rejected rule is not retried, so its reason is the only record of
-        # why a log source came back empty. The client's `warnings` is always
-        # empty; the reasons live in `rejected`.
-        for reason in result.rejected:
+        # why a log source came back empty. Actual rejections are logged as warnings
+        # and tallied in the trail; unsupported/omitted candidate categories are logged
+        # as debug notes rather than rejected rules.
+        real_rejections = [
+            r for r in result.rejected
+            if "no rule returned" not in r and "unsupported" not in r
+        ]
+        omitted = getattr(result, "omitted", []) or [
+            r for r in result.rejected
+            if "no rule returned" in r or "unsupported" in r
+        ]
+        for reason in real_rejections:
             self.trail.step("sigma", "rejected %s", clip(reason, 160))
             log.info("Sigma rule rejected for %s: %s", req.hunt_id, reason)
+        for note in omitted:
+            log.debug("Sigma log source omitted for %s: %s", req.hunt_id, note)
+
         self.trail.step(
             "sigma",
             "done in %.0fs: %d rule(s) kept (%s), %d rejected",
             self.trail.elapsed - sigma_started,
             len(result.rules or []),
             listing(sorted({str(r.get("logsource_category")) for r in result.rules or []})),
-            len(result.rejected),
+            len(real_rejections),
         )
 
         self._audit_rule_provenance(result.rules or [])
@@ -1503,7 +1515,10 @@ class Orchestrator:
             return
 
         for warning in result.warnings:
-            log.info("Sigma drafting note for %s: %s", req.hunt_id, warning)
+            if "no rule returned" in warning or "unsupported" in warning:
+                log.debug("Sigma drafting note for %s: %s", req.hunt_id, warning)
+            else:
+                log.info("Sigma drafting note for %s: %s", req.hunt_id, warning)
 
         req.sigma_rules = result.rules
         req.review_gaps = result.review_gaps
