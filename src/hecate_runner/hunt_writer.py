@@ -509,6 +509,64 @@ def _render_soc_triage_playbook(req: DraftHuntRequest) -> str:
 
     techniques = ", ".join(req.hypothesis.techniques) if req.hypothesis.techniques else "Unmapped"
     behavior = req.hypothesis.behavior or req.hypothesis.hypothesis or "Target behavior"
+    platforms_lower = {p.strip().lower() for p in req.platforms if p.strip()}
+
+    # Cloud / SaaS / Identity Triage Playbook
+    if any(
+        p in ("iaas", "saas", "cloud", "aws", "gcp", "azure", "office365", "m365", "entra id", "google workspace", "okta")
+        for p in platforms_lower
+    ):
+        return (
+            "\n### SOC Responder Triage Playbook (ADS-Lite)\n\n"
+            f"**Target Technique:** `{techniques}`  \n"
+            f"**Strategy Abstract:** Detects `{_cell(behavior, 120)}` in Cloud/SaaS telemetry by identifying anomalous "
+            "API calls, privilege escalation, or identity token abuse contrasting with the authorized baseline.\n\n"
+            "#### 1. Triage & Initial Scoping (First 3 Steps)\n"
+            "1. **Identity & API Verification:** Review CloudTrail, Entra, or SaaS audit logs for the invoking "
+            "principal ARN, user account, source IP address, user agent, and MFA status.\n"
+            "2. **Identity & Host Scoping:** Identify whether the actor assumed additional roles (STS AssumeRole), "
+            "granted OAuth permissions, or generated new API access keys within +/- 2 hours of the alert.\n"
+            "3. **Telemetry Correlation:** Correlate across cloud accounts, regions, or tenants for concurrent "
+            "actions originating from the same session token, IP, or credential set.\n\n"
+            "#### 2. Containment & IR Escalation\n"
+            "- **Immediate Isolation Threshold:** Disable compromised access keys, revoke active session tokens, "
+            "and remove illicit OAuth app consents or IAM role attachments immediately.\n"
+            "- **Credential Invalidation:** Force password reset, revoke active refresh tokens, and re-issue MFA credentials.\n"
+            "- **Incident Escalation:** Escalate to Tier-2 / IR Incident Commander if persistence mechanisms or secondary host "
+            "compromise attempts are identified.\n\n"
+            "#### 3. Detection Robustness & Evasion Cost\n"
+            "- **Observable Robustness:** Behavioral / TTP-centric (Pyramid of Pain: TTPs). Resistant to IP or tool rotation.\n"
+            "- **Event Robustness:** Control Plane / Management Plane audit telemetry (immutable CloudTrail / Entra Audit logs).\n"
+            "- **Adversary Evasion Cost:** High — adversary cannot bypass management-plane audit logging without cloud control plane compromise.\n"
+        )
+
+    # Linux & Containers Triage Playbook
+    if any(p in ("linux", "containers", "kubernetes") for p in platforms_lower):
+        return (
+            "\n### SOC Responder Triage Playbook (ADS-Lite)\n\n"
+            f"**Target Technique:** `{techniques}`  \n"
+            f"**Strategy Abstract:** Detects `{_cell(behavior, 120)}` on Linux/Container hosts by identifying anomalous "
+            "execution patterns contrasting with authorized system administration baselines.\n\n"
+            "#### 1. Triage & Initial Scoping (First 3 Steps)\n"
+            "1. **Lineage Verification:** Inspect process tree, parent shell PID, executable inode/path, and namespace context "
+            "to determine whether execution originated from an authorized SSH session or deployment pipeline.\n"
+            "2. **Identity & Host Scoping:** Check `/var/log/auth.log`, `auditd`, and PAM events within +/- 2 hours "
+            "to assess authentication method (SSH key vs password), `sudo` elevation, or abnormal TTY allocation.\n"
+            "3. **Telemetry Correlation:** Correlate network socket connections with file creations in `/tmp`, `/var/tmp`, "
+            "or `/dev/shm`, and check for new cron jobs or systemd service units.\n\n"
+            "#### 2. Containment & IR Escalation\n"
+            "- **Immediate Isolation Threshold:** Apply container network policy or host iptables isolation if unauthorized "
+            "binaries execute from world-writable paths or `/etc/shadow` / credential stores are accessed.\n"
+            "- **Credential Invalidation:** Terminate active SSH/TTY sessions, rotate compromised user SSH keys and passwords.\n"
+            "- **Incident Escalation:** Escalate to Tier-2 / IR Incident Commander if persistence mechanisms or secondary host "
+            "compromise attempts are identified.\n\n"
+            "#### 3. Detection Robustness & Evasion Cost\n"
+            "- **Observable Robustness:** Behavioral / TTP-centric (Pyramid of Pain: TTPs). Resistant to simple script or binary renaming.\n"
+            "- **Event Robustness:** Sensor & kernel audit telemetry (`auditd`, eBPF, EDR Linux sensor).\n"
+            "- **Adversary Evasion Cost:** High — adversary must redesign execution vehicle or bypass telemetry hooks.\n"
+        )
+
+    # Windows & Generic Endpoint Triage Playbook
     return (
         "\n### SOC Responder Triage Playbook (ADS-Lite)\n\n"
         f"**Target Technique:** `{techniques}`  \n"

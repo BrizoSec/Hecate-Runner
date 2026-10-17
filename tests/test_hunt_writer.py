@@ -804,3 +804,45 @@ def test_render_draft_renders_soc_triage_playbook() -> None:
     assert "#### 3. Detection Robustness & Evasion Cost" in md
     assert "Observable Robustness:" in md
     assert "**Adversary Evasion Cost:** High" in md
+
+
+def test_render_draft_renders_cloud_soc_triage_playbook() -> None:
+    hyp = HypothesisResult(
+        hypothesis="Adversaries abuse OAuth application consent in M365",
+        behavior="Illicit OAuth application consent grant",
+        techniques=["T1550.001"],
+    )
+    req = DraftHuntRequest(
+        hunt_id="H-0124",
+        threat_intel="OAuth consent grant abuse",
+        hypothesis=hyp,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+        platforms=["SaaS", "Office365"],
+    )
+    md = render_draft(req)
+    assert "### SOC Responder Triage Playbook (ADS-Lite)" in md
+    assert "CloudTrail, Entra, or SaaS audit logs" in md
+    assert "STS AssumeRole" in md
+    assert "OAuth permissions" in md
+    assert "Control Plane / Management Plane audit telemetry" in md
+
+
+def test_render_draft_renders_linux_soc_triage_playbook() -> None:
+    hyp = HypothesisResult(
+        hypothesis="Adversaries drop webshells on Linux servers",
+        behavior="Webshell execution via cron persistence",
+        techniques=["T1059.004"],
+    )
+    req = DraftHuntRequest(
+        hunt_id="H-0125",
+        threat_intel="Linux server compromise",
+        hypothesis=hyp,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+        platforms=["Linux"],
+    )
+    md = render_draft(req)
+    assert "### SOC Responder Triage Playbook (ADS-Lite)" in md
+    assert "/var/log/auth.log" in md
+    assert "/dev/shm" in md
+    assert "iptables" in md
+    assert "eBPF" in md
