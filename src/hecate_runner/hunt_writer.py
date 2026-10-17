@@ -439,6 +439,101 @@ def _render_technique_evidence(req: DraftHuntRequest) -> str:
 _INDICATOR_KINDS = frozenset({"sha256", "sha1", "md5", "ipv4", "domain", "hostname", "url"})
 
 
+def _render_hypothesis_quality(hyp: HypothesisResult) -> str:
+    """Render hypothesis quality rubric and falsification criteria when available."""
+    has_rubric = bool(hyp.rubric_score)
+    has_baselines = bool(
+        hyp.expected_malicious or hyp.expected_benign or hyp.falsification_criteria
+    )
+    if not has_rubric and not has_baselines:
+        return ""
+
+    lines = ["", "### Hypothesis Quality & Falsification", ""]
+    if has_rubric:
+        score = hyp.rubric_score
+        verdict = score.get("verdict", "N/A")
+        total = score.get("total", 0)
+        lines += [
+            f"- **Rubric Gate Verdict:** `{verdict}` ({total}/15 points)",
+            f"  - Specificity: {score.get('specificity', 0)}/3 | Testability: {score.get('testability', 0)}/3 | "
+            f"Falsifiability: {score.get('falsifiability', 0)}/3 | Relevance: {score.get('relevance', 0)}/3 | "
+            f"Pyramid Level: {score.get('pyramid_level', 0)}/3",
+            "",
+        ]
+    if has_baselines:
+        lines += [
+            "| **Dimension** | **Criteria** |",
+            "|---|---|",
+            f"| **Expected Malicious** | {_cell(hyp.expected_malicious or '[Review CTI and populate]', 200)} |",
+            f"| **Expected Benign Baseline** | {_cell(hyp.expected_benign or '[Review baseline telemetry]', 200)} |",
+            f"| **Falsification Criteria** | {_cell(hyp.falsification_criteria or '[Review telemetry falsification criteria]', 200)} |",
+            "",
+        ]
+    return "\n".join(lines)
+
+
+def _render_atomic_tests(techniques: list[str]) -> str:
+    """Render Atomic Red Team validation procedures for mapped techniques."""
+    if not techniques:
+        return ""
+    try:
+        from hecate_agent.core.atomic_red_team import format_atomic_tests_markdown
+
+        content = format_atomic_tests_markdown(techniques)
+        return ("\n" + content) if content else ""
+    except ImportError:
+        return ""
+
+
+def _render_soc_triage_playbook(req: DraftHuntRequest) -> str:
+    """Render SOC Responder Triage Playbook (ADS-Lite) to guide analysts when alerts fire."""
+    if req.hypothesis.is_indicator_only:
+        return (
+            "\n### SOC Responder Triage Playbook (ADS-Lite)\n\n"
+            "**Target Scope:** Indicator Sweep (IOC presence in telemetry)  \n"
+            "**Strategy Abstract:** Detects presence of reported network or file indicators across enterprise telemetry.\n\n"
+            "#### 1. Triage & Initial Scoping (First 3 Steps)\n"
+            "1. **Indicator Match Verification:** Verify whether the observed hit is an exact match against "
+            "the reported indicator list (IP, domain, URL, or hash).\n"
+            "2. **Host & User Scoping:** Identify endpoints or accounts that connected to or created the indicator.\n"
+            "3. **Temporal Scoping:** Determine the first and last observed timestamps of the indicator activity.\n\n"
+            "#### 2. Containment & IR Escalation\n"
+            "- **Blocklist Enforcement:** Add confirmed malicious domains/IPs to edge proxy and firewall perimeter blocks.\n"
+            "- **Host Isolation:** Isolate endpoints with confirmed execution or bidirectional communication.\n"
+            "- **Incident Escalation:** Escalate to Incident Response if multiple internal hosts query or connect to the IOCs.\n\n"
+            "#### 3. Detection Robustness & Evasion Cost\n"
+            "- **Observable Robustness:** IOC-centric (Pyramid of Pain: Hashes / IP Addresses / Domains). Fragile and easily changed by adversary.\n"
+            "- **Event Robustness:** Sensor & perimeter logging (Proxy, DNS, Firewall, EDR network events).\n"
+            "- **Adversary Evasion Cost:** Low — adversary can rapidly alter domain or IP infrastructure.\n"
+        )
+
+    techniques = ", ".join(req.hypothesis.techniques) if req.hypothesis.techniques else "Unmapped"
+    behavior = req.hypothesis.behavior or req.hypothesis.hypothesis or "Target behavior"
+    return (
+        "\n### SOC Responder Triage Playbook (ADS-Lite)\n\n"
+        f"**Target Technique:** `{techniques}`  \n"
+        f"**Strategy Abstract:** Detects `{_cell(behavior, 120)}` by identifying anomalous execution patterns "
+        "and telemetry signatures contrasting with the established benign baseline.\n\n"
+        "#### 1. Triage & Initial Scoping (First 3 Steps)\n"
+        "1. **Lineage Verification:** Inspect process tree, command-line arguments, and parent-child relationships "
+        "to confirm if the execution originated from an authorized administrative workflow or interactive session.\n"
+        "2. **Identity & Host Scoping:** Identify the executing user principal and assess authentication logs "
+        "(e.g., Event ID 4624 / IdP audit) within +/- 2 hours of alert trigger for anomalous source IPs or MFA fatigue.\n"
+        "3. **Telemetry Correlation:** Correlate with network connection logs (Sysmon Event ID 3 / proxy logs) and file "
+        "creations in `%TEMP%` or `%APPDATA%` to identify staging or C2 communication.\n\n"
+        "#### 2. Containment & IR Escalation\n"
+        "- **Immediate Isolation Threshold:** Host network isolation is recommended if unrecognized binaries execute "
+        "from non-standard paths or direct credential access (e.g. LSASS access, SAM hive export) is observed.\n"
+        "- **Credential Invalidation:** Revoke active user sessions and rotate credentials for affected accounts.\n"
+        "- **Incident Escalation:** Escalate to Tier-2 / IR Incident Commander if persistence mechanisms or secondary host "
+        "compromise attempts are identified.\n\n"
+        "#### 3. Detection Robustness & Evasion Cost\n"
+        "- **Observable Robustness:** Behavioral / TTP-centric (Pyramid of Pain: TTPs). Resistant to simple file hash or IP changes.\n"
+        "- **Event Robustness:** Kernel / EDR sensor-level telemetry (e.g., Sysmon / EDR process creation & memory access).\n"
+        "- **Adversary Evasion Cost:** High — adversary must redesign execution vehicle or bypass telemetry hooks.\n"
+    )
+
+
 def render_draft(req: DraftHuntRequest) -> str:
     """Return the full markdown content for a draft hunt."""
     hyp = req.hypothesis
@@ -549,7 +644,7 @@ Source CTI:
 | **Behavior** | {_able_cell(hyp.behavior)} |
 | **Location** | {_able_cell(hyp.location)} |
 | **Evidence** | {_able_cell(hyp.evidence)} |
-
+{_render_hypothesis_quality(hyp)}
 ### Threat Intel & Research
 
 - **MITRE ATT&CK Techniques:** {techniques_display}
@@ -597,7 +692,7 @@ Source CTI:
 {_render_detection_guidance(req)}### Hunting Queries
 
 {_render_sigma_section(req)}{_render_review_gaps(req)}
-
+{_render_atomic_tests(techniques)}
 ---
 
 ## KEEP: Findings & Response
@@ -614,7 +709,7 @@ Source CTI:
 
 **True Positives:** 0
 **False Positives:** 0
-
+{_render_soc_triage_playbook(req)}
 ---
 
 **Draft Created:** {req.generated_at.strftime("%Y-%m-%d %H:%M:%S UTC")} by hecate-runner

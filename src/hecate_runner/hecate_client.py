@@ -79,6 +79,10 @@ class HypothesisResult:
     low_confidence_reason: str = ""
     is_indicator_only: bool = False
     indicator_records: list[dict[str, Any]] = field(default_factory=list)
+    expected_malicious: str = ""
+    expected_benign: str = ""
+    falsification_criteria: str = ""
+    rubric_score: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     raw_output: str = ""
     usage: LLMUsage | None = None
@@ -284,6 +288,10 @@ class HecateClient:
             low_confidence_reason=output.low_confidence_reason or "",
             is_indicator_only=output.is_indicator_only,
             indicator_records=getattr(output, "indicator_records", []),
+            expected_malicious=getattr(output, "expected_malicious", "") or "",
+            expected_benign=getattr(output, "expected_benign", "") or "",
+            falsification_criteria=getattr(output, "falsification_criteria", "") or "",
+            rubric_score=getattr(output, "rubric_score", {}) or {},
             warnings=[],
             raw_output="",
             usage=usage,

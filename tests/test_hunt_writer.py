@@ -710,3 +710,97 @@ class TestTitleScalar:
 
     def test_an_empty_hypothesis_still_yields_valid_yaml(self) -> None:
         assert self._parse("title: " + _title_scalar(""))["title"].startswith("DRAFT -")
+
+
+def test_render_draft_renders_hypothesis_quality_rubric_and_baselines() -> None:
+    hyp = HypothesisResult(
+        hypothesis="Adversaries dump LSASS memory",
+        justification="Common credential theft technique",
+        techniques=["T1003.001"],
+        expected_malicious="rundll32.exe executing comsvcs.dll against lsass",
+        expected_benign="Standard IT diagnostic tasks without LSASS memory dump",
+        falsification_criteria="Absence of process access events to lsass across 7 days",
+        rubric_score={
+            "specificity": 3,
+            "testability": 3,
+            "falsifiability": 3,
+            "relevance": 3,
+            "pyramid_level": 3,
+            "total": 15,
+            "verdict": "GO",
+        },
+    )
+    req = DraftHuntRequest(
+        hunt_id="H-0123",
+        threat_intel="APT observed dumping LSASS",
+        hypothesis=hyp,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert "### Hypothesis Quality & Falsification" in md
+    assert "- **Rubric Gate Verdict:** `GO` (15/15 points)" in md
+    assert "Specificity: 3/3" in md
+    assert "Expected Malicious" in md
+    assert "rundll32.exe executing comsvcs.dll" in md
+    assert "Expected Benign Baseline" in md
+    assert "Falsification Criteria" in md
+
+
+def test_render_draft_omits_hypothesis_quality_when_empty() -> None:
+    hyp = HypothesisResult(
+        hypothesis="Simple hypothesis without rubric",
+        techniques=["T1003.001"],
+    )
+    req = DraftHuntRequest(
+        hunt_id="H-0123",
+        threat_intel="test intel",
+        hypothesis=hyp,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert "### Hypothesis Quality & Falsification" not in md
+
+
+def test_render_draft_renders_atomic_red_team_validation() -> None:
+    hyp = HypothesisResult(
+        hypothesis="Adversaries dump LSASS memory",
+        techniques=["T1003.001"],
+    )
+    req = DraftHuntRequest(
+        hunt_id="H-0123",
+        threat_intel="test intel",
+        hypothesis=hyp,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert "### Validation Procedure (Atomic Red Team)" in md
+    assert "| Technique | Test ID | Procedure / Command | Expected Telemetry |" in md
+    assert "`T1003.001`" in md
+    assert "procdump.exe" in md
+
+
+def test_render_draft_renders_soc_triage_playbook() -> None:
+    hyp = HypothesisResult(
+        hypothesis="Adversaries dump LSASS memory",
+        behavior="LSASS memory access via comsvcs.dll MiniDump",
+        techniques=["T1003.001"],
+    )
+    req = DraftHuntRequest(
+        hunt_id="H-0123",
+        threat_intel="test intel",
+        hypothesis=hyp,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert "### SOC Responder Triage Playbook (ADS-Lite)" in md
+    assert "**Target Technique:** `T1003.001`" in md
+    assert "#### 1. Triage & Initial Scoping (First 3 Steps)" in md
+    assert "Lineage Verification:" in md
+    assert "Identity & Host Scoping:" in md
+    assert "Telemetry Correlation:" in md
+    assert "#### 2. Containment & IR Escalation" in md
+    assert "Immediate Isolation Threshold:" in md
+    assert "Credential Invalidation:" in md
+    assert "#### 3. Detection Robustness & Evasion Cost" in md
+    assert "Observable Robustness:" in md
+    assert "**Adversary Evasion Cost:** High" in md
