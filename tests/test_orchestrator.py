@@ -706,6 +706,42 @@ def test_has_narrative_false_for_bare_ioc_dump() -> None:
     assert has_narrative(content) is False
 
 
+def test_has_narrative_true_for_markdown_analytical_headings() -> None:
+    content = (
+        "# Security Advisory: Operation TestIntrusion\n"
+        "### Technical Analysis & Attack Lifecycle\n"
+        "The threat actor leveraged container breakout techniques to reach host resources."
+    )
+    assert has_narrative(content) is True
+
+
+def test_has_narrative_true_for_substantive_prose_without_standard_headers() -> None:
+    content = (
+        "During our incident response investigation we uncovered a multi-stage intrusion "
+        "affecting Linux endpoints and identity infrastructure. The adversary used compromised "
+        "administrative credentials to pivot into production Kubernetes clusters, running "
+        "unauthorized privileged workloads and exfiltrating sensitive cluster secrets to "
+        "external infrastructure before attempting cleanup operations."
+    )
+    assert has_narrative(content) is True
+
+
+def test_has_narrative_false_for_bare_ioc_lines() -> None:
+    content = "\n".join(
+        [
+            "192.168.1.1",
+            "10.0.0.1",
+            "172.16.0.5",
+            "evil.attacker.org",
+            "c2.malicious.com",
+            "d41d8cd98f00b204e9800998ecf8427e",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ]
+        * 10
+    )
+    assert has_narrative(content) is False
+
+
 def test_resolve_ttps_excludes_near_universal_platforms_from_union(
     settings: Settings,
     mock_hecate: MagicMock,

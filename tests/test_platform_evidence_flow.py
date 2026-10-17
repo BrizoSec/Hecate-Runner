@@ -107,3 +107,62 @@ def test_a_technique_cannot_widen_onto_a_platform_the_evidence_does_not_show(
     assert any(
         "not widening for T1059.004: the specimen's evidence shows only Windows" in m for m in trail
     )
+
+
+def test_hybrid_cloud_container_platforms_recognized(
+    settings: Settings, mock_hecate: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    cloud_page = (
+        "UNC-3882 compromised Entra ID, performed sts:AssumeRole in AWS, "
+        "used nsenter for container breakout on Kubernetes worker nodes, "
+        "and spawned bash on Linux."
+    )
+    mock_hecate.source_evidence.side_effect = None
+    mock_hecate.source_evidence.return_value = SourceEvidence(
+        url="https://report.example/cloud-hybrid",
+        chars=len(cloud_page),
+        chunks=1,
+        text=cloud_page,
+    )
+    platforms_map = {
+        "T1611": ["Containers"],
+        "T1059.004": ["Linux"],
+        "T1550.001": ["Identity Provider", "IaaS"],
+    }
+    mock_hecate.lookup_technique.side_effect = lambda tid, timeout_sec=None: TechniqueMetadata(
+        technique_id=tid,
+        name=tid,
+        tactics=["execution"],
+        platforms=platforms_map.get(tid, ["Linux"]),
+        found=True,
+    )
+    mock_hecate.candidate_techniques.return_value = [
+        ("T1611", "Escape to Host"),
+        ("T1059.004", "Unix Shell"),
+        ("T1550.001", "Application Access Token"),
+    ]
+    mock_hecate.hypothesis_generator.return_value = HypothesisResult(
+        hypothesis=(
+            "Adversaries abuse OAuth tokens in Entra ID, execute container breakout "
+            "in Kubernetes, and run commands on Linux"
+        ),
+        location="Kubernetes containers, Entra ID, and Linux hosts",
+        techniques=["T1611", "T1059.004", "T1550.001"],
+        observables=["nsenter container escape"],
+    )
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content=(
+            "OTX Pulse: Hybrid Intrusion\n"
+            "Description: Cloud to host.\n"
+            "References: https://report.example/cloud-hybrid"
+        ),
+        source="otx",
+        title="Hybrid Intrusion",
+    )
+    result = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
+    draft = result.draft_path.read_text()
+    pf_line = _frontmatter_line(draft, "platform")
+    for expected in ("Containers", "Identity Provider", "Linux"):
+        assert expected in pf_line

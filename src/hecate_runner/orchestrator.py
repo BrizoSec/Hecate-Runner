@@ -81,12 +81,26 @@ _PLATFORM_MENTIONS: dict[str, str] = {
     "mac os": "macOS",
     "esxi": "ESXi",
     "network device": "Network Devices",
+    "network devices": "Network Devices",
     "container": "Containers",
+    "containers": "Containers",
     "kubernetes": "Containers",
-    "azure": "Azure AD",
-    "office 365": "Office 365",
+    "docker": "Containers",
+    "k8s": "Containers",
+    "identity provider": "Identity Provider",
+    "entra id": "Identity Provider",
+    "entra": "Identity Provider",
+    "azure ad": "Identity Provider",
+    "okta": "Identity Provider",
+    "office suite": "Office Suite",
+    "office 365": "Office Suite",
+    "m365": "Office Suite",
     "saas": "SaaS",
     "iaas": "IaaS",
+    "aws": "IaaS",
+    "azure": "IaaS",
+    "gcp": "IaaS",
+    "cloud": "IaaS",
 }
 
 #: Artifacts that exist on one platform only, read from the *intel* (never the
@@ -121,6 +135,13 @@ _PLATFORM_ARTIFACTS: dict[str, str] = {
     "gatekeeper": "macOS",
     "elf": "Linux",
     "systemd": "Linux",
+    "auditd": "Linux",
+    "nsenter": "Containers",
+    "kubectl": "Containers",
+    "containerd": "Containers",
+    "cloudtrail": "IaaS",
+    "assumerole": "IaaS",
+    "oauth": "Identity Provider",
 }
 
 #: Telemetry a technique implies, by ID prefix so sub-techniques inherit. Uses
@@ -464,6 +485,41 @@ def attributed_actor(cti_content: str) -> str:
     return "" if value.lower() in _NO_ATTRIBUTION else value
 
 
+_NARRATIVE_HEADER_RE = re.compile(
+    r"(?im)^#{1,4}\s+.*(summary|analysis|tradecraft|context|background|lifecycle|overview|threat|technical|details|behavior|activity|intrusion|campaign|investigation|findings|execution|kill\s*chain|detection)"
+)
+
+_IOC_LINE_RE = re.compile(
+    r"^[-*]?\s*([0-9a-f]{32,64}|\d{1,3}(?:\.\d{1,3}){3}|[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|https?://\S+)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _has_substantive_prose(text: str, min_words: int = 40) -> bool:
+    """True if text contains multi-word prose sentences beyond metadata fields and bare IOCs."""
+    prose_words = 0
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("```", "http://", "https://")):
+            continue
+        if re.match(r"^[A-Za-z0-9 _/-]{1,30}:\s", line) and not (
+            line.startswith("Description:") or line.startswith("Summary:")
+        ):
+            continue
+        if re.match(r"^(attributes|indicators)\s*\(\d+", line, re.IGNORECASE):
+            continue
+        if _IOC_LINE_RE.match(line):
+            continue
+        words = [
+            w for w in line.split() if len(w) > 1 and not w.startswith(("http://", "https://"))
+        ]
+        if len(words) >= 3:
+            prose_words += len(words)
+            if prose_words >= min_words:
+                return True
+    return False
+
+
 def has_narrative(cti_content: str) -> bool:
     """Whether ``cti_content`` carries substance beyond a bare indicator dump.
 
@@ -509,6 +565,8 @@ def has_narrative(cti_content: str) -> bool:
         "Description:" in cti_content
         or "Summary:" in cti_content
         or ATTACK_TECHNIQUE_LINE in cti_content
+        or bool(_NARRATIVE_HEADER_RE.search(cti_content))
+        or _has_substantive_prose(cti_content)
     )
 
 
