@@ -31,8 +31,8 @@ class Settings(BaseSettings):
         description="Path to the Hecate workspace directory (Hecate-Workspace)",
     )
     hecate_bin: Path | None = Field(
-        default=Path.home() / "betas" / "Hecate-Core" / ".venv" / "bin" / "hecate-agent",
-        description="Path to the hecate-agent CLI. Defaults to Hecate-Core/.venv/bin/hecate-agent",
+        default=None,
+        description="Path to the hecate-agent CLI. Defaults to <workspace>/.venv/bin/hecate-agent",
     )
 
     # --- LLM provider (passed through to hecate via env) ---------------------

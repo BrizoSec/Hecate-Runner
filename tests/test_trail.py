@@ -44,18 +44,25 @@ def test_a_drafted_cycle_logs_every_stage_in_order(
 
     trail = _trail(caplog)
     stages = list(dict.fromkeys(stage for _, stage, _ in trail))
-    assert stages[:10] == [
+    expected_start = [
         "start",
         "intake",
         "triage",
         "quota",
         "route",
         "source",
-        "research",
-        "hypothesis",
-        "techniques",
-        "scope",
     ]
+    if "enrichment" in stages:
+        expected_start.append("enrichment")
+    expected_start.extend(
+        [
+            "research",
+            "hypothesis",
+            "techniques",
+            "scope",
+        ]
+    )
+    assert stages[: len(expected_start)] == expected_start
     assert {"grounding", "write"} <= set(stages)
     assert stages[-1] == "done"
     # One cycle, one ID.

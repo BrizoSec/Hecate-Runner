@@ -140,16 +140,22 @@ def test_non_2xx_response_is_swallowed_not_raised(
 
 def test_send_test_notification_unconfigured(settings: Settings) -> None:
     from hecate_runner.notifications import send_test_notification
+
     settings = settings.model_copy(update={"slack_webhook_url": None})
     success, msg = send_test_notification(settings)
     assert not success
     assert "not configured" in msg
 
 
-def test_send_test_notification_success(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_send_test_notification_success(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from hecate_runner.notifications import send_test_notification
-    settings = settings.model_copy(update={"slack_webhook_url": "https://hooks.slack.com/services/test"})
-    
+
+    settings = settings.model_copy(
+        update={"slack_webhook_url": "https://hooks.slack.com/services/test"}
+    )
+
     class OkResponse:
         def raise_for_status(self) -> None:
             pass
@@ -160,9 +166,14 @@ def test_send_test_notification_success(settings: Settings, monkeypatch: pytest.
     assert "successfully" in msg
 
 
-def test_send_test_notification_failure(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_send_test_notification_failure(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from hecate_runner.notifications import send_test_notification
-    settings = settings.model_copy(update={"slack_webhook_url": "https://hooks.slack.com/services/test"})
+
+    settings = settings.model_copy(
+        update={"slack_webhook_url": "https://hooks.slack.com/services/test"}
+    )
 
     def fake_post(*a, **kw):
         raise httpx.ConnectError("network unreachable")

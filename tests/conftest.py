@@ -36,6 +36,43 @@ def workspace(tmp_path: Path) -> Path:
     return ws
 
 
+_ENV_VARS_TO_ISOLATE = (
+    "HECATE_WORKSPACE",
+    "HECATE_BIN",
+    "HECATE_LLM_PROVIDER",
+    "HECATE_LLM_MODEL",
+    "HECATE_RUNNER_MAX_DRAFTS_PER_DAY",
+    "HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY",
+    "HECATE_RUNNER_LLM_TIMEOUT_SEC",
+    "HECATE_RUNNER_CTI_PROVIDER",
+    "HECATE_RUNNER_CTI_MULTI_PROVIDERS",
+    "HECATE_RUNNER_LOG_LEVEL",
+    "HECATE_RUNNER_CTI_QUEUE_DIR",
+    "HECATE_RUNNER_SLACK_WEBHOOK_URL",
+    "SLACK_WEBHOOK_URL",
+    "OTX_API_KEY",
+    "HECATE_RUNNER_OTX_BASE_URL",
+    "HECATE_RUNNER_OTX_PAGE_LIMIT",
+    "HECATE_RUNNER_OTX_MAX_PULSE_AGE_DAYS",
+    "HECATE_RUNNER_OTX_REQUEST_TIMEOUT_SEC",
+    "HECATE_RUNNER_RSS_FEED_URLS",
+    "HECATE_RUNNER_RSS_MAX_ENTRY_AGE_DAYS",
+    "HECATE_RUNNER_RSS_REQUEST_TIMEOUT_SEC",
+    "MISP_BASE_URL",
+    "MISP_API_KEY",
+    "HECATE_RUNNER_MISP_VERIFY_SSL",
+    "HECATE_RUNNER_MISP_MAX_EVENT_AGE_DAYS",
+    "HECATE_RUNNER_MISP_PAGE_LIMIT",
+    "HECATE_RUNNER_MISP_REQUEST_TIMEOUT_SEC",
+    "GREYNOISE_API_KEY",
+    "SHODAN_API_KEY",
+    "CENSYS_API_TOKEN",
+    "ABUSECH_API_KEY",
+    "VT_API_KEY",
+    "TAVILY_API_KEY",
+)
+
+
 @pytest.fixture(autouse=True)
 def _never_the_live_workspace(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
@@ -47,6 +84,8 @@ def _never_the_live_workspace(
     ran a cycle against it: it appended rows to the live stage metrics, emptied
     the live call log and rewrote the orchestrator state.
     """
+    for var in _ENV_VARS_TO_ISOLATE:
+        monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("HECATE_WORKSPACE", str(tmp_path_factory.mktemp("unset-workspace")))
 
 
@@ -54,31 +93,7 @@ def _never_the_live_workspace(
 def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
     """Settings pointing at the fake workspace."""
     # Wipe any leaked env vars so tests are deterministic
-    for var in [
-        "HECATE_WORKSPACE",
-        "HECATE_BIN",
-        "HECATE_RUNNER_MAX_DRAFTS_PER_DAY",
-        "HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY",
-        "HECATE_RUNNER_LLM_TIMEOUT_SEC",
-        "HECATE_RUNNER_CTI_PROVIDER",
-        "HECATE_RUNNER_CTI_MULTI_PROVIDERS",
-        "HECATE_RUNNER_LOG_LEVEL",
-        "HECATE_RUNNER_CTI_QUEUE_DIR",
-        "OTX_API_KEY",
-        "HECATE_RUNNER_OTX_BASE_URL",
-        "HECATE_RUNNER_OTX_PAGE_LIMIT",
-        "HECATE_RUNNER_OTX_MAX_PULSE_AGE_DAYS",
-        "HECATE_RUNNER_OTX_REQUEST_TIMEOUT_SEC",
-        "HECATE_RUNNER_RSS_FEED_URLS",
-        "HECATE_RUNNER_RSS_MAX_ENTRY_AGE_DAYS",
-        "HECATE_RUNNER_RSS_REQUEST_TIMEOUT_SEC",
-        "MISP_BASE_URL",
-        "MISP_API_KEY",
-        "HECATE_RUNNER_MISP_VERIFY_SSL",
-        "HECATE_RUNNER_MISP_MAX_EVENT_AGE_DAYS",
-        "HECATE_RUNNER_MISP_PAGE_LIMIT",
-        "HECATE_RUNNER_MISP_REQUEST_TIMEOUT_SEC",
-    ]:
+    for var in _ENV_VARS_TO_ISOLATE:
         monkeypatch.delenv(var, raising=False)
 
     monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))

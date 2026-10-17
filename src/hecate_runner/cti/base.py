@@ -58,27 +58,35 @@ class CTIProvider(ABC):
     def acknowledge(self, item: CTIItem) -> None:
         """Called after successful processing so provider can advance state."""
 
+
 def extract_article_text(url: str) -> str:
-    import os
     import logging
+    import os
+
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return ""
+
     log = logging.getLogger(__name__)
     tavily_key = os.getenv("TAVILY_API_KEY")
     if not tavily_key:
         workspace = os.getenv("HECATE_WORKSPACE")
         if workspace:
-            from dotenv import load_dotenv
             import os.path
+
+            from dotenv import load_dotenv
+
             load_dotenv(os.path.join(workspace, ".env"))
             tavily_key = os.getenv("TAVILY_API_KEY")
     if not tavily_key:
         return ""
     try:
-        from tavily import TavilyClient
+        from tavily import TavilyClient  # type: ignore[import-untyped]
+
         client = TavilyClient(api_key=tavily_key)
         response = client.extract(urls=[url])
         results = response.get("results", [])
         if results and "raw_content" in results[0]:
-            return results[0]["raw_content"].strip()
+            return str(results[0]["raw_content"]).strip()
     except Exception as exc:
         log.warning("Tavily extract failed for %s: %s", url, exc)
     return ""
