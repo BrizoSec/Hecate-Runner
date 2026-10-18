@@ -662,6 +662,7 @@ class RunResult:
     def ok(self) -> bool:
         return self.outcome in {
             "draft_created",
+            "dry_run",
             "no_cti",
             "no_actionable_cti",
             "quota_reached",
@@ -2629,8 +2630,14 @@ class Orchestrator:
 # --- Factory ---------------------------------------------------------------
 
 
-def build_default_orchestrator(settings: Settings) -> Orchestrator:
+def build_default_orchestrator(
+    settings: Settings, ignore_quota: bool = False
+) -> Orchestrator:
     """Wire up the standard orchestrator from settings alone."""
+    if ignore_quota:
+        settings = settings.model_copy(
+            update={"max_drafts_per_day": 999999, "max_research_runs_per_day": 999999}
+        )
     hecate = HecateClient(
         hecate_bin=settings.hecate_bin_resolved,
         workspace=settings.hecate_workspace,

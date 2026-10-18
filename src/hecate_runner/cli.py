@@ -140,12 +140,23 @@ def run(
         bool,
         typer.Option("--dry-run", help="Show what would happen without calling hecate."),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            "--ignore-quota",
+            help="Bypass daily draft, research quota, and spacing limits.",
+        ),
+    ] = False,
 ) -> None:
     """Execute one orchestrator cycle."""
     settings = Settings()
     _configure_logging(settings)
 
-    orch = build_default_orchestrator(settings)
+    if force:
+        orch = build_default_orchestrator(settings, ignore_quota=True)
+    else:
+        orch = build_default_orchestrator(settings)
     result = orch.run_once(dry_run=dry_run)
     _print_result(result)
     raise typer.Exit(code=0 if result.ok else 1)
