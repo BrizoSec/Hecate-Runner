@@ -2047,15 +2047,23 @@ class Orchestrator:
             ips_count = len(indicators.get("ips", []))
             hashes_count = len(indicators.get("hashes", []))
             domains_count = len(indicators.get("domains", []))
-            total_obs = ips_count + hashes_count + domains_count
+            cves_count = len(indicators.get("cves", []))
+            total_obs = ips_count + hashes_count + domains_count + cves_count
             if total_obs:
+                obs_detail = []
+                if ips_count:
+                    obs_detail.append(f"{ips_count} ip")
+                if hashes_count:
+                    obs_detail.append(f"{hashes_count} hash")
+                if domains_count:
+                    obs_detail.append(f"{domains_count} domain")
+                if cves_count:
+                    obs_detail.append(f"{cves_count} cve")
                 self.trail.step(
                     "enrichment",
-                    "%d observable(s) (%d ip, %d hash, %d domain) checked via VT, GreyNoise, AbuseIPDB, Shodan, Censys, Abuse.ch, RDAP",
+                    "%d observable(s) (%s) checked via VT, GreyNoise, AbuseIPDB, Shodan, Censys, Abuse.ch, RDAP, EPSS",
                     total_obs,
-                    ips_count,
-                    hashes_count,
-                    domains_count,
+                    ", ".join(obs_detail),
                 )
                 item_inds = item.metadata.setdefault("indicators", {})
                 norm = {"ipv4": indicators.get("ips", []), "domain": indicators.get("domains", [])}
@@ -2067,6 +2075,11 @@ class Orchestrator:
                     for v in vs:
                         if v not in item_inds[k]:
                             item_inds[k].append(v)
+                if indicators.get("cves"):
+                    item_inds.setdefault("cve", [])
+                    for cve in indicators["cves"]:
+                        if cve not in item_inds["cve"]:
+                            item_inds["cve"].append(cve)
 
                 from hecate_agent.core.provenance import records_from_cti
 
