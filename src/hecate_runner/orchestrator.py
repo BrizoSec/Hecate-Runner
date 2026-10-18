@@ -101,6 +101,9 @@ _PLATFORM_MENTIONS: dict[str, str] = {
     "azure": "IaaS",
     "gcp": "IaaS",
     "cloud": "IaaS",
+    "android": "Android",
+    "ios": "iOS",
+    "mobile": "Mobile",
 }
 
 #: Artifacts that exist on one platform only, read from the *intel* (never the
@@ -142,6 +145,11 @@ _PLATFORM_ARTIFACTS: dict[str, str] = {
     "cloudtrail": "IaaS",
     "assumerole": "IaaS",
     "oauth": "Identity Provider",
+    "apk": "Android",
+    "dex": "Android",
+    "aab": "Android",
+    "dalvik": "Android",
+    "ipa": "iOS",
 }
 
 #: Telemetry a technique implies, by ID prefix so sub-techniques inherit. Uses
@@ -1485,12 +1493,10 @@ class Orchestrator:
         # and tallied in the trail; unsupported/omitted candidate categories are logged
         # as debug notes rather than rejected rules.
         real_rejections = [
-            r for r in result.rejected
-            if "no rule returned" not in r and "unsupported" not in r
+            r for r in result.rejected if "no rule returned" not in r and "unsupported" not in r
         ]
         omitted = getattr(result, "omitted", []) or [
-            r for r in result.rejected
-            if "no rule returned" in r or "unsupported" in r
+            r for r in result.rejected if "no rule returned" in r or "unsupported" in r
         ]
         for reason in real_rejections:
             self.trail.step("sigma", "rejected %s", clip(reason, 160))
@@ -1741,7 +1747,7 @@ class Orchestrator:
                         listing(missing),
                     )
 
-            # Mark any technique that strongly contradicts our final platforms as invalid
+            # Mark any technique that strongly contradicts our final platforms
             # so it is stripped from the payload and doesn't pollute the Sigma generator
             if facts is not None:
                 for tech_id, fact in facts.items():
@@ -2469,7 +2475,8 @@ class Orchestrator:
         kept_techniques = [
             t
             for t in hypothesis.techniques
-            if t.upper() not in technique_facts or technique_facts[t.upper()].valid
+            if (t.upper() not in technique_facts or technique_facts[t.upper()].valid)
+            and t.upper() not in self._platform_dropped
         ]
         # Platform drops were already explained at the scope step; only IDs
         # the matrix does not know are reported here, under the right name.
@@ -2481,6 +2488,11 @@ class Orchestrator:
         if unknown:
             self.trail.step("techniques", "dropped IDs not in ATT&CK: %s", listing(unknown))
         hypothesis.techniques = kept_techniques
+        self._technique_evidence = [
+            e
+            for e in self._technique_evidence
+            if e.get("technique_id", "").upper() not in self._platform_dropped
+        ]
         self._audit_claims(hypothesis, self._primary_evidence_text(item), platforms)
 
         # Nothing left to hunt: no technique survived the evidence and matrix
@@ -2630,9 +2642,7 @@ class Orchestrator:
 # --- Factory ---------------------------------------------------------------
 
 
-def build_default_orchestrator(
-    settings: Settings, ignore_quota: bool = False
-) -> Orchestrator:
+def build_default_orchestrator(settings: Settings, ignore_quota: bool = False) -> Orchestrator:
     """Wire up the standard orchestrator from settings alone."""
     if ignore_quota:
         settings = settings.model_copy(
