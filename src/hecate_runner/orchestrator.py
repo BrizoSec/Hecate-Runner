@@ -2048,7 +2048,8 @@ class Orchestrator:
             hashes_count = len(indicators.get("hashes", []))
             domains_count = len(indicators.get("domains", []))
             cves_count = len(indicators.get("cves", []))
-            total_obs = ips_count + hashes_count + domains_count + cves_count
+            urls_count = len(indicators.get("urls", []))
+            total_obs = ips_count + hashes_count + domains_count + cves_count + urls_count
             if total_obs:
                 obs_detail = []
                 if ips_count:
@@ -2057,16 +2058,18 @@ class Orchestrator:
                     obs_detail.append(f"{hashes_count} hash")
                 if domains_count:
                     obs_detail.append(f"{domains_count} domain")
+                if urls_count:
+                    obs_detail.append(f"{urls_count} url")
                 if cves_count:
                     obs_detail.append(f"{cves_count} cve")
                 self.trail.step(
                     "enrichment",
-                    "%d observable(s) (%s) checked via VT, GreyNoise, AbuseIPDB, Shodan, Censys, Abuse.ch (ThreatFox, MalwareBazaar, Feodo, SSLBL), RDAP, EPSS, OTX",
+                    "%d observable(s) (%s) checked via VT, GreyNoise, AbuseIPDB, Shodan, Censys, Abuse.ch (ThreatFox, MalwareBazaar, Feodo, SSLBL, URLhaus), RDAP, EPSS, OTX",
                     total_obs,
                     ", ".join(obs_detail),
                 )
                 item_inds = item.metadata.setdefault("indicators", {})
-                norm = {"ipv4": indicators.get("ips", []), "domain": indicators.get("domains", [])}
+                norm = {"ipv4": indicators.get("ips", []), "domain": indicators.get("domains", []), "url": indicators.get("urls", [])}
                 for h in indicators.get("hashes", []):
                     htype = "sha256" if len(h) == 64 else ("sha1" if len(h) == 40 else "md5")
                     norm.setdefault(htype, []).append(h)
