@@ -2619,7 +2619,9 @@ def build_default_orchestrator(settings: Settings) -> Orchestrator:
     return Orchestrator(settings=settings, hecate=hecate, cti_provider=cti, notify=notify)
 
 
-def build_orchestrator_for_item(settings: Settings, item: CTIItem) -> Orchestrator:
+def build_orchestrator_for_item(
+    settings: Settings, item: CTIItem, ignore_quota: bool = False
+) -> Orchestrator:
     """The standard orchestrator, reading one supplied item in place of the configured feeds.
 
     Only intake differs from a scheduled cycle. Triage is off, since someone
@@ -2628,7 +2630,11 @@ def build_orchestrator_for_item(settings: Settings, item: CTIItem) -> Orchestrat
     """
     from hecate_runner.cti.single import SingleItemProvider
 
-    settings = settings.model_copy(update={"cti_triage": "off"})
+    updates: dict[str, Any] = {"cti_triage": "off"}
+    if ignore_quota:
+        updates["max_drafts_per_day"] = 999999
+        updates["max_research_runs_per_day"] = 999999
+    settings = settings.model_copy(update=updates)
     hecate = HecateClient(
         hecate_bin=settings.hecate_bin_resolved,
         workspace=settings.hecate_workspace,

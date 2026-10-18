@@ -28,8 +28,8 @@ def captured(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> dict[str, o
     """The item and settings the command hands to the orchestrator, without running a cycle."""
     seen: dict[str, object] = {}
 
-    def build(settings: Settings, item: CTIItem) -> object:
-        seen["item"], seen["settings"] = item, settings
+    def build(settings: Settings, item: CTIItem, ignore_quota: bool = False) -> object:
+        seen["item"], seen["settings"], seen["ignore_quota"] = item, settings, ignore_quota
 
         def run_once(dry_run: bool = False) -> RunResult:
             seen["dry_run"] = dry_run
@@ -102,3 +102,19 @@ def test_the_item_is_offered_until_it_is_acknowledged() -> None:
     assert provider.next_item() is item and provider.next_item() is item
     provider.acknowledge(item)
     assert provider.next_item() is None
+
+
+def test_force_flag_passes_ignore_quota(captured: dict[str, object]) -> None:
+    result = runner.invoke(app, ["draft", INTEL, "--force"])
+    assert result.exit_code == 0
+    assert captured["ignore_quota"] is True
+
+
+def test_build_orchestrator_for_item_sets_high_quotas_when_forced(
+    settings: Settings, mock_hecate: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("hecate_runner.orchestrator.HecateClient", lambda **_: mock_hecate)
+    item = CTIItem(content=INTEL)
+    orch = build_orchestrator_for_item(settings, item, ignore_quota=True)
+    assert orch.settings.max_drafts_per_day == 999999
+    assert orch.settings.max_research_runs_per_day == 999999
