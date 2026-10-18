@@ -377,6 +377,36 @@ def test_quota_enforcement(
     assert mock_hecate.hypothesis_generator.call_count == 1
 
 
+def test_spacing_cooldown_stops_consecutive_drafting(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_hecate: MagicMock,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HECATE_RUNNER_MIN_HOURS_BETWEEN_DRAFTS", "6.0")
+    monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "10")
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    orch = Orchestrator(
+        settings=settings,
+        hecate=mock_hecate,
+        cti_provider=file_queue_with_cti,
+    )
+    first = orch.run_once()
+    assert first.outcome == "draft_created"
+
+    # Put a second CTI in and try again immediately
+    (workspace / "cti_queue" / "next.txt").write_text("another intel")
+    second = orch.run_once()
+    assert second.outcome == "spacing_cooldown"
+    assert second.ok is True
+    # Ensure hypothesis-generator was only called for the first run
+    assert mock_hecate.hypothesis_generator.call_count == 1
+    # CTI remains queued for next window
+    assert (workspace / "cti_queue" / "next.txt").exists()
+
+
 def test_hecate_error_refunds_quota(
     settings: Settings,
     file_queue_with_cti: FileQueueProvider,

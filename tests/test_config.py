@@ -17,7 +17,9 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
     s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert s.hecate_workspace == Path("/tmp/hecate").resolve()
-    assert s.max_drafts_per_day == 4
+    assert s.max_drafts_per_day == 2
+    assert s.max_research_runs_per_day == 3
+    assert s.min_hours_between_drafts == 6.0
     assert s.cti_provider == "file"
     assert s.log_level == "INFO"
 

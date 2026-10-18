@@ -43,6 +43,7 @@ _ENV_VARS_TO_ISOLATE = (
     "HECATE_LLM_MODEL",
     "HECATE_RUNNER_MAX_DRAFTS_PER_DAY",
     "HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY",
+    "HECATE_RUNNER_MIN_HOURS_BETWEEN_DRAFTS",
     "HECATE_RUNNER_LLM_TIMEOUT_SEC",
     "HECATE_RUNNER_CTI_PROVIDER",
     "HECATE_RUNNER_CTI_MULTI_PROVIDERS",
@@ -98,6 +99,7 @@ def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Setti
 
     monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))
     monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "4")
+    monkeypatch.setenv("HECATE_RUNNER_MIN_HOURS_BETWEEN_DRAFTS", "0.0")
 
     yield Settings(_env_file=None)  # type: ignore[call-arg]
 

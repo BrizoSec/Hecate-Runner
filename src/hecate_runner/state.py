@@ -22,6 +22,7 @@ class OrchestratorState:
     research_runs_today: int = 0
     total_drafts_ever: int = 0
     last_run_iso: str = ""
+    last_draft_iso: str = ""
     consecutive_failures: int = 0
     extras: dict[str, str] = field(default_factory=dict)
 
@@ -40,6 +41,19 @@ class OrchestratorState:
         atomic_write_text(path, json.dumps(asdict(self), indent=2))
 
     # --- Behaviors ---------------------------------------------------------
+
+    def check_spacing(self, min_hours: float) -> tuple[bool, float]:
+        """Return (True, 0.0) if spacing between drafts is satisfied, or (False, elapsed_hours)."""
+        if min_hours <= 0.0 or not self.last_draft_iso:
+            return True, 0.0
+        try:
+            last_dt = datetime.fromisoformat(self.last_draft_iso)
+            elapsed = (datetime.now(UTC) - last_dt).total_seconds() / 3600.0
+            if elapsed < min_hours:
+                return False, elapsed
+        except (ValueError, TypeError):
+            pass
+        return True, 0.0
 
     def check_and_reserve_draft(self, max_per_day: int) -> bool:
         """Return True if we're under quota (and consume one), False if capped."""

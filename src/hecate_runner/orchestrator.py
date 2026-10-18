@@ -665,6 +665,7 @@ class RunResult:
             "no_cti",
             "no_actionable_cti",
             "quota_reached",
+            "spacing_cooldown",
             "research_quota_reached",
             "parked_after_research",
             "parked_after_hypothesis",
@@ -745,6 +746,8 @@ class Orchestrator:
         try:
             result = self._run_body(state, dry_run=dry_run)
             state.mark_run(success=result.ok)
+            if result.outcome == "draft_created":
+                state.last_draft_iso = datetime.now(UTC).isoformat()
             self.trail.step(
                 "done",
                 "%s%s%s in %.0fs",
@@ -1912,6 +1915,26 @@ class Orchestrator:
 
         log.info("Picked up CTI item from %s (%d chars)", item.source, len(item.content))
         self.metrics.set_source(item.source, item.identifier)
+
+        if not dry_run and self.settings.max_drafts_per_day < 900000:
+            spaced, elapsed = state.check_spacing(self.settings.min_hours_between_drafts)
+            if not spaced:
+                log.info(
+                    "Spacing cooldown active: last draft was %.1fh ago (min spacing: %.1fh). Leaving CTI in queue.",
+                    elapsed,
+                    self.settings.min_hours_between_drafts,
+                )
+                self.trail.step(
+                    "quota",
+                    "spacing cooldown: last draft was %.1fh ago (needs %.1fh); item stays queued",
+                    elapsed,
+                    self.settings.min_hours_between_drafts,
+                )
+                return RunResult(
+                    outcome="spacing_cooldown",
+                    detail=f"{elapsed:.1f}h/{self.settings.min_hours_between_drafts:.1f}h",
+                    parked_count=parked_count,
+                )
 
         if not state.check_and_reserve_draft(self.settings.max_drafts_per_day):
             log.warning(

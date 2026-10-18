@@ -75,3 +75,24 @@ def test_mark_run_failure_increments() -> None:
     state.mark_run(success=False)
     state.mark_run(success=False)
     assert state.consecutive_failures == 2
+
+
+def test_check_spacing() -> None:
+    from datetime import timedelta
+    state = OrchestratorState()
+    # No last draft -> satisfied
+    assert state.check_spacing(min_hours=6.0) == (True, 0.0)
+
+    # Disabled (0 hours) -> satisfied
+    state.last_draft_iso = datetime.now(UTC).isoformat()
+    assert state.check_spacing(min_hours=0.0) == (True, 0.0)
+
+    # Just drafted now -> cooldown active
+    spaced, elapsed = state.check_spacing(min_hours=6.0)
+    assert spaced is False
+    assert elapsed < 0.1
+
+    # Drafted 7 hours ago -> satisfied
+    past = (datetime.now(UTC) - timedelta(hours=7)).isoformat()
+    state.last_draft_iso = past
+    assert state.check_spacing(min_hours=6.0) == (True, 0.0)
