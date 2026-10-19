@@ -2064,7 +2064,7 @@ class Orchestrator:
                     obs_detail.append(f"{cves_count} cve")
                 self.trail.step(
                     "enrichment",
-                    "%d observable(s) (%s) checked via VT, GreyNoise, AbuseIPDB, Shodan, Censys, Abuse.ch (ThreatFox, MalwareBazaar, Feodo, SSLBL, URLhaus), RDAP, EPSS, OTX",
+                    "%d observable(s) (%s) checked via VT, GreyNoise, AbuseIPDB, Shodan, Censys, Abuse.ch (ThreatFox, MalwareBazaar, Feodo, SSLBL, URLhaus), RDAP, EPSS, OTX, HybridAnalysis",
                     total_obs,
                     ", ".join(obs_detail),
                 )
