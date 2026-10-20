@@ -79,6 +79,7 @@ def test_mark_run_failure_increments() -> None:
 
 def test_check_spacing() -> None:
     from datetime import timedelta
+
     state = OrchestratorState()
     # No last draft -> satisfied
     assert state.check_spacing(min_hours=6.0) == (True, 0.0)

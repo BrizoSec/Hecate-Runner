@@ -388,9 +388,9 @@ def _pulse_to_cti_item(pulse: dict[str, Any]) -> CTIItem:
             # Sigma drafting gets typed values rather than re-parsing prose.
             "indicators": _indicator_map(pulse),
             "techniques": [
-                a.get("id", "")
+                a if isinstance(a, str) else a.get("id", "")
                 for a in (pulse.get("attack_ids") or [])
-                if isinstance(a, dict) and a.get("id")
+                if (isinstance(a, str) and a) or (isinstance(a, dict) and a.get("id"))
             ],
         },
         title=str(pulse.get("name") or ""),
@@ -405,7 +405,11 @@ def _pulse_to_blurb(pulse: dict[str, Any]) -> str:
     tags = pulse.get("tags") or []
     description = (pulse.get("description") or "").strip()
     attack_ids = pulse.get("attack_ids") or []
-    techniques = [a.get("id", "") for a in attack_ids if isinstance(a, dict) and a.get("id")]
+    techniques = [
+        a if isinstance(a, str) else a.get("id", "")
+        for a in attack_ids
+        if (isinstance(a, str) and a) or (isinstance(a, dict) and a.get("id"))
+    ]
     indicators = pulse.get("indicators") or []
     references = pulse.get("references") or []
 

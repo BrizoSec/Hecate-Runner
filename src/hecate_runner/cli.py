@@ -209,7 +209,9 @@ def draft(
     ] = False,
     force: Annotated[
         bool,
-        typer.Option("--force", "--ignore-quota", help="Bypass daily draft and research quota limits."),
+        typer.Option(
+            "--force", "--ignore-quota", help="Bypass daily draft and research quota limits."
+        ),
     ] = False,
 ) -> None:
     """Draft a hunt from intelligence you supply, through the same cycle a feed item takes.
@@ -249,7 +251,9 @@ def draft(
         title=title.strip(),
         source_url=url.strip(),
     )
-    result = build_orchestrator_for_item(settings, item, ignore_quota=force).run_once(dry_run=dry_run)
+    result = build_orchestrator_for_item(settings, item, ignore_quota=force).run_once(
+        dry_run=dry_run
+    )
     _print_result(result)
     raise typer.Exit(code=0 if result.ok else 1)
 

@@ -250,11 +250,30 @@ def platforms_evidenced_in(*texts: str) -> list[str]:
     """Platforms the intel names outright or implies by a platform-only artifact.
 
     Links and URLs are ignored: they cite where something was read, not where
-    the activity happened.
+    the activity happened. Attacker-side passages in actor-material reports
+    (e.g. operator's workstation or toolkit files) are ignored.
     """
-    texts = tuple(_LINK_RE.sub(" ", t) for t in texts if t)
-    named = platforms_named_in(*texts)
-    haystack = " ".join(texts).lower()
+    from hecate_agent.core.technique_evidence import (
+        actor_material_report,
+        attacker_side,
+        sentences,
+    )
+
+    clean_texts: list[str] = []
+    for t in texts:
+        if not t:
+            continue
+        cleaned = _LINK_RE.sub(" ", t)
+        if actor_material_report(cleaned):
+            observed_sentences = [
+                s for s in sentences(cleaned) if not attacker_side(s.lower(), actor_material=True)
+            ]
+            clean_texts.append(" ".join(observed_sentences))
+        else:
+            clean_texts.append(cleaned)
+
+    named = platforms_named_in(*clean_texts)
+    haystack = " ".join(clean_texts).lower()
     for artifact, platform in _PLATFORM_ARTIFACTS.items():
         if platform not in named and re.search(r"\b" + re.escape(artifact) + r"\b", haystack):
             named.append(platform)
@@ -350,6 +369,34 @@ _NO_OBSERVABLES = "[none proposed - human to populate]"
 _RULE_IOC_RE = re.compile(
     r"\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[0-9a-f]{64}\b|\b[0-9a-f]{40}\b|\b[0-9a-f]{32}\b"
 )
+
+
+def _merge_indicator_record(records: list[Any], rec: Any) -> bool:
+    """Deduplicate an indicator record into records.
+
+    If records already has an entry for rec.value, update existing status/role/ports
+    if rec has more information, but do NOT add a duplicate unreviewed record that
+    could override a historical/target classification.
+    """
+    rec_val = str(getattr(rec, "value", "")).strip().lower()
+    for existing in records:
+        if str(getattr(existing, "value", "")).strip().lower() == rec_val:
+            if (
+                getattr(existing, "status", "unknown") == "unknown"
+                and getattr(rec, "status", "unknown") != "unknown"
+            ):
+                existing.status = rec.status
+            if (
+                getattr(existing, "role", "unknown") == "unknown"
+                and getattr(rec, "role", "unknown") != "unknown"
+            ):
+                existing.role = rec.role
+            if hasattr(rec, "ports") and rec.ports:
+                existing_ports = set(getattr(existing, "ports", []) or [])
+                existing.ports = sorted(existing_ports | set(rec.ports))
+            return False
+    records.append(rec)
+    return True
 
 
 def substantive_observables(observables: list[str]) -> list[str]:
@@ -1065,11 +1112,14 @@ class Orchestrator:
 
                 executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
                 future = executor.submit(self.hecate.source_evidence, urls[0])
+                source_timeout_sec = max(900, getattr(self.settings, "llm_timeout_sec", 1500))
                 try:
-                    evidence = future.result(timeout=300)
+                    evidence = future.result(timeout=source_timeout_sec)
                 except concurrent.futures.TimeoutError as exc:
                     executor.shutdown(wait=False, cancel_futures=True)
-                    raise TimeoutError(f"Timed out after 300 seconds reading {urls[0]}") from exc
+                    raise TimeoutError(
+                        f"Timed out after {source_timeout_sec} seconds reading {urls[0]}"
+                    ) from exc
 
                 self._source_evidence = evidence
                 try:
@@ -2069,7 +2119,11 @@ class Orchestrator:
                     ", ".join(obs_detail),
                 )
                 item_inds = item.metadata.setdefault("indicators", {})
-                norm = {"ipv4": indicators.get("ips", []), "domain": indicators.get("domains", []), "url": indicators.get("urls", [])}
+                norm = {
+                    "ipv4": indicators.get("ips", []),
+                    "domain": indicators.get("domains", []),
+                    "url": indicators.get("urls", []),
+                }
                 for h in indicators.get("hashes", []):
                     htype = "sha256" if len(h) == 64 else ("sha1" if len(h) == 40 else "md5")
                     norm.setdefault(htype, []).append(h)
@@ -2088,10 +2142,7 @@ class Orchestrator:
 
                 cti_records = records_from_cti(norm)
                 for rec in cti_records:
-                    if not any(
-                        e.value == rec.value and e.type == rec.type for e in self._indicator_records
-                    ):
-                        self._indicator_records.append(rec)
+                    _merge_indicator_record(self._indicator_records, rec)
             else:
                 self.trail.step("enrichment", "no observable IPs/hashes/domains in source")
         except Exception as exc:
@@ -2303,10 +2354,7 @@ class Orchestrator:
                     if "source" not in r:
                         r["source"] = "cti"
                     rec = IndicatorRecord.from_dict(r)
-                    if not any(
-                        e.value == rec.value and e.type == rec.type for e in self._indicator_records
-                    ):
-                        self._indicator_records.append(rec)
+                    if _merge_indicator_record(self._indicator_records, rec):
                         added += 1
                 except Exception as exc:
                     log.warning("Failed to parse indicator record from hypothesis: %s", exc)

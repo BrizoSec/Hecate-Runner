@@ -472,14 +472,14 @@ def _render_hypothesis_quality(hyp: HypothesisResult) -> str:
     return "\n".join(lines)
 
 
-def _render_atomic_tests(techniques: list[str]) -> str:
+def _render_atomic_tests(techniques: list[str], platforms: list[str] | None = None) -> str:
     """Render Atomic Red Team validation procedures for mapped techniques."""
     if not techniques:
         return ""
     try:
         from hecate_agent.core.atomic_red_team import format_atomic_tests_markdown
 
-        content = format_atomic_tests_markdown(techniques)
+        content = format_atomic_tests_markdown(techniques, platforms=platforms)
         return ("\n" + content) if content else ""
     except ImportError:
         return ""
@@ -577,6 +577,32 @@ def _render_soc_triage_playbook(req: DraftHuntRequest) -> str:
             "- **Observable Robustness:** Behavioral / TTP-centric (Pyramid of Pain: TTPs). Resistant to simple script or binary renaming.\n"
             "- **Event Robustness:** Sensor & kernel audit telemetry (`auditd`, eBPF, EDR Linux sensor).\n"
             "- **Adversary Evasion Cost:** High — adversary must redesign execution vehicle or bypass telemetry hooks.\n"
+        )
+
+    # macOS Triage Playbook
+    if any(p in ("macos", "darwin", "osx") for p in platforms_lower):
+        return (
+            "\n### SOC Responder Triage Playbook (ADS-Lite)\n\n"
+            f"**Target Technique:** `{techniques}`  \n"
+            f"**Strategy Abstract:** Detects `{_cell(behavior, 120)}` on macOS endpoints by identifying anomalous "
+            "execution patterns, LaunchAgent/Daemon persistence, or Gatekeeper bypass contrasting with authorized baselines.\n\n"
+            "#### 1. Triage & Initial Scoping (First 3 Steps)\n"
+            "1. **Lineage Verification:** Inspect process tree, parent process path, code signatures (codesign/spctl), "
+            "and execution context (Terminal, Script Editor, or background service).\n"
+            "2. **Identity & Host Scoping:** Check Unified Logging / OpenBSM audit trails and system logs within +/- 2 hours "
+            "for authorization prompts (osascript, sudo), user login sessions, or keychain access attempts.\n"
+            "3. **Telemetry Correlation:** Correlate network connections with file creations in `~/Library/LaunchAgents`, "
+            "`/Library/LaunchDaemons`, `/tmp`, or `~/Library/Caches`, and check for `xattr` modifications.\n\n"
+            "#### 2. Containment & IR Escalation\n"
+            "- **Immediate Isolation Threshold:** Host network isolation is recommended if unsigned or ad-hoc signed Mach-O binaries execute "
+            "from non-standard paths, or credential stores (Keychains, browser profiles) are accessed.\n"
+            "- **Credential Invalidation:** Revoke active user sessions and rotate credentials for affected accounts.\n"
+            "- **Incident Escalation:** Escalate to Tier-2 / IR Incident Commander if persistence mechanisms or secondary host "
+            "compromise attempts are identified.\n\n"
+            "#### 3. Detection Robustness & Evasion Cost\n"
+            "- **Observable Robustness:** Behavioral / TTP-centric (Pyramid of Pain: TTPs). Resistant to file hash or binary path changes.\n"
+            "- **Event Robustness:** Endpoint Security Framework (ESF) / Unified Logging sensor telemetry.\n"
+            "- **Adversary Evasion Cost:** High — adversary must redesign execution vehicle or bypass macOS transparency and security hooks.\n"
         )
 
     # Windows & Generic Endpoint Triage Playbook
@@ -763,7 +789,7 @@ Source CTI:
 {_render_detection_guidance(req)}### Hunting Queries
 
 {_render_sigma_section(req)}{_render_review_gaps(req)}
-{_render_atomic_tests(techniques)}
+{_render_atomic_tests(techniques, platforms=req.platforms)}
 ---
 
 ## KEEP: Findings & Response

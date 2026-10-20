@@ -846,3 +846,27 @@ def test_render_draft_renders_linux_soc_triage_playbook() -> None:
     assert "/dev/shm" in md
     assert "iptables" in md
     assert "eBPF" in md
+
+
+def test_render_draft_renders_macos_soc_triage_playbook() -> None:
+    hyp = HypothesisResult(
+        hypothesis="Adversaries execute ClickFix scripts on macOS",
+        behavior="Malicious curl paste and Gatekeeper bypass",
+        techniques=["T1204.004", "T1553.001"],
+    )
+    req = DraftHuntRequest(
+        hunt_id="H-0126",
+        threat_intel="macOS stealer compromise",
+        hypothesis=hyp,
+        generated_at=datetime(2026, 7, 4, tzinfo=UTC),
+        platforms=["macOS"],
+    )
+    md = render_draft(req)
+    assert "### SOC Responder Triage Playbook (ADS-Lite)" in md
+    assert "Unified Logging" in md
+    assert "LaunchAgents" in md
+    assert "Endpoint Security Framework" in md
+    # Must avoid Windows artifacts on macOS
+    assert "%TEMP%" not in md
+    assert "%APPDATA%" not in md
+    assert "LSASS" not in md
