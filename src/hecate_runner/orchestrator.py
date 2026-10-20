@@ -1754,11 +1754,13 @@ class Orchestrator:
 
             try:
                 eval_result = SigmaEvaluator.evaluate_rule(rule_yaml, attack_events, baseline_events)
+                tuned = False
 
                 if eval_result.false_positives > 0 or (eval_result.false_negatives > 0 and eval_result.true_positives == 0 and attack_events):
                     tune_res = tuner.tune(rule_yaml, attack_events, baseline_events)
                     if tune_res.final_rule != tune_res.initial_rule:
                         rule["rule_yaml"] = tune_res.final_rule
+                        tuned = True
                         tuned_count += 1
                         fn = rule.get("filename")
                         if fn:
@@ -1769,14 +1771,30 @@ class Orchestrator:
 
                 rule["purple_team"] = {
                     "validated": True,
+                    "tuned": tuned,
                     "precision": eval_result.precision,
                     "recall": eval_result.recall,
                     "fp": eval_result.false_positives,
                     "tp": eval_result.true_positives,
                 }
                 validated_count += 1
+
+                fn = rule.get("filename")
+                if fn:
+                    fp = out_dir / f"{fn}.yml"
+                    if fp.exists():
+                        cur_text = fp.read_text(encoding="utf-8")
+                        if "x_hecate_purple_team_validated:" not in cur_text:
+                            cur_text = cur_text.rstrip() + "\nx_hecate_purple_team_validated: true\n"
+                            if tuned:
+                                cur_text += "x_hecate_tuned: true\n"
+                            fp.write_text(cur_text, encoding="utf-8")
             except Exception as exc:
                 log.debug("Purple-team evaluation skipped for rule: %s", exc)
+
+        req.purple_team_rules_evaluated = validated_count
+        req.purple_team_rules_tuned = tuned_count
+        req.purple_team_telemetry_count = len(attack_events) + len(baseline_events)
 
         self.trail.step(
             "purple_team",

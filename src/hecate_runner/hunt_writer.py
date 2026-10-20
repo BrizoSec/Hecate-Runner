@@ -63,6 +63,10 @@ class DraftHuntRequest:
     detection_guidance: list[dict[str, Any]] = field(default_factory=list)
     #: Behaviours the rule reviewer found no rule for, each with its verified quote.
     review_gaps: list[dict[str, str]] = field(default_factory=list)
+    #: Purple-team automated validation and self-tuning metrics
+    purple_team_rules_evaluated: int = 0
+    purple_team_rules_tuned: int = 0
+    purple_team_telemetry_count: int = 0
 
 
 #: Ceiling on the CTI blurb embedded in a draft. Generous on purpose: the
@@ -691,7 +695,15 @@ def render_draft(req: DraftHuntRequest) -> str:
         "false_positives: 0\n"
         "customer_deliverables: []\n"
         f"tags: {json.dumps(_draft_tags(hyp.is_threat_report, hyp.is_indicator_only))}\n"
-        "---\n\n"
+        + (
+            f"purple_team_validated: true\n"
+            f"purple_team_rules_evaluated: {req.purple_team_rules_evaluated or sum(1 for r in req.sigma_rules if r.get('purple_team', {}).get('validated'))}\n"
+            f"purple_team_rules_tuned: {req.purple_team_rules_tuned or sum(1 for r in req.sigma_rules if r.get('purple_team', {}).get('tuned'))}\n"
+            f"purple_team_telemetry_events: {req.purple_team_telemetry_count}\n"
+            if (req.purple_team_rules_evaluated > 0 or any(r.get("purple_team", {}).get("validated") for r in req.sigma_rules))
+            else ""
+        )
+        + "---\n\n"
     )
 
     low_confidence_banner = (
