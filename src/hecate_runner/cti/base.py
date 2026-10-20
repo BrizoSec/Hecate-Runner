@@ -80,7 +80,7 @@ def extract_article_text(url: str) -> str:
     if not tavily_key:
         return ""
     try:
-        from tavily import TavilyClient  # type: ignore[import-untyped]
+        from tavily import TavilyClient
 
         client = TavilyClient(api_key=tavily_key)
         response = client.extract(urls=[url])
