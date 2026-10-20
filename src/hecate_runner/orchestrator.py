@@ -857,29 +857,50 @@ class Orchestrator:
         asserted: list[str],
         behaviour: list[Any],
         texts: list[tuple[str, str]],
+        item: CTIItem | None = None,
     ) -> list[str]:
         """Keep techniques the sources show in use; record the passage for each.
 
         - A technique whose every mention describes what a tool *can* do
           (H-0618's T1113 Screen Capture, from a VShell feature list) is
-          dropped as capability-only.
+          dropped as capability-only, even if asserted on an external feed.
+        - Negated techniques and attacker-side toolkit context are dropped.
         - A sub-technique the text does not support, whose parent it does, is
           generalised to the parent (T1036.001 Invalid Code Signature on a
           report that only says "disguised as a resume" becomes T1036).
-        - Techniques the CTI names by ID are kept as asserted.
+        - Techniques explicitly named by ID in the CTI text without negative
+          qualification are kept as asserted.
+        - Feed tags on OTX pulses with no mention, name, or behavior in the
+          intel are dropped as unevidenced.
         """
-        from hecate_agent.core.technique_evidence import technique_support
+        import re
+
+        from hecate_agent.core.technique_evidence import (
+            TechniqueEvidence,
+            _clip,
+            actor_material_report,
+            passage_status,
+            sentences,
+            technique_support,
+        )
 
         by_id = {e.technique_id: e for e in behaviour}
         combined = "\n".join(text for _, text in texts)
+        actor_material = any(actor_material_report(t) for _, t in texts)
         shielded = {t.upper() for t in asserted}
+        is_otx_pulse = (
+            item is not None
+            and (item.source == "otx" or bool(item.metadata.get("pulse_id")))
+        )
         kept: list[str] = []
         evidence: list[dict[str, str]] = []
         dropped: list[str] = []
+        unevidenced: list[str] = []
+
         for technique_id in techniques:
             upper = technique_id.upper()
             found = by_id.get(upper)
-            if found is None and upper not in shielded:
+            if found is None:
                 meta = self.hecate.lookup_technique(
                     upper, timeout_sec=self.settings.llm_timeout_sec
                 )
@@ -897,10 +918,67 @@ class Orchestrator:
                         "techniques", "%s unsupported; generalised to %s", upper, parent
                     )
                     upper, found = parent, by_id[parent]
-            if found is not None and found.status == "capability" and upper not in shielded:
+
+            if found is None and upper in shielded:
+                id_pattern = re.compile(rf"\b{re.escape(upper)}\b", re.IGNORECASE)
+                if id_pattern.search(combined):
+                    matching_sentence = ""
+                    for s in sentences(combined):
+                        if id_pattern.search(s):
+                            matching_sentence = s
+                            break
+                    if matching_sentence:
+                        status, passage = passage_status(
+                            matching_sentence, 0, len(matching_sentence), actor_material
+                        )
+                        if status in ("capability", "negated", "context"):
+                            dropped.append(upper)
+                            evidence.append(
+                                {
+                                    "technique_id": upper,
+                                    "status": status,
+                                    "passage": _clip(passage),
+                                    "source": "cti",
+                                    "behaviour": "named by ID",
+                                }
+                            )
+                            continue
+                        found = TechniqueEvidence(
+                            technique_id=upper,
+                            status=status,
+                            passage=_clip(passage),
+                            source="cti",
+                            behaviour="named by ID",
+                        )
+                    else:
+                        m = id_pattern.search(combined)
+                        assert m is not None
+                        start = max(0, m.start() - 50)
+                        end = min(len(combined), m.end() + 50)
+                        found = TechniqueEvidence(
+                            technique_id=upper,
+                            status="observed",
+                            passage=_clip(combined[start:end]),
+                            source="cti",
+                            behaviour="named by ID",
+                        )
+                elif is_otx_pulse:
+                    unevidenced.append(upper)
+                    continue
+                else:
+                    found = TechniqueEvidence(
+                        technique_id=upper,
+                        status="asserted",
+                        passage="",
+                        source="cti",
+                        behaviour="named by ID",
+                    )
+
+            if found is not None and found.status in ("capability", "negated", "context"):
                 dropped.append(upper)
-                evidence.append({**found.to_dict(), "technique_id": upper, "status": "capability"})
+                evidence.append({**found.to_dict(), "technique_id": upper, "status": found.status})
                 continue
+
             if upper in kept:
                 continue
             kept.append(upper)
@@ -916,9 +994,14 @@ class Orchestrator:
                         "behaviour": "named by ID",
                     }
                 )
+
         if dropped:
             self.trail.step(
                 "techniques", "dropped as capability only, not observed use: %s", listing(dropped)
+            )
+        if unevidenced:
+            self.trail.step(
+                "techniques", "dropped unevidenced feed tags: %s", listing(unevidenced)
             )
         self._technique_evidence = evidence
         return kept
@@ -2581,7 +2664,11 @@ class Orchestrator:
 
             if not sweep_inventory:
                 hypothesis.techniques = self._gate_on_observed_use(
-                    hypothesis.techniques, cti_techniques, behaviour, evidence_texts
+                    hypothesis.techniques,
+                    cti_techniques,
+                    behaviour,
+                    evidence_texts,
+                    item=item,
                 )
 
         indicator_types = list((item.metadata.get("indicators") or {}).keys())

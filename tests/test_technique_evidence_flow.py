@@ -107,6 +107,28 @@ def test_an_unsupported_sub_technique_is_generalised_to_its_supported_parent(
 
 
 def test_a_technique_the_cti_names_by_id_is_kept(settings: Settings, hecate: MagicMock) -> None:
+    content = CTI + "\nMITRE ATT&CK Techniques: T1041"
+    hecate.candidate_techniques.return_value = []
+    item = CTIItem(
+        content=content, source="misp", title="VShell", metadata={"techniques": ["T1041"]}
+    )
+    hecate.hypothesis_generator.return_value = HypothesisResult(
+        hypothesis="x", techniques=[], observables=["a.exe"]
+    )
+    hecate.lookup_technique.side_effect = _lookup
+    provider = MagicMock()
+    provider.next_item.return_value = item
+    draft = (
+        Orchestrator(settings=settings, hecate=hecate, cti_provider=provider)
+        .run_once()
+        .draft_path.read_text()
+    )
+    assert "T1041" in _techniques(draft)
+
+
+def test_cti_asserted_capability_technique_is_dropped_as_capability_only(
+    settings: Settings, hecate: MagicMock
+) -> None:
     content = CTI + "\nMITRE ATT&CK Techniques: T1113"
     hecate.candidate_techniques.return_value = []
     item = CTIItem(
@@ -123,4 +145,4 @@ def test_a_technique_the_cti_names_by_id_is_kept(settings: Settings, hecate: Mag
         .run_once()
         .draft_path.read_text()
     )
-    assert "T1113" in _techniques(draft)
+    assert "T1113" not in _techniques(draft)

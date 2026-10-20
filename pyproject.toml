@@ -123,6 +123,10 @@ disallow_untyped_defs = false
 module = "feedparser"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "tavily.*"
+ignore_missing_imports = true
+
 # hecate-agent ships no py.typed marker, so mypy cannot see into it.
 [[tool.mypy.overrides]]
 module = "hecate_agent.*"
