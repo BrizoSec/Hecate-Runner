@@ -92,7 +92,7 @@ class Settings(BaseSettings):
             "hecate-runner-orchestrator.service) since that's an outer, harder cap."
         ),
     )
-    cti_provider: Literal["file", "otx", "rss", "misp", "cisa_kev", "abuse_ch", "multi"] = Field(
+    cti_provider: Literal["file", "otx", "rss", "misp", "cisa_kev", "abuse_ch", "certstream", "multi"] = Field(
         default="file",
         alias="HECATE_RUNNER_CTI_PROVIDER",
         description=(
@@ -400,6 +400,37 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_MISP_REQUEST_TIMEOUT_SEC",
     )
 
+    # --- CertStream CTI provider -------------------------------------------
+    certstream_stream_url: str = Field(
+        default="wss://certstream.calidog.io/",
+        alias="HECATE_RUNNER_CERTSTREAM_URL",
+        description="CertStream WebSocket URL for real-time Certificate Transparency log streaming.",
+    )
+    certstream_brand_patterns_raw: str = Field(
+        default="apple,notion,google,microsoft,github,binance,metamask,trezor,ledger,paypal,coinbase,phantom",
+        alias="HECATE_RUNNER_CERTSTREAM_BRANDS",
+        description="Comma-separated list of target brand names to monitor for typosquatting / impersonation.",
+    )
+    certstream_suspicious_keywords_raw: str = Field(
+        default="download,update,login,verify,auth,support,security,wallet,app,token,claim,airdrop,setup,install",
+        alias="HECATE_RUNNER_CERTSTREAM_KEYWORDS",
+        description="Comma-separated list of suspicious staging or lure keywords.",
+    )
+    certstream_poll_timeout_sec: float = Field(
+        default=5.0,
+        ge=0.5,
+        le=60.0,
+        alias="HECATE_RUNNER_CERTSTREAM_POLL_TIMEOUT_SEC",
+        description="Timeout in seconds when polling the live CertStream websocket.",
+    )
+    certstream_max_buffer_size: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        alias="HECATE_RUNNER_CERTSTREAM_MAX_BUFFER",
+        description="Maximum number of candidate staging items to buffer in memory.",
+    )
+
     # --- Notifications --------------------------------------------------------
     slack_webhook_url: str | None = Field(
         default=None,
@@ -523,6 +554,20 @@ class Settings(BaseSettings):
     @property
     def abuse_ch_cursor_file(self) -> Path:
         return self.hecate_workspace / ".cursors" / "abuse_ch_cursor.json"
+
+    @property
+    def certstream_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "certstream_cursor.json"
+
+    @property
+    def certstream_brand_patterns(self) -> list[str]:
+        """Parsed, lowercased, whitespace-trimmed brand list from HECATE_RUNNER_CERTSTREAM_BRANDS."""
+        return [b.strip().lower() for b in self.certstream_brand_patterns_raw.split(",") if b.strip()]
+
+    @property
+    def certstream_suspicious_keywords(self) -> list[str]:
+        """Parsed, lowercased, whitespace-trimmed suspicious keywords from HECATE_RUNNER_CERTSTREAM_KEYWORDS."""
+        return [k.strip().lower() for k in self.certstream_suspicious_keywords_raw.split(",") if k.strip()]
 
     @property
     def multi_cursor_file(self) -> Path:
