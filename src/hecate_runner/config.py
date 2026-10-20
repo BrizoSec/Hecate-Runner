@@ -195,6 +195,14 @@ class Settings(BaseSettings):
             "the hunt, so disabling this only removes the section."
         ),
     )
+    purple_team_validation_enabled: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_PURPLE_TEAM_VALIDATION_ENABLED",
+        description=(
+            "Run closed-loop sandbox emulation and detection self-tuning on all "
+            "generated Sigma detection rules before finalizing the hunt package."
+        ),
+    )
     sigma_timeout_sec: int = Field(
         default=1800,
         ge=30,
