@@ -1076,8 +1076,9 @@ def test_attack_line_constant_matches_what_every_provider_emits() -> None:
     """
     from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE
 
+    base_dir = Path(__file__).resolve().parent.parent
     for module in ("misp", "otx", "rss"):
-        src = Path(f"src/hecate_runner/cti/{module}.py").read_text()
+        src = (base_dir / f"src/hecate_runner/cti/{module}.py").read_text()
         assert "MITRE ATT&CK Techniques:" not in src, (
             f"{module}.py hardcodes the label instead of using ATTACK_TECHNIQUE_LINE"
         )

@@ -1298,6 +1298,23 @@ def list_sources() -> None:
         cursor_status(settings.abuse_ch_cursor_file),
     )
 
+    # certstream
+    table.add_row(
+        "certstream",
+        format_active("certstream"),
+        "Live CTL Stream (Public)",
+        cursor_status(settings.certstream_cursor_file),
+    )
+
+    # github_poc
+    gh_cred = "Token present" if settings.github_token else "Keyless / Public"
+    table.add_row(
+        "github_poc",
+        format_active("github_poc"),
+        gh_cred,
+        cursor_status(settings.github_poc_cursor_file),
+    )
+
     # File Queue
     file_queue_dir = settings.cti_queue_dir_resolved
     file_status = (
@@ -1337,7 +1354,7 @@ def enable_source(name: str) -> None:
     settings = Settings()
     console = Console()
 
-    valid = {"otx", "rss", "misp", "cisa_kev", "abuse_ch", "file"}
+    valid = {"otx", "rss", "misp", "cisa_kev", "abuse_ch", "certstream", "github_poc", "file"}
     if name not in valid:
         console.print(
             f"[red]Error:[/red] Unknown source '{name}'. Valid sources are: {', '.join(valid)}"
@@ -1426,6 +1443,8 @@ def reset_cursor(name: str) -> None:
         "multi": settings.multi_cursor_file,
         "cisa_kev": settings.hecate_workspace / ".cursors" / "cisa_kev_cursor.json",
         "abuse_ch": settings.abuse_ch_cursor_file,
+        "certstream": settings.certstream_cursor_file,
+        "github_poc": settings.github_poc_cursor_file,
     }
 
     if name not in cursors:

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",  # HECATE_* and TAVILY_* pass-through env vars are fine to ignore
+        populate_by_name=True,
     )
 
     # --- Hecate workspace -----------------------------------------------------
@@ -92,7 +93,7 @@ class Settings(BaseSettings):
             "hecate-runner-orchestrator.service) since that's an outer, harder cap."
         ),
     )
-    cti_provider: Literal["file", "otx", "rss", "misp", "cisa_kev", "abuse_ch", "certstream", "multi"] = Field(
+    cti_provider: Literal["file", "otx", "rss", "misp", "cisa_kev", "abuse_ch", "certstream", "github_poc", "multi"] = Field(
         default="file",
         alias="HECATE_RUNNER_CTI_PROVIDER",
         description=(
@@ -462,6 +463,24 @@ class Settings(BaseSettings):
         alias="IPINFO_TOKEN",
         description="IPinfo.io API token (free community tier allows 50,000 queries/month).",
     )
+    github_token: str | None = Field(
+        default=None,
+        alias="GITHUB_TOKEN",
+        description="GitHub personal access token for higher Search API rate limits.",
+    )
+    github_poc_request_timeout_sec: float = Field(
+        default=10.0,
+        ge=3.0,
+        le=60.0,
+        alias="HECATE_RUNNER_GITHUB_POC_TIMEOUT_SEC",
+        description="Timeout for GitHub API and raw repository requests.",
+    )
+    github_poc_min_stars: int = Field(
+        default=0,
+        ge=0,
+        alias="HECATE_RUNNER_GITHUB_POC_MIN_STARS",
+        description="Minimum stars required for GitHub PoC repositories.",
+    )
 
     # Field names whose values must never appear in `hecate-runner config` output —
     # anyone holding the raw webhook URL can post into the channel, same as
@@ -474,6 +493,7 @@ class Settings(BaseSettings):
         "spur_api_key",
         "mnemonic_api_key",
         "ipinfo_token",
+        "github_token",
     }
 
     # --- CTI intake triage ----------------------------------------------------
@@ -588,6 +608,10 @@ class Settings(BaseSettings):
     @property
     def certstream_cursor_file(self) -> Path:
         return self.hecate_workspace / ".cursors" / "certstream_cursor.json"
+
+    @property
+    def github_poc_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "github_poc_cursor.json"
 
     @property
     def certstream_brand_patterns(self) -> list[str]:

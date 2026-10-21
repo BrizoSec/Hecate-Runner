@@ -8,6 +8,7 @@ from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
 from hecate_runner.cti.certstream import CertStreamProvider
 from hecate_runner.cti.cisa_kev import CisaKevProvider
 from hecate_runner.cti.file_queue import FileQueueProvider
+from hecate_runner.cti.github_poc import GitHubPocProvider
 from hecate_runner.cti.misp import MispProvider
 from hecate_runner.cti.multi import MultiProvider
 from hecate_runner.cti.otx import OtxProvider
@@ -21,6 +22,7 @@ __all__ = [
     "CertStreamProvider",
     "CisaKevProvider",
     "FileQueueProvider",
+    "GitHubPocProvider",
     "MispProvider",
     "MultiProvider",
     "OtxProvider",
@@ -76,6 +78,14 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             suspicious_keywords=settings.certstream_suspicious_keywords,
             poll_timeout_sec=settings.certstream_poll_timeout_sec,
             max_buffer_size=settings.certstream_max_buffer_size,
+        )
+    if name == "github_poc":
+        return GitHubPocProvider(
+            workspace=settings.hecate_workspace,
+            github_token=settings.github_token,
+            cursor_file=settings.github_poc_cursor_file,
+            request_timeout_sec=settings.github_poc_request_timeout_sec,
+            min_stars=settings.github_poc_min_stars,
         )
     if name == "multi":
         sub_names = settings.cti_multi_provider_names
