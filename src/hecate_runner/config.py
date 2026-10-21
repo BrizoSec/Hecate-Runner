@@ -457,6 +457,11 @@ class Settings(BaseSettings):
         alias="MNEMONIC_API_KEY",
         description="Mnemonic Argus API key for passive DNS queries (optional; public queries work keylessly).",
     )
+    ipinfo_token: str | None = Field(
+        default=None,
+        alias="IPINFO_TOKEN",
+        description="IPinfo.io API token (free community tier allows 50,000 queries/month).",
+    )
 
     # Field names whose values must never appear in `hecate-runner config` output —
     # anyone holding the raw webhook URL can post into the channel, same as
@@ -468,6 +473,7 @@ class Settings(BaseSettings):
         "urlscan_api_key",
         "spur_api_key",
         "mnemonic_api_key",
+        "ipinfo_token",
     }
 
     # --- CTI intake triage ----------------------------------------------------
