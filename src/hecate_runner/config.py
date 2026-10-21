@@ -93,7 +93,7 @@ class Settings(BaseSettings):
             "hecate-runner-orchestrator.service) since that's an outer, harder cap."
         ),
     )
-    cti_provider: Literal["file", "otx", "rss", "misp", "cisa_kev", "abuse_ch", "certstream", "github_poc", "multi"] = Field(
+    cti_provider: Literal["file", "otx", "rss", "misp", "cisa_kev", "abuse_ch", "certstream", "github_poc", "malwarebazaar", "vxunderground", "multi"] = Field(
         default="file",
         alias="HECATE_RUNNER_CTI_PROVIDER",
         description=(
@@ -481,6 +481,30 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_GITHUB_POC_MIN_STARS",
         description="Minimum stars required for GitHub PoC repositories.",
     )
+    abusech_api_key: str | None = Field(
+        default=None,
+        alias="ABUSECH_API_KEY",
+        description="Abuse.ch Auth-Key for MalwareBazaar and ThreatFox.",
+    )
+    malwarebazaar_only_signed: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_MALWAREBAZAAR_ONLY_SIGNED",
+        description="Filter for samples with identified malware families.",
+    )
+    malwarebazaar_request_timeout_sec: float = Field(
+        default=15.0,
+        ge=3.0,
+        le=60.0,
+        alias="HECATE_RUNNER_MALWAREBAZAAR_TIMEOUT_SEC",
+        description="Timeout for MalwareBazaar requests.",
+    )
+    vxunderground_request_timeout_sec: float = Field(
+        default=15.0,
+        ge=3.0,
+        le=60.0,
+        alias="HECATE_RUNNER_VXUNDERGROUND_TIMEOUT_SEC",
+        description="Timeout for VX-Underground requests.",
+    )
 
     # Field names whose values must never appear in `hecate-runner config` output —
     # anyone holding the raw webhook URL can post into the channel, same as
@@ -494,6 +518,7 @@ class Settings(BaseSettings):
         "mnemonic_api_key",
         "ipinfo_token",
         "github_token",
+        "abusech_api_key",
     }
 
     # --- CTI intake triage ----------------------------------------------------
@@ -612,6 +637,14 @@ class Settings(BaseSettings):
     @property
     def github_poc_cursor_file(self) -> Path:
         return self.hecate_workspace / ".cursors" / "github_poc_cursor.json"
+
+    @property
+    def malwarebazaar_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "malwarebazaar_cursor.json"
+
+    @property
+    def vxunderground_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "vxunderground_cursor.json"
 
     @property
     def certstream_brand_patterns(self) -> list[str]:

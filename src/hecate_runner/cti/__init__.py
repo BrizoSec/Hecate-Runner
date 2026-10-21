@@ -9,10 +9,12 @@ from hecate_runner.cti.certstream import CertStreamProvider
 from hecate_runner.cti.cisa_kev import CisaKevProvider
 from hecate_runner.cti.file_queue import FileQueueProvider
 from hecate_runner.cti.github_poc import GitHubPocProvider
+from hecate_runner.cti.malwarebazaar import MalwareBazaarProvider
 from hecate_runner.cti.misp import MispProvider
 from hecate_runner.cti.multi import MultiProvider
 from hecate_runner.cti.otx import OtxProvider
 from hecate_runner.cti.rss import RssProvider
+from hecate_runner.cti.vxunderground import VxUndergroundProvider
 
 __all__ = [
     "ATTACK_TECHNIQUE_LINE",
@@ -23,10 +25,12 @@ __all__ = [
     "CisaKevProvider",
     "FileQueueProvider",
     "GitHubPocProvider",
+    "MalwareBazaarProvider",
     "MispProvider",
     "MultiProvider",
     "OtxProvider",
     "RssProvider",
+    "VxUndergroundProvider",
     "get_provider",
 ]
 
@@ -86,6 +90,21 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             cursor_file=settings.github_poc_cursor_file,
             request_timeout_sec=settings.github_poc_request_timeout_sec,
             min_stars=settings.github_poc_min_stars,
+        )
+    if name == "malwarebazaar":
+        return MalwareBazaarProvider(
+            workspace=settings.hecate_workspace,
+            api_key=settings.abusech_api_key,
+            cursor_file=settings.malwarebazaar_cursor_file,
+            request_timeout_sec=settings.malwarebazaar_request_timeout_sec,
+            only_signed=settings.malwarebazaar_only_signed,
+        )
+    if name == "vxunderground":
+        return VxUndergroundProvider(
+            workspace=settings.hecate_workspace,
+            github_token=settings.github_token,
+            cursor_file=settings.vxunderground_cursor_file,
+            request_timeout_sec=settings.vxunderground_request_timeout_sec,
         )
     if name == "multi":
         sub_names = settings.cti_multi_provider_names
