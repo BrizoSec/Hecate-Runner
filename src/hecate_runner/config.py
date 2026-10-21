@@ -441,10 +441,34 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Auxiliary CTI & Enrichment keys --------------------------------------
+    urlscan_api_key: str | None = Field(
+        default=None,
+        alias="URLSCAN_API_KEY",
+        description="URLScan.io API key for on-demand detonation and search.",
+    )
+    spur_api_key: str | None = Field(
+        default=None,
+        alias="SPUR_API_KEY",
+        description="Spur.us Context API token for IP anonymity and proxy intelligence.",
+    )
+    mnemonic_api_key: str | None = Field(
+        default=None,
+        alias="MNEMONIC_API_KEY",
+        description="Mnemonic Argus API key for passive DNS queries (optional; public queries work keylessly).",
+    )
+
     # Field names whose values must never appear in `hecate-runner config` output —
     # anyone holding the raw webhook URL can post into the channel, same as
     # an API key.
-    _SENSITIVE_FIELDS: ClassVar[set[str]] = {"otx_api_key", "slack_webhook_url", "misp_api_key"}
+    _SENSITIVE_FIELDS: ClassVar[set[str]] = {
+        "otx_api_key",
+        "slack_webhook_url",
+        "misp_api_key",
+        "urlscan_api_key",
+        "spur_api_key",
+        "mnemonic_api_key",
+    }
 
     # --- CTI intake triage ----------------------------------------------------
     cti_triage: Literal["park", "off"] = Field(
