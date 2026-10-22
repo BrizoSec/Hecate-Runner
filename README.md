@@ -29,7 +29,7 @@ Runs as a systemd timer on a hunting host, or by hand: `hecate-runner run` takes
 ```mermaid
 flowchart LR
     CTI["CTI provider<br/>file | otx | rss | misp |<br/>cisa_kev | abuse_ch | multi"] --> RUN
-    TIMER["systemd timer<br/>hourly, 2 min after boot"] --> RUN["hecate-runner run"]
+    TIMER["systemd timer<br/>2 min after boot, then hourly"] --> RUN["hecate-runner run"]
     RUN --> SRC["Source evidence<br/>read the linked report"]
     SRC --> RES["Research<br/>5 skills, Tavily web search"]
     RES --> HYP["Hypothesis"]

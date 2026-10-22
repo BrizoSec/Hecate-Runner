@@ -422,8 +422,8 @@ totals.
 
 ## Scheduling and safety rails
 
-A systemd timer (`hecate-runner-orchestrator.timer`) fires the cycle two
-minutes after boot and hourly after that.
+A systemd timer (`hecate-runner-orchestrator.timer`) starts a cycle two
+minutes after boot, then one hour after each activation.
 
 Five independent limits bound autonomous behaviour:
 
