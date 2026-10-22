@@ -11,7 +11,12 @@ import pytest
 
 from hecate_runner.config import Settings
 from hecate_runner.cti import FileQueueProvider
-from hecate_runner.hecate_client import HecateClient, HypothesisResult, ResearchResult
+from hecate_runner.hecate_client import (
+    HecateClient,
+    HypothesisResult,
+    ResearchResult,
+    TechniqueMetadata,
+)
 from hecate_runner.orchestrator import Orchestrator, research_tradecraft_text
 
 _RESEARCH_DOC = """# R-0009: BengalSEO Research
@@ -48,19 +53,29 @@ def test_tradecraft_section_is_all_that_is_matched() -> None:
     assert research_tradecraft_text("") == ""
 
 
-def test_candidates_join_the_draft_between_cti_and_model_picks(
+def test_candidates_come_from_primary_cti_and_join_model_picks(
     settings: Settings,
     workspace: Path,
     mock_hecate: MagicMock,
     sample_hypothesis: HypothesisResult,
 ) -> None:
-    """H-0010: SEO Poisoning was offered to the model, which chose T1098 and
-    T1563 instead. The intel's own wording now puts it on the hunt."""
+    """Research may inform context, but only primary CTI supplies candidates."""
     (workspace / "research").mkdir(exist_ok=True)
     (workspace / "research" / "R-0009.md").write_text(_RESEARCH_DOC)
     mock_hecate.research_new.return_value = ResearchResult(research_id="R-0009")
     sample_hypothesis.techniques = ["T1098"]
     mock_hecate.candidate_techniques.return_value = [("T1608.006", "SEO Poisoning")]
+
+    def lookup_technique(technique_id: str, **_kwargs: object) -> TechniqueMetadata:
+        return TechniqueMetadata(
+            technique_id=technique_id,
+            name="SEO Poisoning" if technique_id == "T1608.006" else "Account Manipulation",
+            tactics=["initial-access"],
+            platforms=["Windows"],
+            found=True,
+        )
+
+    mock_hecate.lookup_technique.side_effect = lookup_technique
     provider = _queue(
         workspace,
         "RSS: BengalSEO\nSource: thedfirreport.com\n"
@@ -72,11 +87,11 @@ def test_candidates_join_the_draft_between_cti_and_model_picks(
 
     matched_text = mock_hecate.candidate_techniques.call_args.args[0]
     assert "SEO poisoning campaign" in matched_text  # the CTI
-    assert "push malicious pages up Bing" in matched_text  # research tradecraft
+    assert "push malicious pages up Bing" not in matched_text  # secondary research
     assert "process injection" not in matched_text  # research speculation
     assert result.draft_path is not None
     frontmatter = result.draft_path.read_text().split("---")[1]
-    assert 'techniques: ["T1608.006", "T1098"]' in frontmatter
+    assert 'techniques: ["T1608.006"]' in frontmatter
 
 
 def test_an_indicator_dump_gets_no_candidates(

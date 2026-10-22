@@ -114,3 +114,34 @@ def triage(item: CTIItem) -> TriageVerdict:
             )
 
     return TriageVerdict(False)
+
+
+def source_quality_verdict(item: CTIItem) -> TriageVerdict | None:
+    """Apply provider-declared evidence limits independently of article triage.
+
+    Provider metadata is the reliable signal for machine-generated sample
+    and archive records: a prose-shaped blurb must not upgrade those records
+    into behavioral reporting. Malware samples with real hashes remain
+    eligible for the deterministic indicator-sweep route; repository archive
+    metadata without endpoint indicators is held for a richer source.
+    """
+    profile = str(item.metadata.get("evidence_profile", "")).strip().lower()
+    if profile == "sample_metadata":
+        indicators = item.metadata.get("indicators") or {}
+        has_indicators = (
+            any(bool(values) for values in indicators.values())
+            if isinstance(indicators, dict)
+            else bool(indicators)
+        )
+        if has_indicators:
+            return TriageVerdict(False)
+        return TriageVerdict(
+            True,
+            "sample catalog entry has no routable indicators and no reported behavior",
+        )
+    if profile == "archive_metadata":
+        return TriageVerdict(
+            True,
+            "repository archive metadata names files but contains no extracted behavior or endpoint indicators",
+        )
+    return None

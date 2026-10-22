@@ -109,6 +109,13 @@ announcements, vendor commentary and similar non-actionable items into
 `cti_queue/parked/` with a reason attached. `hecate-runner parked` lists them
 and `parked restore` puts one back. Nothing is ever thrown away.
 
+Provider evidence profiles add a source-quality gate. MalwareBazaar sample
+records with hashes route to deterministic IOC sweeps; family labels and file
+types do not count as observed behavior. The Runner skips fetching and
+secondary enrichment for these sample records. VX-Underground archive metadata
+with no extracted runtime activity is parked for a richer source. These
+provider limits apply even when commentary triage is disabled.
+
 **Starting from intelligence in hand.** `hecate-runner draft` takes text an
 operator supplies (an argument, a file or standard input, with an optional
 report URL) in place of a feed item. It is a different way in, not a different
@@ -118,10 +125,11 @@ an older LangGraph graph behind `hecate-agent orchestrate`; that one is
 experimental, lacks most of the stages below and is not scored against the
 gold cases.
 
-**The narrative gate.** `has_narrative()` asks whether an item carries anything
-beyond a bare indicator dump and a title: a human-written summary or
-description, or an explicit ATT&CK technique list. This one answer decides the
-route the cycle takes, and is the single most consequential branch in it.
+**The source-evidence gate.** Provider-declared profiles take precedence over
+the prose shape of a generated blurb. Other items use `has_narrative()` to
+distinguish a report from a bare indicator dump: a human-written summary or
+description, or an explicit ATT&CK technique list. Together these decide the
+route the cycle takes.
 
 ---
 
@@ -170,10 +178,15 @@ flowchart TD
 3. **Reserve a draft slot.** `max_drafts_per_day` is checked and reserved
    *before* any model call. Exceeding it leaves the intelligence queued for the
    next cycle.
-4. **Choose the route** from the narrative gate.
+4. **Choose the route** from provider evidence profile and narrative gate.
+   - *Sample metadata with routable hashes*: a deterministic IOC sweep; no
+     behavioral techniques are inferred from malware family or file type.
+   - *Archive metadata without runtime behavior or endpoint indicators*:
+     park with a reason before reserving a draft slot.
    - *No narrative but a parseable indicator inventory*: a deterministic
-     **sweep draft**, built from the indicators alone. No model call at all, so
-     there is no opportunity for the model to invent a delivery vector.
+     **sweep hypothesis**, built from the indicators alone without research or
+     hypothesis-generation calls. Optional Sigma generation can still run
+     afterward; the behavior hypothesis remains limited to indicator presence.
    - *Narrative*: research with web search, then a hypothesis.
    - *No narrative and no parseable inventory*: research without web search,
      then an indicator-only hypothesis.
@@ -182,8 +195,8 @@ flowchart TD
    runs. A refused cycle refunds its draft slot and leaves the item queued. A
    research slot is *not* refunded when a later step fails, so retries cannot
    drain the search quota.
-6. **Gather source evidence** (`source_evidence`). The feed item is usually a
-   short summary of a much longer report. This step fetches the report the
+6. **Gather source evidence** (`source_evidence`) for report-backed items. The
+   feed item is usually a short summary of a much longer report. This step fetches the report the
    item links to, asks the model to extract artifacts from it chunk by chunk,
    and keeps only those whose value and quoted passage appear verbatim in the
    page. It then types the feed's own indicators by role (C2, payload host,
@@ -191,12 +204,15 @@ flowchart TD
    cycle: without a link, or on a fetch or model failure, the draft proceeds
    from the feed text.
 7. **Research** (`generate_research`), unless disabled. Produces `R-XXXX.md`
-   and grounds the hypothesis that follows. A research failure aborts the
+   as context for the hypothesis that follows; generated research is not
+   source evidence for this specific item. A research failure aborts the
    cycle rather than falling back to an ungrounded hypothesis. If research
    concludes a prose item describes no adversary behaviour, the item is parked
    and the draft slot refunded.
-8. **Hypothesis generation** (`generate_hypothesis`), constrained by whether
-   narrative was present. An empty hypothesis refunds the quota and leaves the
+8. **Hypothesis generation** (`generate_hypothesis`), constrained by the
+   source profile and whether narrative was present. The output includes
+   claim excerpts and exact source quotes, checked against the final fields
+   and primary CTI text. An empty hypothesis refunds the quota and leaves the
    intelligence queued.
 9. **Resolve techniques against the live ATT&CK matrix.** Tactics, platforms
    and data sources are derived deterministically from the resolved techniques,
@@ -318,11 +334,13 @@ Drafts follow the LEARN / OBSERVE / CHECK / KEEP structure, land in
 `hunts/YYYY/Qn/H-XXXX.md`, and always start at `status: planning` with a
 banner telling the reader not to execute anything yet.
 
-Each draft carries a **grounding audit**: every checkable claim (techniques,
-CVEs, indicators, actor names) classified as asserted by the source,
-research-only, inferred, or unsupported. Unsupported claims are listed in a
-warning block at the top. `hecate-runner audit` re-grades drafts on disk at any
-time.
+Each draft carries a **grounding audit**: checkable claims (techniques, CVEs,
+indicators, actor names) are compared with the embedded CTI and linked primary
+report. Generated research and OSINT enrichment do not count as evidence.
+Claim Evidence References list the quoted passage and whether it occurs in the
+source text; quote presence does not prove semantic support. Unsupported
+claims remain visible for review. `hecate-runner audit` re-grades drafts on
+disk at any time.
 
 ---
 
@@ -361,7 +379,7 @@ the Hecate-Core checkout unless `HECATE_WORKSPACE` says otherwise.
 | Path | What it holds | Written by |
 |---|---|---|
 | `hunts/YYYY/Qn/H-XXXX.md` | Draft hunts, in LOCK format | Runner |
-| `research/R-XXXX.md` | Research documents that ground a hunt | Core |
+| `research/R-XXXX.md` | Background research context linked to a hunt | Core |
 | `queries/H-XXXX/*.yml` | Drafted Sigma rules for a hunt | Runner |
 | `cti_queue/` | File-queue intake, `parked/` and `processed/` items | Runner |
 | `.orchestrator_state.json` | Today's draft and research counts, last run | Runner |

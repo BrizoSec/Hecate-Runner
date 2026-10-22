@@ -120,7 +120,7 @@ def evaluate_promotion(workspace: Path, hunt_id: str) -> PromotionDecision:
     if facts.hunt_id != hunt_id:
         raise ValueError("hunt ID could not be recovered from frontmatter")
     research = research_text_for(workspace, facts.research_id)
-    _, report = audit_hunt_text(text, research_text=research)
+    _, report = audit_hunt_text(text)
     unsupported = int(report.counts.get("unsupported", 0))
 
     reasons: list[str] = []

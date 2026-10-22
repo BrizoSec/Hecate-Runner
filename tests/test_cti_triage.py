@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from hecate_runner.cti import CTIItem
-from hecate_runner.cti_triage import triage
+from hecate_runner.cti_triage import source_quality_verdict, triage
 
 
 def _item(title: str = "", tags: list[str] | None = None) -> CTIItem:
@@ -102,3 +102,47 @@ def test_non_rss_items_pass_through() -> None:
     the absence of them."""
     item = CTIItem(content="MISP Event: X\nSummary: prose", source="misp", title="", metadata={})
     assert triage(item).park is False
+
+
+def test_sample_metadata_with_hash_is_routed_to_indicator_sweep() -> None:
+    item = CTIItem(
+        content="sample catalog record",
+        source="malwarebazaar",
+        metadata={
+            "evidence_profile": "sample_metadata",
+            "indicators": {"sha256": ["a" * 64]},
+        },
+    )
+
+    verdict = source_quality_verdict(item)
+
+    assert verdict is not None
+    assert verdict.park is False
+
+
+def test_sample_metadata_without_indicators_is_parked() -> None:
+    item = CTIItem(
+        content="sample catalog record",
+        source="malwarebazaar",
+        metadata={"evidence_profile": "sample_metadata", "indicators": {}},
+    )
+
+    verdict = source_quality_verdict(item)
+
+    assert verdict is not None
+    assert verdict.park is True
+    assert "no routable indicators" in verdict.reason
+
+
+def test_repository_archive_metadata_is_parked() -> None:
+    item = CTIItem(
+        content="repository archive record",
+        source="vxunderground",
+        metadata={"evidence_profile": "archive_metadata", "files": ["Windows/sample.7z"]},
+    )
+
+    verdict = source_quality_verdict(item)
+
+    assert verdict is not None
+    assert verdict.park is True
+    assert "no extracted behavior" in verdict.reason

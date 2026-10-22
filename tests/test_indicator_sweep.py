@@ -101,6 +101,10 @@ class TestBuildIndicatorSweep:
         result = build_indicator_sweep(OTX_BLURB)
 
         assert any("Endpoint" in source for source in result.data_sources)
+        assert any(
+            "Presence of a file matching a listed SHA256" in value for value in result.observables
+        )
+        assert not any("execution" in value.lower() for value in result.observables)
 
     def test_observables_carry_per_type_counts(self) -> None:
         result = build_indicator_sweep(THREATFOX_BLURB)

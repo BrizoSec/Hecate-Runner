@@ -55,10 +55,12 @@ def test_posts_to_webhook_when_configured(
     assert captured["url"] == "https://hooks.slack.com/services/test"
     assert "H-0042" in captured["json"]["text"]
     assert "R-0007" in captured["json"]["text"]
-    assert "grounded by R-0007" in captured["json"]["text"]
+    assert "research context R-0007" in captured["json"]["text"]
 
 
-def test_ungrounded_draft_says_so(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_notification_says_when_research_context_was_not_created(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     settings = settings.model_copy(
         update={"slack_webhook_url": "https://hooks.slack.com/services/test"}
     )
@@ -77,7 +79,7 @@ def test_ungrounded_draft_says_so(settings: Settings, monkeypatch: pytest.Monkey
     result = RunResult(outcome="draft_created", hunt_id="H-0042", draft_path=Path("/tmp/H-0042.md"))
     notify_draft_created(settings, result)
 
-    assert "ungrounded" in captured["json"]["text"]
+    assert "no research context" in captured["json"]["text"]
 
 
 def test_http_failure_is_swallowed_not_raised(

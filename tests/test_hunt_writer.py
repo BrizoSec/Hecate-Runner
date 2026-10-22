@@ -179,6 +179,30 @@ def test_render_draft_includes_research_link_when_present(
     assert "research/R-0004.md" in md
 
 
+def test_render_draft_includes_claim_evidence_checks(sample_hypothesis: HypothesisResult) -> None:
+    req = DraftHuntRequest(
+        hunt_id="H-0999",
+        threat_intel="APT actor X observed dumping LSASS.",
+        hypothesis=sample_hypothesis,
+        generated_at=datetime(2026, 7, 4, 22, 0, tzinfo=UTC),
+        claim_evidence=[
+            {
+                "field": "hypothesis",
+                "claim": "dumping LSASS",
+                "quote": "APT actor X observed dumping LSASS.",
+                "source": "https://example.com/report",
+                "status": "quote found; relevance needs review",
+            }
+        ],
+    )
+
+    md = render_draft(req)
+
+    assert "#### Claim Evidence References" in md
+    assert "quote found; relevance needs review" in md
+    assert "[https://example.com/report](https://example.com/report)" in md
+
+
 def test_render_draft_omits_research_link_when_absent(
     sample_hypothesis: HypothesisResult,
 ) -> None:
@@ -190,7 +214,7 @@ def test_render_draft_omits_research_link_when_absent(
     )
     md = render_draft(req)
     assert "spawned_from" not in md
-    assert "research grounding unavailable" in md
+    assert "Research Context:** None — review the CTI directly" in md
 
 
 def test_render_draft_includes_related_hunts_when_present(
@@ -601,9 +625,8 @@ def test_indicator_sweep_draft_says_research_was_not_needed() -> None:
     assert "grounding unavailable" not in md
 
 
-def test_missing_research_on_a_behavioral_draft_still_reads_as_a_gap() -> None:
-    """A behavioral hypothesis with no research doc is a real gap, not a
-    deliberate skip, and must keep saying so."""
+def test_missing_research_on_a_behavioral_draft_points_reviewer_to_cti() -> None:
+    """Without a research document the draft directs review to the CTI."""
     req = DraftHuntRequest(
         hunt_id="H-0612",
         threat_intel="some narrative intel",
@@ -611,10 +634,10 @@ def test_missing_research_on_a_behavioral_draft_still_reads_as_a_gap() -> None:
         generated_at=datetime(2026, 7, 4, tzinfo=UTC),
     )
     md = render_draft(req)
-    assert "research grounding unavailable this cycle" in md
+    assert "Research Context:** None — review the CTI directly" in md
 
 
-def test_research_doc_is_linked_when_one_exists() -> None:
+def test_research_doc_is_linked_as_background_context_when_one_exists() -> None:
     req = DraftHuntRequest(
         hunt_id="H-0613",
         threat_intel="some narrative intel",
@@ -624,7 +647,7 @@ def test_research_doc_is_linked_when_one_exists() -> None:
     )
     md = render_draft(req)
     assert "See [R-0042](" in md
-    assert "for detailed pre-hunt research" in md
+    assert "for background leads" in md
 
 
 # --- The embedded CTI must not silently lose evidence ----------------------

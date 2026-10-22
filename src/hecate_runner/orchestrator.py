@@ -29,7 +29,7 @@ from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.config import Settings
 from hecate_runner.context_metrics import measure_tokens
 from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider, get_provider
-from hecate_runner.cti_triage import triage
+from hecate_runner.cti_triage import source_quality_verdict, triage
 from hecate_runner.github_publisher import enqueue_hunt, sync_outbox
 from hecate_runner.hecate_client import HecateClient, HecateError, HypothesisResult
 from hecate_runner.hunt_writer import (
@@ -626,6 +626,19 @@ def has_narrative(cti_content: str) -> bool:
     )
 
 
+def _indicator_only_source(item: CTIItem) -> bool:
+    """Whether provider metadata says this item contains sample/IOC facts only.
+
+    Some integrations synthesize readable summaries from hashes, malware
+    family names and file types. That generated prose must not turn catalog
+    metadata into a behavioral report.
+    """
+    return bool(item.metadata.get("indicator_only")) or item.metadata.get("evidence_profile") in {
+        "sample_metadata",
+        "indicator_only",
+    }
+
+
 #: How many non-actionable items one cycle may walk past before giving up.
 #: A feed of nothing but vendor blog posts should cost a single cycle, not an
 #: unbounded walk through the archive.
@@ -760,6 +773,7 @@ class Orchestrator:
         self._unevidenced_dropped: list[str] = []
         #: ClaimFinding dicts from the claim audit (hecate_agent.core.claim_audit).
         self._claim_audit: list[dict[str, str]] = []
+        self._claim_evidence: list[dict[str, str]] = []
         # hecate_agent.core.source_evidence.SourceEvidence and the feed's
         # indicators typed against it (IndicatorRecord); reset every cycle.
         self._source_evidence: Any = None
@@ -844,17 +858,14 @@ class Orchestrator:
     # --- Internal ----------------------------------------------------------
 
     def _evidence_texts(self, item: CTIItem, research_id: str | None) -> list[tuple[str, str]]:
-        """(source label, text) that may evidence a technique, most authoritative first.
+        """Primary-source texts that may evidence a technique, most authoritative first.
 
-        Research counts only when it searched independently; source-only
-        research restates the item and adds nothing a mapping could rest on.
+        Research can suggest what to investigate, but generated research is
+        not evidence that this particular source reported a behavior.
         """
         texts = [("cti", item.content)]
         if self._source_evidence is not None and self._source_evidence.text:
             texts.append(("primary source", self._source_evidence.text))
-        research = self._evidence_research_text(research_id)
-        if research:
-            texts.append(("research", _LINK_RE.sub(" ", research_tradecraft_text(research))))
         return texts
 
     def _gate_on_observed_use(
@@ -1144,27 +1155,22 @@ class Orchestrator:
         return flagged
 
     def _primary_evidence_text(self, item: CTIItem) -> str:
-        """The feed item plus the primary report's text and any OSINT enrichment."""
+        """The feed item and fetched primary report, excluding generated enrichment."""
         base_text = (
             f"{item.content}\n{self._source_evidence.text}"
             if (self._source_evidence is not None and self._source_evidence.text)
             else item.content
         )
-        return (
-            f"{base_text}\n{self._enriched_context}"
-            if hasattr(self, "_enriched_context") and self._enriched_context
-            else base_text
-        )
+        return base_text
 
     def _evidence_research_text(self, research_id: str | None) -> str:
-        """Research text that may count as evidence: none when research was source-only.
+        """Return no research text for evidence checks.
 
-        Source-only research rephrases the item it was given, so a claim found
-        only there was supplied by the model, not corroborated by a source.
+        Research documents are generated summaries. Even independent web
+        searches are context leads until the linked primary material is
+        checked, so they cannot substantiate a source-specific claim here.
         """
-        if self._research_grounding == "source-only":
-            return ""
-        return self._research_text(research_id)
+        return ""
 
     def _reset_llm_call_log(self) -> None:
         """Start the live call log empty, so the monitor counts this cycle's calls only."""
@@ -1446,7 +1452,7 @@ class Orchestrator:
         tally = report.counts
         self.trail.step(
             "grounding",
-            "%s: %d asserted by CTI, %d research-only, %d inferred, %d UNSUPPORTED%s",
+            "%s: %d asserted by CTI, %d externally corroborated, %d inferred, %d UNSUPPORTED%s",
             req.hunt_id,
             tally.get("asserted", 0),
             tally.get("corroborated", 0),
@@ -1516,8 +1522,7 @@ class Orchestrator:
         return kept
 
     def _research_text(self, research_id: str | None) -> str:
-        """The research document's text, so its cited sources also count as
-        grounding for a claim the CTI itself did not make."""
+        """Load the linked research document for context or diagnostics only."""
         if not research_id:
             return ""
         path = self.settings.hecate_workspace / "research" / f"{research_id}.md"
@@ -1844,7 +1849,7 @@ class Orchestrator:
         hypothesis: H-0618's Location said "Linux and Windows workstations"
         for a Windows-only chain, and the hunt was scoped to both.
 
-        ``intel_text`` (the CTI and research tradecraft) scopes the hunt when
+        ``intel_text`` (the CTI and linked primary report) scopes the hunt when
         the hypothesis names no platform: what the intel names or implies
         outranks the union of everywhere the techniques could run.
 
@@ -2101,7 +2106,10 @@ class Orchestrator:
                 ),
             )
             if is_actionable(item.content):
-                verdict = triage(item) if self.settings.cti_triage == "park" else None
+                quality_verdict = source_quality_verdict(item)
+                verdict = quality_verdict or (
+                    triage(item) if self.settings.cti_triage == "park" else None
+                )
                 if verdict is not None and verdict.park:
                     reason = verdict.reason
                 else:
@@ -2173,6 +2181,7 @@ class Orchestrator:
         self._research_grounding_label = ""
         self._technique_evidence = []
         self._claim_audit = []
+        self._claim_evidence = []
         with self.metrics.measure("cti_intake"):
             item, skipped, parked_count = self._next_actionable_item()
         if item is None:
@@ -2238,10 +2247,11 @@ class Orchestrator:
         # here?" answer gates web search during research (nothing real to
         # search for) and constrains hypothesis generation afterwards
         # (nothing real to infer a behavior from).
-        intel_has_narrative = has_narrative(item.content)
+        source_is_indicator_only = _indicator_only_source(item)
+        intel_has_narrative = not source_is_indicator_only and has_narrative(item.content)
         if not intel_has_narrative:
             log.info(
-                "CTI item has no narrative (bare IOC dump); disabling web search and "
+                "CTI item has no behavior evidence (indicator/sample metadata); disabling web search and "
                 "constraining the hypothesis to indicator presence for this cycle."
             )
 
@@ -2262,9 +2272,11 @@ class Orchestrator:
         # whether research runs at all.
         sweep_inventory = {} if intel_has_narrative else parse_indicator_inventory(item.content)
         if sweep_inventory:
-            route = "indicator dump -> deterministic sweep draft (no research, no LLM)"
+            route = (
+                "indicator dump -> deterministic sweep hypothesis (no research or hypothesis LLM)"
+            )
         elif not self.settings.research_enabled:
-            route = "research disabled -> ungrounded hypothesis"
+            route = "research disabled -> hypothesis from primary CTI, without research context"
         elif intel_has_narrative:
             route = "narrative -> research with web search -> hypothesis"
         else:
@@ -2297,7 +2309,13 @@ class Orchestrator:
         # The report the item links to carries what the feed summary drops:
         # process tree, paths, ports, and what each indicator is. H-0618 was
         # drafted from a 2,194-character blurb of a 32,920-character report.
-        self._gather_source_evidence(item)
+        if source_is_indicator_only:
+            self.trail.step(
+                "source",
+                "provider marks this as sample/indicator metadata; using the feed record only",
+            )
+        else:
+            self._gather_source_evidence(item)
         source_block = (
             self._source_evidence.summary_block()
             if self._source_evidence is not None and self._source_evidence.artifacts
@@ -2307,7 +2325,11 @@ class Orchestrator:
         # Enrich the CTI using external OSINT sources (VT, Shodan, Censys, ThreatFox, MISP)
         from hecate_agent.api import extract_indicators, generate_enrichment_summary
 
-        log.info("Enriching CTI observables via OSINT sources...")
+        log.info(
+            "Extracting sample indicators without secondary OSINT lookups."
+            if source_is_indicator_only
+            else "Enriching CTI observables via OSINT sources..."
+        )
         try:
             indicators = extract_indicators(item.content)
             ips_count = len(indicators.get("ips", []))
@@ -2328,12 +2350,20 @@ class Orchestrator:
                     obs_detail.append(f"{urls_count} url")
                 if cves_count:
                     obs_detail.append(f"{cves_count} cve")
-                self.trail.step(
-                    "enrichment",
-                    "%d observable(s) (%s) checked via VT, GreyNoise, AbuseIPDB, Shodan, Censys, Abuse.ch (ThreatFox, MalwareBazaar, Feodo, SSLBL, URLhaus), RDAP, EPSS, OTX, HybridAnalysis, OSV.dev",
-                    total_obs,
-                    ", ".join(obs_detail),
-                )
+                if source_is_indicator_only:
+                    self.trail.step(
+                        "enrichment",
+                        "%d indicator(s) (%s) extracted from sample metadata; secondary OSINT lookup skipped",
+                        total_obs,
+                        ", ".join(obs_detail),
+                    )
+                else:
+                    self.trail.step(
+                        "enrichment",
+                        "%d observable(s) (%s) checked via VT, GreyNoise, AbuseIPDB, Shodan, Censys, Abuse.ch (ThreatFox, MalwareBazaar, Feodo, SSLBL, URLhaus), RDAP, EPSS, OTX, HybridAnalysis, OSV.dev",
+                        total_obs,
+                        ", ".join(obs_detail),
+                    )
                 item_inds = item.metadata.setdefault("indicators", {})
                 norm = {
                     "ipv4": indicators.get("ips", []),
@@ -2364,13 +2394,23 @@ class Orchestrator:
         except Exception as exc:
             log.warning("Indicator extraction failed before enrichment: %s", exc)
 
-        self._enriched_context = generate_enrichment_summary(item.content)
-
-        intel_for_models = (
-            f"{item.content}\n\n{source_block}\n\n{self._enriched_context}"
-            if source_block
-            else f"{item.content}\n\n{self._enriched_context}"
+        self._enriched_context = (
+            "" if source_is_indicator_only else generate_enrichment_summary(item.content)
         )
+
+        # Keep the evidence-bearing text distinct from enrichment. The
+        # research agent may use enrichment as a lead, but the hypothesis
+        # agent and all deterministic evidence checks receive only the feed
+        # record and fetched primary report.
+        primary_intel_context = (
+            f"{item.content}\n\n{source_block}" if source_block else item.content
+        )
+        research_context = primary_intel_context
+        if self._enriched_context:
+            research_context += (
+                "\n\nSECONDARY OSINT ENRICHMENT (context lead only; not source evidence):\n"
+                + self._enriched_context
+            )
 
         research_id: str | None = None
         related_hunts: list[str] = []
@@ -2387,7 +2427,7 @@ class Orchestrator:
             # purpose: a narrative-free dump we could NOT parse still falls
             # through to the LLM hypothesis generator, and that path must stay
             # grounded (ungrounded generation measured ~30% accuracy).
-            log.info("CTI is a parseable indicator dump; skipping research grounding.")
+            log.info("CTI is a parseable indicator dump; skipping research context.")
         elif self.settings.research_enabled:
             topic, technique = derive_research_topic(item.content, title=item.title or None)
             self.trail.step(
@@ -2396,14 +2436,14 @@ class Orchestrator:
                 clip(topic, 80),
                 f", technique {technique}" if technique else "",
                 "on" if intel_has_narrative else "off",
-                len(intel_for_models),
+                len(research_context),
             )
             research_started = self.trail.elapsed
 
             # Measure context usage for optimization. Research is sent the
             # CTI body as source_context as well as the topic, so count both.
             input_tokens = measure_tokens(
-                f"{topic}\n{intel_for_models}", model_name=self.settings.hecate_llm_model or "gpt-4"
+                f"{topic}\n{research_context}", model_name=self.settings.hecate_llm_model or "gpt-4"
             )
             log.info(
                 "Context Window Metrics: Executing research_new with ~%d input tokens", input_tokens
@@ -2419,7 +2459,7 @@ class Orchestrator:
                         web_search_enabled=intel_has_narrative,
                         # The topic is a search label; research needs the report,
                         # and the primary source's verified artifacts with it.
-                        source_context=intel_for_models,
+                        source_context=research_context,
                     )
                     measured.set_usage(research_result.usage)
             except HecateError as exc:
@@ -2428,7 +2468,7 @@ class Orchestrator:
                 # refused rather than silently falling back to that. Refund
                 # the quota; the CTI stays in the queue for the next cycle.
                 log.error(
-                    "hecate-agent research new failed (%s); refusing to generate an ungrounded hypothesis",
+                    "hecate-agent research new failed (%s); refusing to generate without configured research context",
                     exc,
                 )
                 state.drafts_today -= 1
@@ -2439,7 +2479,7 @@ class Orchestrator:
 
             if research_result.is_empty:
                 log.error(
-                    "hecate-agent research new produced no research_id; refusing to generate an ungrounded hypothesis"
+                    "hecate-agent research new produced no research_id; refusing to generate without configured research context"
                 )
                 state.drafts_today -= 1
                 state.total_drafts_ever -= 1
@@ -2451,7 +2491,7 @@ class Orchestrator:
             self._research_grounding_label = research_result.grounding_label()
             self.trail.step(
                 "research",
-                "%s done in %.0fs; grounding: %s; describes adversary behavior: %s; related hunts: %s",
+                "%s done in %.0fs; context quality: %s; describes adversary behavior: %s; related hunts: %s",
                 research_id,
                 self.trail.elapsed - research_started,
                 self._research_grounding_label,
@@ -2512,7 +2552,7 @@ class Orchestrator:
                         parked_count=parked_count + 1,
                     )
 
-            log.info("Research %s grounds this cycle's hypothesis", research_id)
+            log.info("Research %s is ready as background context", research_id)
 
         if sweep_inventory:
             log.info(
@@ -2526,7 +2566,7 @@ class Orchestrator:
             self.trail.step(
                 "hypothesis",
                 "asking the model%s%s",
-                f" (grounded by {research_id})" if research_id else " (no research)",
+                f" (research context {research_id})" if research_id else " (no research context)",
                 "" if intel_has_narrative else "; constrained to indicator presence",
             )
             hypothesis_started = self.trail.elapsed
@@ -2541,7 +2581,7 @@ class Orchestrator:
             try:
                 with self.metrics.measure("hypothesis_generation") as measured:
                     hypothesis = self.hecate.hypothesis_generator(
-                        threat_intel=intel_for_models,
+                        threat_intel=primary_intel_context,
                         research_id=research_id,
                         timeout_sec=self.settings.llm_timeout_sec,
                         indicators_only=not intel_has_narrative,
@@ -2634,11 +2674,9 @@ class Orchestrator:
         # scope and its telemetry list faithful to the source.
         cti_techniques = [str(t) for t in (item.metadata.get("techniques") or [])]
 
-        # Techniques whose names the intel itself uses as a phrase. Offered to
-        # the model as a prompt hint first, which it ignored in 3 of 4 re-drafts
-        # (SEO Poisoning offered, T1098/T1563 chosen), so they are now merged
-        # in directly, after what the CTI asserted and ahead of the model's own
-        # picks. An indicator dump gets none: it describes no behaviour.
+        # Techniques whose names the primary source itself uses as a phrase.
+        # Research terms and linked-page titles are background context, not
+        # evidence of behavior in this item. An indicator dump gets none.
         candidates: list[tuple[str, str]] = []
         self._wording_matched = []
         self._unevidenced_dropped = []
@@ -2646,16 +2684,7 @@ class Orchestrator:
             # Research links are stripped: they cite retrieved pages, and a
             # page title is not the intel ("OAuth Traps" proposed T1546.005).
             with self.metrics.measure("technique_candidates"):
-                candidates = self.hecate.candidate_techniques(
-                    "\n".join(
-                        [
-                            item.content,
-                            _LINK_RE.sub(
-                                " ", research_tradecraft_text(self._research_text(research_id))
-                            ),
-                        ]
-                    )
-                )
+                candidates = self.hecate.candidate_techniques(self._primary_evidence_text(item))
             self.trail.step(
                 "techniques",
                 "matched in the intel's wording: %s",
@@ -2697,10 +2726,7 @@ class Orchestrator:
                 hypothesis.techniques,
                 protected=[*cti_techniques, *(tid for tid, _ in candidates), *observed_ids],
                 cti_text=self._primary_evidence_text(item),
-                # Links stripped, as for the candidates above: a cited page title
-                # is not the intel. "OAuth Traps" in R-0018's sources kept T1546.005
-                # Trap on a Teams vishing hunt.
-                research_text=_LINK_RE.sub(" ", self._evidence_research_text(research_id)),
+                research_text="",
             )
 
             if not sweep_inventory:
@@ -2725,9 +2751,7 @@ class Orchestrator:
                 facts=technique_facts,
                 protected=[*cti_techniques, *(tid for tid, _ in candidates), *observed_ids],
                 asserted=cti_techniques,
-                intel_text="\n".join(
-                    [item.content, research_tradecraft_text(self._research_text(research_id))]
-                ),
+                intel_text=self._primary_evidence_text(item),
                 specimen=self._specimen_platforms(item),
             )
 
@@ -2819,6 +2843,27 @@ class Orchestrator:
                 self.trail.step("scope", "actor from the intel's attribution: %s", attributed)
                 hypothesis.actor = attributed
 
+        from hecate_runner.claim_provenance import verify_claim_citations
+
+        self._claim_evidence = verify_claim_citations(
+            hypothesis=hypothesis,
+            citations=getattr(hypothesis, "evidence_citations", []),
+            feed_text=item.content,
+            primary_source_text=(
+                self._source_evidence.text if self._source_evidence is not None else ""
+            ),
+            source_url=item.source_url,
+            source_name=item.source,
+        )
+        quote_checks = Counter(row["status"] for row in self._claim_evidence)
+        if self._claim_evidence:
+            self.trail.step(
+                "claim_evidence",
+                "%d claim reference(s): %s",
+                len(self._claim_evidence),
+                ", ".join(f"{count} {status}" for status, count in sorted(quote_checks.items())),
+            )
+
         try:
             with hunt_id_lock(self.settings.hunts_root):
                 hunt_id = next_hunt_id(self.settings.hunts_root)
@@ -2839,6 +2884,7 @@ class Orchestrator:
                     research_grounding=self._research_grounding_label,
                     technique_evidence=self._technique_evidence,
                     claim_audit=self._claim_audit,
+                    claim_evidence=self._claim_evidence,
                     detection_guidance=self._detection_guidance,
                 )
                 req.grounding_section = self._grounding_section(req, item, technique_facts)

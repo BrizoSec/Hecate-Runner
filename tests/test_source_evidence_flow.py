@@ -132,7 +132,7 @@ def test_a_failed_fetch_drafts_from_the_feed_as_before(
 ) -> None:
     result = _run(settings, mock_hecate)
     assert result.outcome == "draft_created"
-    assert mock_hecate.research_new.call_args.kwargs["source_context"] == f"{ITEM.content}\n\n"
+    assert mock_hecate.research_new.call_args.kwargs["source_context"] == ITEM.content
     assert mock_hecate.sigma_generator.call_args.args[0]["indicator_records"] == []
     mock_hecate.indicator_records.assert_not_called()
 

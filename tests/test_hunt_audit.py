@@ -167,12 +167,12 @@ def test_grades_against_the_recovered_cti():
     assert by_value["Chrysalis"] == "asserted"
 
 
-def test_research_is_secondary_evidence_when_supplied():
+def test_research_context_does_not_corroborate_a_case_claim():
     hunt = HUNT.replace("The Chrysalis backdoor beacons", "The Nightshade backdoor beacons")
     _, without = audit_hunt_text(hunt)
     _, with_research = audit_hunt_text(hunt, research_text="Nightshade is a known implant")
     assert {c.value: c.status for c in without.claims}["Nightshade"] == "unsupported"
-    assert {c.value: c.status for c in with_research.claims}["Nightshade"] == "corroborated"
+    assert {c.value: c.status for c in with_research.claims}["Nightshade"] == "unsupported"
 
 
 # --- Research lookup -------------------------------------------------------

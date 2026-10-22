@@ -47,9 +47,8 @@ class DraftHuntRequest:
     #: (IndicatorRecord dicts). Empty renders no evidence section.
     source_evidence: dict[str, Any] = field(default_factory=dict)
     indicator_records: list[dict[str, Any]] = field(default_factory=list)
-    #: How the research was grounded (ResearchResult.grounding_label()), shown
-    #: beside the research link so a source-only document is not read as
-    #: independent confirmation. Empty when no research ran.
+    #: Quality of the research context's web search, shown next to its link.
+    #: Empty when no research ran.
     research_grounding: str = ""
     #: Supporting passage per technique (TechniqueEvidence dicts from the
     #: orchestrator), including techniques dropped as capability-only.
@@ -67,6 +66,8 @@ class DraftHuntRequest:
     purple_team_rules_evaluated: int = 0
     purple_team_rules_tuned: int = 0
     purple_team_telemetry_count: int = 0
+    #: Claim excerpts and exact source passages checked by the Runner.
+    claim_evidence: list[dict[str, str]] = field(default_factory=list)
 
 
 #: Ceiling on the CTI blurb embedded in a draft. Generous on purpose: the
@@ -216,13 +217,13 @@ def _research_document_line(req: DraftHuntRequest) -> str:
     if req.research_id:
         target = _research_link_target(req.research_id, req.generated_at)
         grounding = f" ({req.research_grounding})" if req.research_grounding else ""
-        return f"- **Research Document:** See [{req.research_id}]({target}) for detailed pre-hunt research{grounding}"
+        return f"- **Research Context:** See [{req.research_id}]({target}) for background leads{grounding}"
     if req.hypothesis.is_indicator_only:
         return (
-            "- **Research Document:** None — an indicator sweep needs no research "
+            "- **Research Context:** None — an indicator sweep needs no research "
             "grounding; the CTI's own indicator list is the hunt"
         )
-    return "- **Research Document:** None — research grounding unavailable this cycle, review CTI directly"
+    return "- **Research Context:** None — review the CTI directly"
 
 
 def _render_sigma_section(req: DraftHuntRequest) -> str:
@@ -367,6 +368,35 @@ def _render_claim_audit(req: DraftHuntRequest) -> str:
             f'- {f["action"]} ({f["field"]}): "{_cell(f["text"], 200)}" - {_cell(f["reason"], 160)}'
         )
     return "\n".join(lines)
+
+
+def _render_claim_evidence(req: DraftHuntRequest) -> str:
+    """Show quote provenance for generated claims, including missing links."""
+    if not req.claim_evidence:
+        return ""
+    lines = [
+        "",
+        "#### Claim Evidence References",
+        "",
+        "The Runner checks that each quote occurs in the source text and that the cited claim excerpt appears in the final field. "
+        "A text match does not prove the quote supports the claim; review that relationship.",
+        "",
+        "| Field | Claim excerpt | Source passage | Quote check |",
+        "|---|---|---|---|",
+    ]
+    for row in req.claim_evidence:
+        quote = f'"{_cell(row.get("quote", ""), 220)}"' if row.get("quote") else "—"
+        source = row.get("source", "")
+        source_link = (
+            f"[{_cell(source, 100)}]({source})"
+            if source.startswith(("https://", "http://"))
+            else _cell(source, 100) or "—"
+        )
+        lines.append(
+            f"| {row.get('field', '')} | {_cell(row.get('claim', ''), 180)} | {quote} | "
+            f"{_cell(row.get('status', ''), 80)} ({source_link}) |"
+        )
+    return "\n".join(lines) + "\n"
 
 
 _GUIDANCE_ROUTES = {
@@ -775,6 +805,7 @@ Source CTI:
 - **CTI Sources & References:** {f"[{req.source_url}]({req.source_url})" if req.source_url else "[Review CTI and populate]"}
 {_research_document_line(req)}
 {_render_technique_evidence(req)}
+{_render_claim_evidence(req)}
 ### Grounding
 
 {req.grounding_section or "Not yet audited."}{_render_claim_audit(req)}

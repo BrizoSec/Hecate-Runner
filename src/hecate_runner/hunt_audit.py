@@ -162,12 +162,17 @@ def audit_hunt_text(
     research_text: str = "",
     technique_facts: dict[str, TechniqueFact] | None = None,
 ) -> tuple[HuntFacts, GroundingReport]:
-    """Grade one hunt's claims against the evidence recorded inside it."""
+    """Grade one hunt's claims against the CTI recorded inside it.
+
+    Linked research is generated context and is deliberately excluded from
+    claim grounding. It may guide investigation, but it does not prove what
+    the source reported.
+    """
     facts = parse_hunt_file(text)
     report = audit_draft(
         draft_text=strip_grounding_section(text),
         cti_text=facts.cti_text,
-        research_text=research_text,
+        research_text="",
         cti_techniques=facts.cti_techniques,
         technique_facts=technique_facts,
     )
@@ -177,9 +182,8 @@ def audit_hunt_text(
 def research_text_for(workspace: Path, research_id: str) -> str:
     """The research document behind a hunt, or "" when there is none.
 
-    Research is secondary evidence (see grounding.py), so a missing document
-    only costs a claim its `corroborated` grade — it never turns an asserted
-    claim unsupported.
+    Kept for sharing-policy metadata such as TLP labels. Research content is
+    not passed to claim-grounding audits.
     """
     if not research_id:
         return ""

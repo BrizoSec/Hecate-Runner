@@ -51,7 +51,7 @@ def test_source_only_research_is_reported_and_warned(
     result = _run(settings, source_only)
     trail = _trail(caplog)
     assert any(
-        "grounding: source-only synthesis, 0 web searches: no TAVILY_API_KEY configured" in m
+        "context quality: background synthesis, 0 web searches: no TAVILY_API_KEY configured" in m
         for m in trail
     )
     assert any("SOURCE-ONLY" in m for m in trail)
@@ -60,7 +60,7 @@ def test_source_only_research_is_reported_and_warned(
     )
     assert result.outcome == "draft_created"  # warned, not parked
     assert (
-        "(source-only synthesis, 0 web searches: no TAVILY_API_KEY configured)"
+        "(background synthesis, 0 web searches: no TAVILY_API_KEY configured)"
         in result.draft_path.read_text()
     )
 
@@ -71,9 +71,9 @@ def test_independent_research_reports_its_search_count(
     caplog.set_level(logging.INFO)
     result = _run(settings, independent)
     trail = _trail(caplog)
-    assert any("grounding: independent research, 3 web search(es)" in m for m in trail)
+    assert any("context quality: background research context, 3 web search(es)" in m for m in trail)
     assert not any("SOURCE-ONLY" in m for m in trail)
-    assert "(independent research, 3 web search(es))" in result.draft_path.read_text()
+    assert "(background research context, 3 web search(es))" in result.draft_path.read_text()
 
 
 def _research_only_technique(
@@ -108,18 +108,18 @@ def test_source_only_research_cannot_support_a_technique(
     assert "T1113" not in _research_only_technique(settings, source_only, sample_hypothesis)
 
 
-def test_independent_research_can_support_a_technique(
+def test_independent_research_cannot_support_a_technique_without_primary_source_evidence(
     settings: Settings, independent: MagicMock, sample_hypothesis: HypothesisResult
 ) -> None:
-    assert "T1113" in _research_only_technique(settings, independent, sample_hypothesis)
+    assert "T1113" not in _research_only_technique(settings, independent, sample_hypothesis)
 
 
 def test_research_result_grounding_labels() -> None:
     assert ResearchResult(web_searches=2).grounding == "independent"
     assert (
-        ResearchResult(web_searches=0).grounding_label() == "source-only synthesis, 0 web searches"
+        ResearchResult(web_searches=0).grounding_label() == "background synthesis, 0 web searches"
     )
     assert (
         ResearchResult(web_searches=0, web_search_note="x").grounding_label()
-        == "source-only synthesis, 0 web searches: x"
+        == "background synthesis, 0 web searches: x"
     )

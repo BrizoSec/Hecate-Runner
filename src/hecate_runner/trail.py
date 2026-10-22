@@ -1,7 +1,7 @@
 """A readable account of one orchestrator cycle: what it decided, and why.
 
-The module loggers record events ("Research R-0007 grounds this cycle's
-hypothesis"); they do not say what the cycle was looking at or which branch it
+The module loggers record events ("Research R-0007 is ready as background
+context"); they do not say what the cycle was looking at or which branch it
 took. This logger does, one line per decision, all tagged with the same short
 cycle ID so a run can be followed with ``hecate-runner watch`` or::
 

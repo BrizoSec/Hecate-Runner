@@ -58,9 +58,9 @@ class ResearchResult:
 
     def grounding_label(self) -> str:
         if self.grounding == "independent":
-            return f"independent research, {self.web_searches} web search(es)"
+            return f"background research context, {self.web_searches} web search(es)"
         note = f": {self.web_search_note}" if self.web_search_note else ""
-        return f"source-only synthesis, 0 web searches{note}"
+        return f"background synthesis, 0 web searches{note}"
 
 
 @dataclass
@@ -87,6 +87,7 @@ class HypothesisResult:
     raw_output: str = ""
     usage: LLMUsage | None = None
     fallback: bool = False
+    evidence_citations: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -289,6 +290,7 @@ class HecateClient:
             low_confidence_reason=output.low_confidence_reason or "",
             is_indicator_only=output.is_indicator_only,
             indicator_records=getattr(output, "indicator_records", []),
+            evidence_citations=getattr(output, "evidence_citations", []),
             expected_malicious=getattr(output, "expected_malicious", "") or "",
             expected_benign=getattr(output, "expected_benign", "") or "",
             falsification_criteria=getattr(output, "falsification_criteria", "") or "",

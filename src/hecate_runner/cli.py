@@ -45,7 +45,6 @@ from hecate_runner.hunt_audit import (
     audit_hunt_text,
     parse_hunt_file,
     replace_grounding_section,
-    research_text_for,
 )
 from hecate_runner.log_rotation import rotate_log_if_needed
 from hecate_runner.metrics import MetricsStore
@@ -432,11 +431,7 @@ def audit(
         text = path.read_text(encoding="utf-8")
         facts = parse_hunt_file(text)
         technique_facts = _attack_facts(hecate, settings, facts, text) if check_attack else None
-        _, report = audit_hunt_text(
-            text,
-            research_text=research_text_for(settings.hecate_workspace, facts.research_id),
-            technique_facts=technique_facts,
-        )
+        _, report = audit_hunt_text(text, technique_facts=technique_facts)
         counts = report.counts
         total_unsupported += counts["unsupported"]
         if report.unsupported:
@@ -1181,7 +1176,7 @@ def doctor() -> None:
     # The runner drives hecate_agent in-process, so its optional capabilities
     # resolve against *this* environment, not the workspace venv HECATE_BIN
     # points at. Checking an API key without checking the client library that
-    # consumes it is what let research grounding sit switched off unnoticed:
+    # consumes it is what let web-search context silently switch off:
     # the key was set, the package was absent, and every cycle still reported
     # success. These are hard checks -- the runner treats all of hecate_agent's
     # optional capabilities as mandatory.
@@ -1212,19 +1207,17 @@ def doctor() -> None:
     if settings.research_enabled:
         check(
             _module_available("tavily"),
-            "tavily-python importable (research web grounding)",
-            "Reinstall the runner with `uv sync` — without it research silently runs ungrounded.",
+            "tavily-python importable (research web search)",
+            "Reinstall the runner with `uv sync` — without it research runs without web-search context.",
         )
         # Promoted from a warning: with the client library mandatory, a missing
-        # key is the only remaining way for grounding to be off, and the old
-        # note ("research will still run without it") described exactly the
-        # silent degradation this check exists to prevent.
+        # key is the only remaining way for web-search context to be absent.
         check(
             _tavily_key_available(settings),
-            "TAVILY_API_KEY set (research grounding is mandatory-when-enabled)",
+            "TAVILY_API_KEY set (research web search is mandatory-when-enabled)",
             "Set TAVILY_API_KEY in the Hecate workspace .env. Get a free-tier "
             "key at https://tavily.com, or set HECATE_RUNNER_RESEARCH_ENABLED=false "
-            "to run drafts without research grounding deliberately.",
+            "to run drafts without research context deliberately.",
         )
     warn(
         bool(settings.slack_webhook_url),

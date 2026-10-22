@@ -8,8 +8,8 @@ for the design and its diagrams. This README is the operating reference.
 
 `hecate-runner` sits on top of Hecate and turns it into a persistent, 24/7 hunting loop:
 
-1. Pulls fresh CTI from a configured source (file queue, AlienVault OTX, RSS/Atom feeds, MISP, CISA KEV, or abuse.ch ThreatFox)
-2. Reads the report the item links to, researches the technique, and generates a grounded hypothesis, using Hecate-Core's agents and the LLM configured in the workspace
+1. Pulls fresh CTI from a configured source (file queue, AlienVault OTX, RSS/Atom feeds, MISP, CISA KEV, abuse.ch, GitHub PoCs, MalwareBazaar, or VX-Underground)
+2. Classifies source evidence, reads linked reports, researches context, and generates a hypothesis using Hecate-Core's agents and the workspace LLM
 3. Writes a structured draft hunt, with candidate Sigma rules and a grounding audit, into your Hecate workspace
 4. Optionally publishes the finished planning bundle as a pull request to Hecate-Content; CI validates it and policy escalations wait for a human approval
 5. Never auto-executes queries — a human proposes a bounded query and separately approves running it (see [Query execution](#query-execution-propose-dont-run) below); nothing runs unattended
@@ -46,7 +46,7 @@ flowchart LR
 
 The full cycle, with every branch and outcome, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Research grounding runs before hypothesis generation on every cycle by default (`HECATE_RUNNER_RESEARCH_ENABLED=true`). **A research failure aborts the cycle** (refunds the quota, leaves the CTI queued for retry) rather than falling back to an ungrounded hypothesis: `hecate-agent eval` measured ungrounded generation at ~30% accuracy on known-answer MITRE technique fixtures, so an ungrounded draft isn't a degraded-but-useful fallback, it's an unreliable one. Set `HECATE_RUNNER_RESEARCH_ENABLED=false` to explicitly opt out of research and always generate ungrounded (e.g. for offline testing) — that's a deliberate choice, different from a research call failing mid-cycle.
+Research context runs before hypothesis generation by default (`HECATE_RUNNER_RESEARCH_ENABLED=true`). A research failure aborts the cycle and leaves the CTI queued for retry. Research can suggest leads, but primary CTI and the linked report remain the evidence for source-specific claims. Set `HECATE_RUNNER_RESEARCH_ENABLED=false` to draft without research context, such as during offline testing.
 
 ### Intake triage: park, don't drop
 
@@ -85,22 +85,33 @@ draft slot is refunded; the research run is not. It uses the same
 Parked items are deleted after `HECATE_RUNNER_PARKED_MAX_AGE_DAYS` (default 30;
 0 disables).
 
-One exception is automatic: when the CTI is a bare indicator dump with a parseable inventory (a ThreatFox-style feed event), the draft is built deterministically from the indicator list with no LLM call, and research is skipped along with it. There is no behavior described for research to ground, and running it anyway produced documents whose every section said so.
+One exception is automatic: when the CTI is a bare indicator dump with a parseable inventory (a ThreatFox-style feed event), the hypothesis is built deterministically from the indicator list, and research is skipped. Optional Sigma generation can still run afterward. There is no behavior described for research to ground, and running it anyway produced documents whose every section said so.
+
+Provider-declared evidence limits also apply. MalwareBazaar sample records
+contain file metadata and hashes, not observed runtime behavior, so they go
+through the same deterministic IOC-sweep route even when the generated summary
+contains readable prose. The Runner skips report fetching and secondary
+enrichment for these records. The sweep checks for file presence in endpoint
+telemetry; a catalog hash alone does not establish execution. VX-Underground
+commit records contain archive paths and commit metadata but no extracted
+runtime behavior, so they are parked for a richer source. These source-quality
+rules still apply when article triage is disabled; a supplied
+`hecate-runner draft` remains an explicit operator choice.
 
 ## Grounding
 
 A generated hunt is only worth acting on if its claims trace back to evidence. That is enforced at three points, not one:
 
-**Intake** decides what is worth hunting at all — the galaxy, ATT&CK-technique and org filters above, so a draft starts from a curated event rather than a feed dump.
+**Intake** uses provider evidence profiles and item structure to choose a route. Behavioral reports can proceed to a behavior hunt; sample feeds with actual hashes become IOC sweeps; archive metadata without behavior or endpoint evidence is parked.
 
-**Generation** carries the evidence forward. A curated MISP event's indicator *values* reach the model (it previously saw only type counts — "url (9)" — and so wrote hunts that could have been written without reading the CTI). The source's own technique list is merged into the draft rather than replaced by the two or three the hypothesis reasoned about, and sub-technique precision is preserved, since `T1059.003` is Windows-only where bare `T1059` spans five platforms. Research findings citing a CVE that appears in none of the retrieved sources are dropped before they can reach a hunt. Revoked ATT&CK IDs resolve to their replacements instead of vanishing — CTI keeps emitting `T1574.002` years after it was folded into `T1574.001`.
+**Generation** keeps primary evidence separate from context. Research and OSINT enrichment may suggest leads, but cannot establish that this source observed a behavior. Technique candidates, behavior mapping, platform scope and claim audits use the feed record and fetched primary report. The hypothesis model returns claim excerpts and verbatim source quotes; the Runner checks that both occur in the final output and source text and renders missing or invalid links as gaps. Indicator values from curated events remain available to the model and Sigma generator.
 
 **Audit** re-reads the finished draft and classifies every claim it can check, writing the result into the hunt's own Grounding section:
 
 | Status | Meaning |
 |--------|---------|
 | `asserted` | The source CTI contains this verbatim — primary evidence |
-| `corroborated` | Absent from the CTI, present in the research document. Research is generated, so this is a claim *about* evidence, not evidence |
+| `corroborated` | Reserved for explicit external-source audits; generated research is not counted as corroboration in Runner drafts or promotion checks |
 | `derived` | In no source text but legitimately inferable — a technique the hypothesis reasoned to |
 | `unsupported` | Specific, checkable, and absent from every source — the fabrication class, including ATT&CK IDs that do not exist |
 
@@ -110,7 +121,12 @@ Evidence is ranked because it is not equally trustworthy. Treating a research do
 
 What gets checked: ATT&CK technique IDs (including whether they exist in the current matrix), CVEs, indicators inside generated Sigma rules, and named entities in prose — actor designators like `APT41`, `<Name> backdoor`-style collocations, and CamelCase families like `PureRAT`. Entity checking is precision-first: "adversaries deploy a backdoor" names nothing and is ignored, because a section full of false alarms is one a reviewer learns to skip.
 
-The audit reports rather than blocks, because a hunt that generalises beyond its CTI is doing its job. What it catches is the opposite: an assertion specific enough to *read* as evidence that nothing supports — a fabricated CVE, or a Sigma rule matching a C2 domain no intelligence mentions. Only traceable shapes are examined: a rule matching `\powershell.exe` is behaviour, while one matching `203.0.113.99` is a claim.
+The audit reports rather than blocks, because a hunt can propose a testable behavior beyond the source. It distinguishes that inference from an asserted source fact. What it catches is an assertion specific enough to *read* as evidence that nothing supports — a fabricated CVE, or a Sigma rule matching a C2 domain no source mentions. Only traceable shapes are examined: a rule matching `\powershell.exe` is behavior, while one matching `203.0.113.99` is a claim.
+
+The generated **Claim Evidence References** table shows the source quote
+provided for each key claim and whether the quote appears verbatim in the feed
+record or linked primary report. A quote match proves its provenance, not that
+it supports the claim; the grounding audit and review status remain visible.
 
 ## GitHub review and promotion
 
@@ -337,9 +353,9 @@ HECATE_RUNNER_CTI_PROVIDER=abuse_ch   # or include abuse_ch in CTI_MULTI_PROVIDE
 Polls ThreatFox's recent-IOC export, cursored on the highest IOC id already seen.
 
 ThreatFox is a bare indicator feed, so it hits the deterministic path described
-under Grounding: the draft is built from the indicator inventory with no LLM call
-and research is skipped, because there is no described behavior to ground. Expect
-indicator-sweep hunts, not hypotheses.
+under Grounding: the hypothesis comes from the indicator inventory without
+research or hypothesis-generation calls. Optional Sigma generation can still
+run afterward. Expect indicator-sweep hunts, not behavioral hypotheses.
 
 ## Configuration
 
@@ -357,7 +373,7 @@ Key ones:
 | `HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY` | Cap on web-searching research runs per UTC day, checked before the source read; not refunded on a failed cycle, so retries can't drain the Tavily quota | `7` |
 | `HECATE_RUNNER_LLM_TIMEOUT_SEC` | Hard timeout on any single call into Core (research call and hypothesis call each get their own budget) | `1500` |
 | `HECATE_RUNNER_SOURCE_EVIDENCE_ENABLED` | Fetch the report a CTI item links to and keep the artifacts verified verbatim against it, before research and drafting | `true` |
-| `HECATE_RUNNER_RESEARCH_ENABLED` | Run web-grounded research before hypothesis generation | `true` |
+| `HECATE_RUNNER_RESEARCH_ENABLED` | Run web-searched background context before hypothesis generation | `true` |
 | `HECATE_RUNNER_RESEARCH_DEPTH` | `basic` (~5 min) or `advanced` (~15-20 min) research depth | `advanced` |
 | `HECATE_RUNNER_CTI_PROVIDER` | Which CTI source to use (`file`, `otx`, `rss`, `misp`, `cisa_kev`, `abuse_ch`, or `multi`) | `file` |
 | `HECATE_RUNNER_CTI_MULTI_PROVIDERS` | Sub-providers to rotate through when `CTI_PROVIDER=multi` | `rss,otx,misp` |

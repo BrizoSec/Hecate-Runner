@@ -186,13 +186,11 @@ class Settings(BaseSettings):
         default=True,
         alias="HECATE_RUNNER_RESEARCH_ENABLED",
         description=(
-            "Run `hecate-agent research new` (web-grounded 5-skill research) before "
-            "hypothesis generation. When enabled, a research failure aborts "
-            "the cycle (refunds the quota, leaves the CTI queued for retry) "
-            "rather than falling back to an ungrounded hypothesis — cold "
-            "generation measured ~30% accuracy on known-answer fixtures "
-            "(`hecate-agent eval`). Set to false to explicitly opt out of research "
-            "and always generate ungrounded, e.g. for offline testing."
+            "Run `hecate-agent research new` for background context before "
+            "hypothesis generation. Research does not count as evidence for "
+            "source-specific claims. When enabled, a research failure aborts "
+            "the cycle and leaves the CTI queued for retry. Set to false to "
+            "draft from primary CTI without research context, e.g. for offline testing."
         ),
     )
     sigma_generation_enabled: bool = Field(

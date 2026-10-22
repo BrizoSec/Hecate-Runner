@@ -88,34 +88,23 @@ def test_atom_feed_and_patch_parsing(tmp_path: Path) -> None:
         assert item.source == "vxunderground"
         assert item.identifier == "1234567890abcdef1234567890abcdef12345678"
         assert "Banshee" in item.title
-        assert item.metadata["platform"] == "MacOS"
+        assert item.metadata["evidence_profile"] == "archive_metadata"
         assert "MacOS/MacOS.Stealer.Banshee.7z" in item.metadata["files"]
 
         # Evidence table checks
         assert "### Primary Source Evidence" in item.content
-        assert "**Indicators by role**" in item.content
-        assert "T1555 (Credentials from Password Stores)" in item.content
-        assert "T1005 (Data from Local System)" in item.content
+        assert "Recorded Paths" in item.content
+        assert "T1555" not in item.content
+        assert "T1005" not in item.content
+        assert "Adversary/Attribution" not in item.content
+        assert "Target Platform" not in item.content
+        assert "does not establish execution behavior" in item.content
 
         # Acknowledge and advance
         provider.acknowledge(item)
         item2 = provider.next_item()
         assert item2 is not None
         assert item2.identifier == "abcdef1234567890abcdef1234567890abcdef12"
-
-
-def test_attack_technique_inference(tmp_path: Path) -> None:
-    provider = VxUndergroundProvider(workspace=tmp_path)
-
-    # Ransomware on Windows
-    rw_techs = [t[0] for t in provider._infer_attack_techniques("Ransomware.LockBit", "Windows")]
-    assert "T1486" in rw_techs
-    assert "T1055" in rw_techs
-
-    # Stealer on macOS
-    st_techs = [t[0] for t in provider._infer_attack_techniques("Stealer.Banshee", "MacOS")]
-    assert "T1555" in st_techs
-    assert "T1204.002" in st_techs
 
 
 def test_provider_factory(tmp_path: Path) -> None:
