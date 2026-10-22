@@ -39,7 +39,9 @@ def test_matches_brand_protection_rules(certstream_provider: CertStreamProvider)
     assert "verify" in kws
 
     # Wildcard prefix
-    matched, brand, kws = certstream_provider.matches_brand_protection("*.apple-security-update.xyz")
+    matched, brand, kws = certstream_provider.matches_brand_protection(
+        "*.apple-security-update.xyz"
+    )
     assert matched is True
     assert brand == "apple"
     assert "update" in kws
@@ -147,18 +149,22 @@ def test_get_provider_factory(tmp_path: Path):
 
 
 @patch("websockets.sync.client.connect")
-def test_poll_stream_success_and_error_handling(mock_connect, certstream_provider: CertStreamProvider):
+def test_poll_stream_success_and_error_handling(
+    mock_connect, certstream_provider: CertStreamProvider
+):
     # Mock WebSocket connection receiving one message
     mock_ws = MagicMock()
-    mock_ws.recv.return_value = json.dumps({
-        "message_type": "certificate_update",
-        "data": {
-            "leaf_cert": {
-                "all_domains": ["binance-airdrop-claim.xyz"],
-                "issuer": {"O": "Google Trust Services"},
-            }
-        },
-    })
+    mock_ws.recv.return_value = json.dumps(
+        {
+            "message_type": "certificate_update",
+            "data": {
+                "leaf_cert": {
+                    "all_domains": ["binance-airdrop-claim.xyz"],
+                    "issuer": {"O": "Google Trust Services"},
+                }
+            },
+        }
+    )
     mock_connect.return_value.__enter__.return_value = mock_ws
 
     certstream_provider._poll_stream(timeout_sec=0.5)

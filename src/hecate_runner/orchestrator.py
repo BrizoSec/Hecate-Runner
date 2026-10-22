@@ -30,6 +30,7 @@ from hecate_runner.config import Settings
 from hecate_runner.context_metrics import measure_tokens
 from hecate_runner.cti import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider, get_provider
 from hecate_runner.cti_triage import triage
+from hecate_runner.github_publisher import enqueue_hunt, sync_outbox
 from hecate_runner.hecate_client import HecateClient, HecateError, HypothesisResult
 from hecate_runner.hunt_writer import (
     DraftHuntRequest,
@@ -781,6 +782,11 @@ class Orchestrator:
     def run_once(self, *, dry_run: bool = False) -> RunResult:
         """Execute one cycle. Never raises; always returns a RunResult."""
         log.info("=== Orchestrator cycle starting (dry_run=%s) ===", dry_run)
+        if self.settings.github_publishing_enabled and not dry_run:
+            try:
+                sync_outbox(self.settings)
+            except Exception as exc:
+                log.warning("Could not sync the GitHub promotion outbox (%s)", exc)
         state = OrchestratorState.load(self.settings.state_file)
         self.trail = CycleTrail()
         self.metrics = CycleMetrics(self.trail.cycle_id)
@@ -888,9 +894,8 @@ class Orchestrator:
         combined = "\n".join(text for _, text in texts)
         actor_material = any(actor_material_report(t) for _, t in texts)
         shielded = {t.upper() for t in asserted}
-        is_otx_pulse = (
-            item is not None
-            and (item.source == "otx" or bool(item.metadata.get("pulse_id")))
+        is_otx_pulse = item is not None and (
+            item.source == "otx" or bool(item.metadata.get("pulse_id"))
         )
         kept: list[str] = []
         evidence: list[dict[str, str]] = []
@@ -1000,9 +1005,7 @@ class Orchestrator:
                 "techniques", "dropped as capability only, not observed use: %s", listing(dropped)
             )
         if unevidenced:
-            self.trail.step(
-                "techniques", "dropped unevidenced feed tags: %s", listing(unevidenced)
-            )
+            self.trail.step("techniques", "dropped unevidenced feed tags: %s", listing(unevidenced))
         self._technique_evidence = evidence
         return kept
 
@@ -1738,9 +1741,21 @@ class Orchestrator:
 
         baseline_events: list[dict[str, Any]] = [
             {"Image": "/usr/sbin/cron", "CommandLine": "/usr/sbin/cron -f", "User": "root"},
-            {"Image": "/usr/sbin/anacron", "CommandLine": "/usr/sbin/anacron -s /etc/cron.d", "User": "root"},
-            {"Image": "C:\\Windows\\System32\\svchost.exe", "CommandLine": "svchost.exe -k netsvcs", "User": "SYSTEM"},
-            {"Image": "/usr/bin/curl", "CommandLine": "curl https://pypi.org/simple", "User": "app"},
+            {
+                "Image": "/usr/sbin/anacron",
+                "CommandLine": "/usr/sbin/anacron -s /etc/cron.d",
+                "User": "root",
+            },
+            {
+                "Image": "C:\\Windows\\System32\\svchost.exe",
+                "CommandLine": "svchost.exe -k netsvcs",
+                "User": "SYSTEM",
+            },
+            {
+                "Image": "/usr/bin/curl",
+                "CommandLine": "curl https://pypi.org/simple",
+                "User": "app",
+            },
             {"DestinationIp": "8.8.8.8", "DestinationPort": 53, "QueryName": "microsoft.com"},
         ]
 
@@ -1753,10 +1768,16 @@ class Orchestrator:
                 continue
 
             try:
-                eval_result = SigmaEvaluator.evaluate_rule(rule_yaml, attack_events, baseline_events)
+                eval_result = SigmaEvaluator.evaluate_rule(
+                    rule_yaml, attack_events, baseline_events
+                )
                 tuned = False
 
-                if eval_result.false_positives > 0 or (eval_result.false_negatives > 0 and eval_result.true_positives == 0 and attack_events):
+                if eval_result.false_positives > 0 or (
+                    eval_result.false_negatives > 0
+                    and eval_result.true_positives == 0
+                    and attack_events
+                ):
                     tune_res = tuner.tune(rule_yaml, attack_events, baseline_events)
                     if tune_res.final_rule != tune_res.initial_rule:
                         rule["rule_yaml"] = tune_res.final_rule
@@ -1785,7 +1806,9 @@ class Orchestrator:
                     if fp.exists():
                         cur_text = fp.read_text(encoding="utf-8")
                         if "x_hecate_purple_team_validated:" not in cur_text:
-                            cur_text = cur_text.rstrip() + "\nx_hecate_purple_team_validated: true\n"
+                            cur_text = (
+                                cur_text.rstrip() + "\nx_hecate_purple_team_validated: true\n"
+                            )
                             if tuned:
                                 cur_text += "x_hecate_tuned: true\n"
                             fp.write_text(cur_text, encoding="utf-8")
@@ -2886,6 +2909,18 @@ class Orchestrator:
             draft_path=path,
             research_id=research_id,
         )
+
+        # Snapshot and publish only after the hunt, research link, grounding,
+        # and Sigma post-processing have all reached their final on-disk form.
+        # The outbox is separate from CTI acknowledgement, so GitHub failures
+        # cannot consume the item twice or turn a successful draft into a run error.
+        if self.settings.github_publishing_enabled:
+            try:
+                status = enqueue_hunt(self.settings, hunt_id)
+                log.info("Queued %s for GitHub publication (outbox status=%s)", hunt_id, status)
+                sync_outbox(self.settings)
+            except Exception as exc:
+                log.warning("Could not queue %s for GitHub publication (%s)", hunt_id, exc)
 
         # A notification failure must not turn an already-successful draft
         # into an "error" outcome — isolate it from the run_once() top-level

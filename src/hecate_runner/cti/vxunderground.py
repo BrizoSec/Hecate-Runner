@@ -18,12 +18,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 import urllib.request
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
@@ -47,12 +47,18 @@ ATOM_REPOS = [
 
 MALWARE_CATEGORY_TECHNIQUES: dict[str, list[tuple[str, str]]] = {
     "stealer": [("T1555", "Credentials from Password Stores"), ("T1005", "Data from Local System")],
-    "infostealer": [("T1555", "Credentials from Password Stores"), ("T1005", "Data from Local System")],
+    "infostealer": [
+        ("T1555", "Credentials from Password Stores"),
+        ("T1005", "Data from Local System"),
+    ],
     "ransomware": [("T1486", "Data Encrypted for Impact"), ("T1490", "Inhibit System Recovery")],
     "keylogger": [("T1056.001", "Keylogging"), ("T1005", "Data from Local System")],
     "botnet": [("T1071", "Application Layer Protocol"), ("T1498", "Network Denial of Service")],
     "rootkit": [("T1014", "Rootkit"), ("T1574", "Hijack Execution Flow")],
-    "backdoor": [("T1059", "Command and Scripting Interpreter"), ("T1071", "Application Layer Protocol")],
+    "backdoor": [
+        ("T1059", "Command and Scripting Interpreter"),
+        ("T1071", "Application Layer Protocol"),
+    ],
     "trojan": [("T1204.002", "Malicious File"), ("T1055", "Process Injection")],
     "miner": [("T1496", "Resource Hijacking")],
     "dropper": [("T1105", "Ingress Tool Transfer"), ("T1055", "Process Injection")],
@@ -136,8 +142,12 @@ class VxUndergroundProvider(CTIProvider):
                     sha = c.get("sha", "")
                     commit_obj = c.get("commit", {})
                     msg = commit_obj.get("message", "").split("\n")[0].strip()
-                    date_str = commit_obj.get("author", {}).get("date") or datetime.now(timezone.utc).isoformat()
-                    html_url = c.get("html_url") or f"https://github.com/{repo_info['repo']}/commit/{sha}"
+                    date_str = (
+                        commit_obj.get("author", {}).get("date") or datetime.now(UTC).isoformat()
+                    )
+                    html_url = (
+                        c.get("html_url") or f"https://github.com/{repo_info['repo']}/commit/{sha}"
+                    )
                     commits.append(
                         {
                             "sha": sha,
@@ -150,7 +160,11 @@ class VxUndergroundProvider(CTIProvider):
                     )
                 return commits
         except Exception as e:
-            log.warning("GitHub API fetch failed for %s: %s; falling back to Atom feed", repo_info["repo"], e)
+            log.warning(
+                "GitHub API fetch failed for %s: %s; falling back to Atom feed",
+                repo_info["repo"],
+                e,
+            )
             return []
 
     def _fetch_from_atom(self, repo_info: dict[str, str]) -> list[dict[str, Any]]:
@@ -168,9 +182,17 @@ class VxUndergroundProvider(CTIProvider):
 
                 for entry in tree.findall("atom:entry", ns):
                     title_elem = entry.find("atom:title", ns)
-                    title = title_elem.text.strip() if title_elem is not None and title_elem.text else ""
+                    title = (
+                        title_elem.text.strip()
+                        if title_elem is not None and title_elem.text
+                        else ""
+                    )
                     updated_elem = entry.find("atom:updated", ns)
-                    updated = updated_elem.text.strip() if updated_elem is not None and updated_elem.text else ""
+                    updated = (
+                        updated_elem.text.strip()
+                        if updated_elem is not None and updated_elem.text
+                        else ""
+                    )
                     link_elem = entry.find("atom:link", ns)
                     link = link_elem.attrib.get("href", "") if link_elem is not None else ""
 
@@ -178,8 +200,8 @@ class VxUndergroundProvider(CTIProvider):
                     sha = ""
                     if "/commit/" in link:
                         sha = link.split("/commit/")[-1].strip()
-                    elif entry.find("atom:id", ns) is not None:
-                        id_text = entry.find("atom:id", ns).text or ""
+                    elif (id_elem := entry.find("atom:id", ns)) is not None:
+                        id_text = id_elem.text or ""
                         if "/" in id_text:
                             sha = id_text.split("/")[-1].strip()
 
@@ -225,7 +247,9 @@ class VxUndergroundProvider(CTIProvider):
                         details["platforms"].append(parts[0])
                         filename = parts[-1]
                         # Remove extensions like .7z, .zip, .tar.gz, .cpp, .py
-                        base_name = re.sub(r"\.(7z|zip|tar\.gz|cpp|c|py|bin|exe|dll)$", "", filename)
+                        base_name = re.sub(
+                            r"\.(7z|zip|tar\.gz|cpp|c|py|bin|exe|dll)$", "", filename
+                        )
                         details["malware_names"].append(base_name)
                     else:
                         details["malware_names"].append(f)
@@ -281,10 +305,11 @@ class VxUndergroundProvider(CTIProvider):
         """Format structured threat intelligence blurb for the VX-Underground release."""
         title = commit.get("title", "Malware Artifact Release")
         sha = commit.get("sha", "")
-        short_sha = sha[:8]
         repo_name = commit.get("repo_name", "MalwareSourceCode")
-        repo_url = commit.get("html_url", f"https://github.com/{commit.get('repo', 'vxunderground')}/commit/{sha}")
-        date_str = commit.get("date", datetime.now(timezone.utc).isoformat())
+        repo_url = commit.get(
+            "html_url", f"https://github.com/{commit.get('repo', 'vxunderground')}/commit/{sha}"
+        )
+        date_str = commit.get("date", datetime.now(UTC).isoformat())
 
         files = details.get("files") or [title]
         platforms = list(dict.fromkeys(details.get("platforms") or []))
@@ -325,13 +350,15 @@ class VxUndergroundProvider(CTIProvider):
             "",
             "| Artifact | Kind | Role | Status | Evidence |",
             "|---|---|---|---|---|",
-            f"| `{sample_name}` | malware_family | attribution | active | \"Cataloged malware family on VX-Underground\" |",
-            f"| `{files[0]}` | file_path | artifact | active | \"Repository path in vxunderground: {files[0]}\" |",
+            f'| `{sample_name}` | malware_family | attribution | active | "Cataloged malware family on VX-Underground" |',
+            f'| `{files[0]}` | file_path | artifact | active | "Repository path in vxunderground: {files[0]}" |',
         ]
 
         blob_hashes = details.get("blob_hashes") or []
         for b in blob_hashes[:2]:
-            lines.append(f"| `{b}` | git_blob | payload | active | \"Git blob hash for released sample archive\" |")
+            lines.append(
+                f'| `{b}` | git_blob | payload | active | "Git blob hash for released sample archive" |'
+            )
 
         lines.extend(
             [
@@ -379,7 +406,7 @@ class VxUndergroundProvider(CTIProvider):
                 return CTIItem(
                     content=blurb,
                     source="vxunderground",
-                    received_at=datetime.now(timezone.utc),
+                    received_at=datetime.now(UTC),
                     identifier=sha,
                     metadata={
                         "commit_sha": sha,

@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from hecate_runner.config import Settings
 from hecate_runner.cti import get_provider
 from hecate_runner.cti.vxunderground import (

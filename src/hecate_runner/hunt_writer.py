@@ -700,7 +700,10 @@ def render_draft(req: DraftHuntRequest) -> str:
             f"purple_team_rules_evaluated: {req.purple_team_rules_evaluated or sum(1 for r in req.sigma_rules if r.get('purple_team', {}).get('validated'))}\n"
             f"purple_team_rules_tuned: {req.purple_team_rules_tuned or sum(1 for r in req.sigma_rules if r.get('purple_team', {}).get('tuned'))}\n"
             f"purple_team_telemetry_events: {req.purple_team_telemetry_count}\n"
-            if (req.purple_team_rules_evaluated > 0 or any(r.get("purple_team", {}).get("validated") for r in req.sigma_rules))
+            if (
+                req.purple_team_rules_evaluated > 0
+                or any(r.get("purple_team", {}).get("validated") for r in req.sigma_rules)
+            )
             else ""
         )
         + "---\n\n"

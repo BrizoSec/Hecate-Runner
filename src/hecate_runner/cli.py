@@ -38,6 +38,7 @@ from hecate_runner import __version__
 from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.config import Settings
 from hecate_runner.cti.base import CTIItem
+from hecate_runner.github_publisher import enqueue_hunt, outbox_status, sync_outbox
 from hecate_runner.hecate_client import HecateClient
 from hecate_runner.hunt_audit import (
     HuntFacts,
@@ -57,6 +58,7 @@ from hecate_runner.orchestrator import (
 )
 from hecate_runner.otx_poller import run_otx_poll
 from hecate_runner.parked_store import get_parked, list_parked, parked_dir, restore
+from hecate_runner.promotion_policy import evaluate_promotion, load_policy
 from hecate_runner.query_execution import ProposedQuery, get_provider, validate_guardrails
 from hecate_runner.query_store import PendingQueryStore
 from hecate_runner.rss_poller import run_rss_poll
@@ -465,6 +467,116 @@ def audit(
 
     if strict and total_unsupported:
         raise typer.Exit(code=1)
+
+
+@app.command("promotion-check")
+def promotion_check(
+    hunt_id: Annotated[str, typer.Argument(help="Planning hunt ID to evaluate (e.g. H-0822).")],
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Emit the deterministic policy decision as JSON.")
+    ] = False,
+) -> None:
+    """Evaluate the versioned GitHub promotion policy without changing files."""
+    settings = Settings()
+    try:
+        decision = evaluate_promotion(settings.hecate_workspace, hunt_id)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Promotion blocked:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    if json_output:
+        console.print(json.dumps(decision.to_dict(), sort_keys=True))
+        return
+    if decision.eligible:
+        console.print(f"[green]Auto-merge eligible:[/green] {hunt_id}")
+    elif decision.review_required:
+        console.print(f"[yellow]Human review required:[/yellow] {hunt_id}")
+    else:
+        console.print(f"[cyan]Publication allowed; auto-merge disabled by policy:[/cyan] {hunt_id}")
+    for reason in decision.reasons:
+        console.print(f"  - {reason}")
+
+
+@app.command("promotion-policy-validate")
+def promotion_policy_validate() -> None:
+    """Validate the workspace's versioned promotion policy."""
+    settings = Settings()
+    try:
+        load_policy(settings.hecate_workspace)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Invalid promotion policy:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    console.print("[green]Promotion policy is valid.[/green]")
+
+
+@app.command("publish")
+def publish(
+    hunt_id: Annotated[
+        str, typer.Argument(help="Planning hunt ID to submit as a GitHub pull request.")
+    ],
+) -> None:
+    """Snapshot one hunt into the durable GitHub publication outbox."""
+    settings = Settings()
+    if not settings.github_publishing_enabled:
+        console.print(
+            "[red]GitHub publishing is disabled.[/red] Set HECATE_RUNNER_GITHUB_PUBLISHING_ENABLED=true."
+        )
+        raise typer.Exit(code=2)
+    try:
+        status = enqueue_hunt(settings, hunt_id)
+        results = sync_outbox(settings)
+    except Exception as exc:
+        console.print(f"[red]Could not publish {hunt_id}:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    current = next((result for result in results if result.hunt_id == hunt_id), None)
+    if current:
+        console.print(f"[green]PR #{current.pr_number}[/green] {current.pr_url} ({current.status})")
+    else:
+        record = next((row for row in outbox_status(settings) if row["hunt_id"] == hunt_id), None)
+        if record and record["pr_url"]:
+            console.print(f"{hunt_id}: {record['status']} — {record['pr_url']}")
+        else:
+            console.print(
+                f"Queued {hunt_id} (outbox status: {status}); it will retry on the next run."
+            )
+
+
+@app.command("publish-sync")
+def publish_sync(
+    show_status: Annotated[
+        bool, typer.Option("--status", help="List recent outbox records after syncing.")
+    ] = False,
+) -> None:
+    """Retry due GitHub publication jobs without processing CTI."""
+    settings = Settings()
+    if not settings.github_publishing_enabled:
+        console.print("GitHub publishing is disabled.")
+        raise typer.Exit(code=2)
+    try:
+        results = sync_outbox(settings)
+    except Exception as exc:
+        console.print(f"[red]Could not sync publication outbox:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    if results:
+        for result in results:
+            console.print(
+                f"[green]{result.hunt_id}[/green] {result.status}: {result.pr_url or result.branch}"
+            )
+    else:
+        console.print("No due publication jobs.")
+    if show_status:
+        table = Table(title="GitHub publication outbox", show_header=True, header_style="bold cyan")
+        for column in ("Hunt", "Status", "Attempts", "PR", "Error"):
+            table.add_column(column)
+        for row in outbox_status(settings):
+            table.add_row(
+                str(row["hunt_id"]),
+                str(row["status"]),
+                str(row["attempts"]),
+                str(row["pr_url"] or ""),
+                str(row["last_error"] or ""),
+            )
+        console.print(table)
 
 
 def _hunt_paths(settings: Settings, hunt_ids: list[str] | None) -> list[Path]:

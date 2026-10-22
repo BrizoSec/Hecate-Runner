@@ -15,12 +15,26 @@ log = logging.getLogger(__name__)
 
 # Official apex domains for common brands to exclude legitimate certificates from alerting
 OFFICIAL_BRAND_DOMAINS: set[str] = {
-    "apple.com", "icloud.com", "apple-cloudkit.com",
-    "notion.so", "notion.site",
-    "google.com", "gmail.com", "googleapis.com", "googleusercontent.com",
-    "microsoft.com", "live.com", "office.com", "azure.com", "windows.net", "office365.com",
-    "github.com", "github.io", "githubusercontent.com",
-    "binance.com", "binance.org",
+    "apple.com",
+    "icloud.com",
+    "apple-cloudkit.com",
+    "notion.so",
+    "notion.site",
+    "google.com",
+    "gmail.com",
+    "googleapis.com",
+    "googleusercontent.com",
+    "microsoft.com",
+    "live.com",
+    "office.com",
+    "azure.com",
+    "windows.net",
+    "office365.com",
+    "github.com",
+    "github.io",
+    "githubusercontent.com",
+    "binance.com",
+    "binance.org",
     "metamask.io",
     "trezor.io",
     "ledger.com",
@@ -36,7 +50,7 @@ class CertStreamCursorState:
     max_history: int = 5000
 
     def to_json(self) -> str:
-        return json.dumps({"seen_domains": self.seen_domains[-self.max_history:]})
+        return json.dumps({"seen_domains": self.seen_domains[-self.max_history :]})
 
     @classmethod
     def from_file(cls, path: Path) -> CertStreamCursorState:
@@ -56,7 +70,7 @@ class CertStreamCursorState:
         if clean and clean not in self.seen_domains:
             self.seen_domains.append(clean)
             if len(self.seen_domains) > self.max_history:
-                self.seen_domains = self.seen_domains[-self.max_history:]
+                self.seen_domains = self.seen_domains[-self.max_history :]
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write_text(path, self.to_json())
@@ -200,7 +214,9 @@ class CertStreamProvider(CTIProvider):
                     if len(self._items) >= self.max_buffer_size:
                         break
                     try:
-                        raw_msg = ws.recv(timeout=max(0.5, timeout - (time.monotonic() - start_time)))
+                        raw_msg = ws.recv(
+                            timeout=max(0.5, timeout - (time.monotonic() - start_time))
+                        )
                         if isinstance(raw_msg, bytes):
                             raw_msg = raw_msg.decode("utf-8")
                         msg = json.loads(raw_msg)

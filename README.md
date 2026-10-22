@@ -11,7 +11,8 @@ for the design and its diagrams. This README is the operating reference.
 1. Pulls fresh CTI from a configured source (file queue, AlienVault OTX, RSS/Atom feeds, MISP, CISA KEV, or abuse.ch ThreatFox)
 2. Reads the report the item links to, researches the technique, and generates a grounded hypothesis, using Hecate-Core's agents and the LLM configured in the workspace
 3. Writes a structured draft hunt, with candidate Sigma rules and a grounding audit, into your Hecate workspace
-4. Never auto-executes queries — a human proposes a bounded query and separately approves running it (see [Query execution](#query-execution-propose-dont-run) below); nothing runs unattended
+4. Optionally publishes the finished planning bundle as a pull request to Hecate-Content; CI validates it and policy escalations wait for a human approval
+5. Never auto-executes queries — a human proposes a bounded query and separately approves running it (see [Query execution](#query-execution-propose-dont-run) below); nothing runs unattended
 
 Runs as a systemd timer on a hunting host, or by hand: `hecate-runner run` takes the next item from the configured feeds, and `hecate-runner draft` takes intelligence you supply. Both go through the same cycle.
 
@@ -35,6 +36,8 @@ flowchart LR
     HYP --> DRAFT["Draft hunt<br/>hunts/YYYY/Qn/H-XXXX.md"]
     DRAFT --> SIG["Sigma rules<br/>queries/H-XXXX/*.yml"]
     RES --> RDOC["research/R-XXXX.md"]
+    SIG --> PUB["Optional GitHub publisher<br/>durable outbox + isolated PR"]
+    PUB --> CI["Content CI<br/>validate + policy check"]
     SRC -.-> LLM["LLM (workspace .env)"]
     RES -.-> LLM
     HYP -.-> LLM
@@ -108,6 +111,30 @@ Evidence is ranked because it is not equally trustworthy. Treating a research do
 What gets checked: ATT&CK technique IDs (including whether they exist in the current matrix), CVEs, indicators inside generated Sigma rules, and named entities in prose — actor designators like `APT41`, `<Name> backdoor`-style collocations, and CamelCase families like `PureRAT`. Entity checking is precision-first: "adversaries deploy a backdoor" names nothing and is ignored, because a section full of false alarms is one a reviewer learns to skip.
 
 The audit reports rather than blocks, because a hunt that generalises beyond its CTI is doing its job. What it catches is the opposite: an assertion specific enough to *read* as evidence that nothing supports — a fabricated CVE, or a Sigma rule matching a C2 domain no intelligence mentions. Only traceable shapes are examined: a rule matching `\powershell.exe` is behaviour, while one matching `203.0.113.99` is a claim.
+
+## GitHub review and promotion
+
+Publication is disabled unless `HECATE_RUNNER_GITHUB_PUBLISHING_ENABLED=true`
+and a narrowly installed GitHub App is configured. Once enabled, Runner
+snapshots the completed hunt, its linked research file, Sigma files, and a
+digest manifest into a durable SQLite outbox under the ignored `.hecate/`
+directory. The GitHub Git API creates a unique branch and pull request without
+changing the live workspace checkout. Failed jobs retry with backoff on later
+Runner cycles; `hecate-runner publish-sync --status` inspects/retries them
+without reading CTI.
+
+The content repo's versioned `promotion-policy.yaml` controls deterministic
+escalation. Clean, grounded planning hunts can auto-merge after the two
+required checks pass. Missing CTI, a low-confidence source, unsupported claims,
+TLP:AMBER, edits to the original bundle, and commits not authored by the App
+require a qualified human approval on the latest commit. TLP:RED is blocked.
+The publisher refuses a public destination. Every merged hunt remains in
+`planning`; promoting it to execution or enabling a production detection still
+requires a human.
+
+See the [Hecate-Content promotion setup](https://github.com/BrizoSec/Hecate-Content#github-review-and-promotion)
+for App permissions, protected-branch checks, and the `publish` and
+`promotion-check` commands.
 
 ## Query execution: propose, don't run
 

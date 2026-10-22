@@ -26,6 +26,8 @@ dependencies = [
     "rich>=13.7",
     "python-dotenv>=1.0",
     "httpx>=0.27",
+    "PyJWT[crypto]>=2.8",
+    "PyYAML>=6.0",
     "feedparser>=6.0.12",
     # [all] deliberately, not the bare package. The runner drives hecate_agent
     # in-process, so the agent's optional capabilities resolve against *this*

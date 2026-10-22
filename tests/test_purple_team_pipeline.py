@@ -1,4 +1,5 @@
 """Tests for the permanent purple-team validation harness in Hecate Runner."""
+
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock

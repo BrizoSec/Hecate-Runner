@@ -93,7 +93,19 @@ class Settings(BaseSettings):
             "hecate-runner-orchestrator.service) since that's an outer, harder cap."
         ),
     )
-    cti_provider: Literal["file", "otx", "rss", "misp", "cisa_kev", "abuse_ch", "certstream", "github_poc", "malwarebazaar", "vxunderground", "multi"] = Field(
+    cti_provider: Literal[
+        "file",
+        "otx",
+        "rss",
+        "misp",
+        "cisa_kev",
+        "abuse_ch",
+        "certstream",
+        "github_poc",
+        "malwarebazaar",
+        "vxunderground",
+        "multi",
+    ] = Field(
         default="file",
         alias="HECATE_RUNNER_CTI_PROVIDER",
         description=(
@@ -468,6 +480,41 @@ class Settings(BaseSettings):
         alias="GITHUB_TOKEN",
         description="GitHub personal access token for higher Search API rate limits.",
     )
+    github_publishing_enabled: bool = Field(
+        default=False,
+        alias="HECATE_RUNNER_GITHUB_PUBLISHING_ENABLED",
+        description="Publish completed planning hunts as isolated pull requests to Hecate-Content.",
+    )
+    github_app_id: str | None = Field(
+        default=None,
+        alias="HECATE_RUNNER_GITHUB_APP_ID",
+        description="GitHub App ID used only for content publication.",
+    )
+    github_installation_id: str | None = Field(
+        default=None,
+        alias="HECATE_RUNNER_GITHUB_INSTALLATION_ID",
+        description="GitHub App installation ID for the target content repository.",
+    )
+    github_app_slug: str = Field(
+        default="hecate-publisher",
+        alias="HECATE_RUNNER_GITHUB_APP_SLUG",
+        description="GitHub App slug; used to attribute generated Git commits to the publisher bot.",
+    )
+    github_app_private_key_path: Path | None = Field(
+        default=None,
+        alias="HECATE_RUNNER_GITHUB_APP_PRIVATE_KEY_PATH",
+        description="Mounted PEM file for the publishing GitHub App; never store the key in .env.",
+    )
+    github_publishing_repository: str = Field(
+        default="BrizoSec/Hecate-Content",
+        alias="HECATE_RUNNER_GITHUB_PUBLISHING_REPOSITORY",
+        description="Owner/repository for generated hunt pull requests.",
+    )
+    github_publishing_base_branch: str = Field(
+        default="main",
+        alias="HECATE_RUNNER_GITHUB_PUBLISHING_BASE_BRANCH",
+        description="Protected target branch for generated hunt pull requests.",
+    )
     github_poc_request_timeout_sec: float = Field(
         default=10.0,
         ge=3.0,
@@ -518,6 +565,9 @@ class Settings(BaseSettings):
         "mnemonic_api_key",
         "ipinfo_token",
         "github_token",
+        "github_app_id",
+        "github_installation_id",
+        "github_app_private_key_path",
         "abusech_api_key",
     }
 
@@ -649,12 +699,18 @@ class Settings(BaseSettings):
     @property
     def certstream_brand_patterns(self) -> list[str]:
         """Parsed, lowercased, whitespace-trimmed brand list from HECATE_RUNNER_CERTSTREAM_BRANDS."""
-        return [b.strip().lower() for b in self.certstream_brand_patterns_raw.split(",") if b.strip()]
+        return [
+            b.strip().lower() for b in self.certstream_brand_patterns_raw.split(",") if b.strip()
+        ]
 
     @property
     def certstream_suspicious_keywords(self) -> list[str]:
         """Parsed, lowercased, whitespace-trimmed suspicious keywords from HECATE_RUNNER_CERTSTREAM_KEYWORDS."""
-        return [k.strip().lower() for k in self.certstream_suspicious_keywords_raw.split(",") if k.strip()]
+        return [
+            k.strip().lower()
+            for k in self.certstream_suspicious_keywords_raw.split(",")
+            if k.strip()
+        ]
 
     @property
     def multi_cursor_file(self) -> Path:
