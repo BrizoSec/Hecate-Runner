@@ -66,7 +66,9 @@ def _records() -> list[IndicatorRecord]:
     return [
         IndicatorRecord(value="209.141.43.95", type="ipv4", role="download", status="active"),
         IndicatorRecord(value="13.1.0.9", type="ipv4", role="target", status="active"),
-        IndicatorRecord(value="old.example.net", type="domain", role="historical", status="historical"),
+        IndicatorRecord(
+            value="old.example.net", type="domain", role="historical", status="historical"
+        ),
     ]
 
 
@@ -81,7 +83,9 @@ def test_events_come_from_the_source_and_skip_victims_and_history() -> None:
     events = replay_events(_records(), _artifacts())
     assert events["network_connection"] == [{"DestinationIp": "209.141.43.95"}]
     assert events["file_event"] == [{"TargetFilename": "/var/kw2s11"}]
-    assert events["process_creation"] == [{"CommandLine": "chmod 755 /var/kw2s11", "Image": "chmod"}]
+    assert events["process_creation"] == [
+        {"CommandLine": "chmod 755 /var/kw2s11", "Image": "chmod"}
+    ]
     assert "dns_query" not in events
 
 
@@ -122,7 +126,9 @@ def test_tuning_never_fits_a_rule_to_events_it_missed() -> None:
 
 
 def _orchestrator(tmp_path: Path) -> Orchestrator:
-    orch = Orchestrator(settings=Settings(hecate_workspace=tmp_path), hecate=MagicMock(), cti_provider=MagicMock())
+    orch = Orchestrator(
+        settings=Settings(hecate_workspace=tmp_path), hecate=MagicMock(), cti_provider=MagicMock()
+    )
     orch.trail = MagicMock()
     orch.trail.elapsed = 1.0
     orch._indicator_records = _records()
@@ -140,15 +146,28 @@ def test_the_stage_replays_by_log_source_and_marks_only_validated_files(tmp_path
         ("dns_query__none.yml", _IP_RULE.replace("network_connection", "dns_query"), "dns_query"),
     ):
         (out_dir / name).write_text(body, encoding="utf-8")
-        rules.append({"logsource_category": category, "rule_yaml": body, "path": str(out_dir / name)})
-    req = DraftHuntRequest(hunt_id="H-9999", threat_intel="x", hypothesis=MagicMock(), generated_at=datetime.now(UTC))
+        rules.append(
+            {"logsource_category": category, "rule_yaml": body, "path": str(out_dir / name)}
+        )
+    req = DraftHuntRequest(
+        hunt_id="H-9999", threat_intel="x", hypothesis=MagicMock(), generated_at=datetime.now(UTC)
+    )
 
     _orchestrator(tmp_path)._run_purple_team_validation(req, rules, out_dir, MagicMock())
 
-    assert [r["purple_team"]["status"] for r in rules] == ["validated", "no_match", "no_replay_events"]
+    assert [r["purple_team"]["status"] for r in rules] == [
+        "validated",
+        "no_match",
+        "no_replay_events",
+    ]
     assert (req.purple_team_rules_evaluated, req.purple_team_rules_validated) == (2, 1)
-    assert "x_hecate_purple_team_validated: true" in (out_dir / "file_event__kw2s11.yml").read_text()
-    assert "x_hecate_purple_team_validated" not in (out_dir / "network_connection__dual_use.yml").read_text()
+    assert (
+        "x_hecate_purple_team_validated: true" in (out_dir / "file_event__kw2s11.yml").read_text()
+    )
+    assert (
+        "x_hecate_purple_team_validated"
+        not in (out_dir / "network_connection__dual_use.yml").read_text()
+    )
     assert yaml.safe_load((out_dir / "file_event__kw2s11.yml").read_text())["detection"]
 
 
@@ -159,10 +178,18 @@ def test_the_draft_claims_only_what_the_replay_showed(sample_hypothesis: Hypothe
         hypothesis=sample_hypothesis,
         generated_at=datetime(2026, 10, 23, tzinfo=UTC),
         sigma_rules=[
-            {"logsource_category": "file_event", "title": "a", "rule_yaml": _FILE_RULE,
-             "purple_team": {"status": "no_match", "validated": False}},
-            {"logsource_category": "dns_query", "title": "b", "rule_yaml": _IP_RULE,
-             "purple_team": {"status": "no_replay_events", "validated": False}},
+            {
+                "logsource_category": "file_event",
+                "title": "a",
+                "rule_yaml": _FILE_RULE,
+                "purple_team": {"status": "no_match", "validated": False},
+            },
+            {
+                "logsource_category": "dns_query",
+                "title": "b",
+                "rule_yaml": _IP_RULE,
+                "purple_team": {"status": "no_replay_events", "validated": False},
+            },
         ],
         purple_team_rules_evaluated=1,
         purple_team_rules_validated=0,

@@ -1740,7 +1740,10 @@ class Orchestrator:
             if not rule_yaml:
                 continue
             outcome = replay_rule(
-                rule_yaml, events.get(str(rule.get("logsource_category", "")), []), BENIGN_SAMPLE, tuner
+                rule_yaml,
+                events.get(str(rule.get("logsource_category", "")), []),
+                BENIGN_SAMPLE,
+                tuner,
             )
             rule["purple_team"] = outcome.to_dict()
             if outcome.status == "no_replay_events":

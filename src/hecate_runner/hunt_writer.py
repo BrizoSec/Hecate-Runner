@@ -258,7 +258,11 @@ def _render_sigma_section(req: DraftHuntRequest) -> str:
         parts.append(
             f"> **Purple-team replay:** {validated} of {replayed} replayed rule(s) matched events synthesised "
             "from the report's own artifacts and none of a small benign sample"
-            + (f"; {len(req.sigma_rules) - replayed} had no source artifact to replay" if replayed < len(req.sigma_rules) else "")
+            + (
+                f"; {len(req.sigma_rules) - replayed} had no source artifact to replay"
+                if replayed < len(req.sigma_rules)
+                else ""
+            )
             + ". A replay of what the report names, not emulation: it shows a rule can match the "
             "described activity, not that it is quiet in your environment."
         )

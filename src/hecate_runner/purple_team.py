@@ -25,8 +25,16 @@ from typing import Any
 #: is a sanity floor, not a model of anyone's environment.
 BENIGN_SAMPLE: list[dict[str, Any]] = [
     {"Image": "/usr/sbin/cron", "CommandLine": "/usr/sbin/cron -f", "User": "root"},
-    {"Image": "/usr/sbin/anacron", "CommandLine": "/usr/sbin/anacron -s /etc/cron.d", "User": "root"},
-    {"Image": "C:\\Windows\\System32\\svchost.exe", "CommandLine": "svchost.exe -k netsvcs", "User": "SYSTEM"},
+    {
+        "Image": "/usr/sbin/anacron",
+        "CommandLine": "/usr/sbin/anacron -s /etc/cron.d",
+        "User": "root",
+    },
+    {
+        "Image": "C:\\Windows\\System32\\svchost.exe",
+        "CommandLine": "svchost.exe -k netsvcs",
+        "User": "SYSTEM",
+    },
     {"Image": "/usr/bin/curl", "CommandLine": "curl https://pypi.org/simple", "User": "app"},
     {"DestinationIp": "8.8.8.8", "DestinationPort": 53, "QueryName": "microsoft.com"},
 ]
@@ -37,7 +45,9 @@ _HASH_LABELS = {"md5": "MD5", "sha1": "SHA1", "sha256": "SHA256", "imphash": "IM
 _REGISTRY_CATEGORIES = ("registry_set", "registry_add", "registry_event")
 
 
-def replay_events(records: Iterable[Any], artifacts: Iterable[Any]) -> dict[str, list[dict[str, Any]]]:
+def replay_events(
+    records: Iterable[Any], artifacts: Iterable[Any]
+) -> dict[str, list[dict[str, Any]]]:
     """``{logsource category: [event, ...]}`` from typed indicators and behaviour artifacts.
 
     ``records`` are IndicatorRecord-shaped (value, type, role, status, ports);
@@ -55,13 +65,20 @@ def replay_events(records: Iterable[Any], artifacts: Iterable[Any]) -> dict[str,
     for record in records:
         value = str(getattr(record, "value", "") or "").strip()
         rtype = str(getattr(record, "type", "") or "").lower()
-        if not value or getattr(record, "status", "") == "historical" or getattr(record, "role", "") in _NOT_INFRASTRUCTURE:
+        if (
+            not value
+            or getattr(record, "status", "") == "historical"
+            or getattr(record, "role", "") in _NOT_INFRASTRUCTURE
+        ):
             continue
         if rtype in ("ipv4", "ipv6"):
             host, port = split_host_port(value)
             ports = [port] if port else list(getattr(record, "ports", None) or [])
             for p in ports or [None]:
-                add("network_connection", {"DestinationIp": host, **({"DestinationPort": p} if p else {})})
+                add(
+                    "network_connection",
+                    {"DestinationIp": host, **({"DestinationPort": p} if p else {})},
+                )
         elif rtype in ("domain", "hostname"):
             add("dns_query", {"QueryName": value})
             add("network_connection", {"DestinationHostname": value})
@@ -115,7 +132,9 @@ class ReplayResult:
         }
 
 
-def replay_rule(rule_yaml: str, events: list[dict[str, Any]], baseline: list[dict[str, Any]], tuner: Any = None) -> ReplayResult:
+def replay_rule(
+    rule_yaml: str, events: list[dict[str, Any]], baseline: list[dict[str, Any]], tuner: Any = None
+) -> ReplayResult:
     """Replay one rule. Tuning only ever removes benign-sample matches.
 
     The tuner's other repair -- appending a missed event's Image/CommandLine to
@@ -129,11 +148,15 @@ def replay_rule(rule_yaml: str, events: list[dict[str, Any]], baseline: list[dic
     try:
         result = SigmaEvaluator.evaluate_rule(rule_yaml, events, baseline)
     except Exception as exc:  # a rule the evaluator cannot read is a finding, not a crash
-        return ReplayResult(status="error", replay_events=len(events), final_rule=rule_yaml, notes=[str(exc)])
+        return ReplayResult(
+            status="error", replay_events=len(events), final_rule=rule_yaml, notes=[str(exc)]
+        )
 
     final_rule, tuned = rule_yaml, False
     if result.false_positives and result.true_positives and tuner is not None:
-        matched = [e for e in events if SigmaEvaluator.evaluate_rule(rule_yaml, [e], []).true_positives]
+        matched = [
+            e for e in events if SigmaEvaluator.evaluate_rule(rule_yaml, [e], []).true_positives
+        ]
         tuning = tuner.tune(rule_yaml, matched, baseline)
         candidate = SigmaEvaluator.evaluate_rule(tuning.final_rule, events, baseline)
         if (
