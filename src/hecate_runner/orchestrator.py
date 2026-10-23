@@ -321,6 +321,13 @@ def derive_data_sources(techniques: list[str], indicator_types: list[str]) -> li
 _PLATFORM_ONLY_DATA_SOURCES: dict[str, frozenset[str]] = {
     "registry_events": frozenset({"windows"}),
 }
+#: Data sources only a host sensor produces. A hunt scoped only to appliances
+#: (sigma_generator.appliance_only) cannot use them: H-0830's NetScaler draft
+#: listed process_execution and file_operations.
+_HOST_SENSOR_DATA_SOURCES = frozenset(
+    {"process_execution", "file_operations", "registry_events", "endpoint_data", "windows_logs"}
+)
+_NETWORK_DATA_SOURCES = frozenset({"network_connections", "network_logs"})
 
 
 #: Telemetry category names the model returns as if they were observations.
@@ -436,12 +443,21 @@ def platform_consistent_data_sources(data_sources: list[str], platforms: list[st
     if not known:
         return data_sources
 
+    from hecate_agent.agents.llm.sigma_generator import appliance_only
+
+    appliance = appliance_only(platforms)
     kept: list[str] = []
     for source in data_sources:
-        required = _PLATFORM_ONLY_DATA_SOURCES.get(str(source).strip().lower())
+        name = str(source).strip().lower()
+        required = _PLATFORM_ONLY_DATA_SOURCES.get(name)
         if required is not None and not (known & required):
             continue
+        if appliance and name in _HOST_SENSOR_DATA_SOURCES:
+            continue
         kept.append(source)
+    if appliance and not any(str(s).strip().lower() in _NETWORK_DATA_SOURCES for s in kept):
+        # An appliance's own access and system logs, and what the network sees.
+        kept.append("network_logs")
     return kept
 
 
