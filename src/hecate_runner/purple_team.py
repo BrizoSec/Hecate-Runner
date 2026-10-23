@@ -71,7 +71,12 @@ def replay_events(
             or getattr(record, "role", "") in _NOT_INFRASTRUCTURE
         ):
             continue
-        if rtype in ("ipv4", "ipv6"):
+        if rtype in ("ipv4", "ipv6") and getattr(record, "role", "") == "inbound":
+            # The attack source: the client in web logs, the far end of an accepted connection.
+            host, _ = split_host_port(value)
+            add("webserver", {"c-ip": host})
+            add("network_connection", {"SourceIp": host, "Initiated": "false"})
+        elif rtype in ("ipv4", "ipv6"):
             host, port = split_host_port(value)
             ports = [port] if port else list(getattr(record, "ports", None) or [])
             for p in ports or [None]:

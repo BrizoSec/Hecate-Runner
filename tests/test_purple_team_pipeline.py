@@ -199,3 +199,22 @@ def test_the_draft_claims_only_what_the_replay_showed(sample_hypothesis: Hypothe
     assert "0 of 1 replayed rule(s)" in md
     assert "attack telemetry" not in md
     assert "0 false positives" not in md
+
+
+def test_an_attack_source_replays_as_inbound_traffic() -> None:
+    records = [
+        IndicatorRecord(value="45.153.212.101", type="ipv4", role="inbound", status="active")
+    ]
+    events = replay_events(records, [])
+    assert events["webserver"] == [{"c-ip": "45.153.212.101"}]
+    assert events["network_connection"] == [{"SourceIp": "45.153.212.101", "Initiated": "false"}]
+    rule = """title: Web request from an attack source
+logsource:
+  category: webserver
+detection:
+  selection:
+    c-ip:
+    - 45.153.212.101
+  condition: selection
+"""
+    assert replay_rule(rule, events["webserver"], BENIGN_SAMPLE).status == "validated"

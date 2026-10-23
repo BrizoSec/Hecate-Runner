@@ -305,6 +305,27 @@ _RULE_PLACEMENT_NOTE = {
 }
 
 
+def _rule_placements(record: dict[str, Any]) -> str:
+    """The log sources a record's rules go to, from the same routing the Sigma stage uses.
+
+    Restating the routing here drifted from it: inbound attack sources were
+    listed as outbound network_connection, and bare dual-use URL paths as proxy.
+    """
+    from hecate_agent.core.provenance import IndicatorRecord, placements
+
+    placed = placements(IndicatorRecord.from_dict(record))
+    if not placed:
+        role = str(record.get("role", ""))
+        if record.get("status") == "historical":
+            role = "historical"
+        return _RULE_PLACEMENT_NOTE.get(role, "none: no log records it in this role")
+    ports = ", ".join(str(p) for p in record.get("ports") or [])
+    categories = dict.fromkeys(p.split(".")[0] for p in placed)
+    return ", ".join(
+        f"{c} on {ports}" if ports and c == "network_connection" else c for c in categories
+    )
+
+
 def _cell(text: str, limit: int = 160) -> str:
     text = " ".join(str(text).split()).replace("|", "\\|")
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -344,23 +365,9 @@ def _render_source_evidence(req: DraftHuntRequest) -> str:
             "|---|---|---|---|---|---|",
         ]
         for r in records:
-            if r.get("status") == "historical" or r.get("role") == "historical":
-                rules = _RULE_PLACEMENT_NOTE["historical"]
-            elif r.get("role") == "target":
-                rules = _RULE_PLACEMENT_NOTE["target"]
-            elif r.get("type") in ("md5", "sha1", "sha256", "imphash"):
-                rules = _RULE_PLACEMENT_NOTE.get(r.get("role", ""), "process_creation")
-                rules = "image_load" if r.get("role") == "library" else rules
-            elif r.get("type") == "url":
-                rules = "proxy"
-            else:
-                rules = "network_connection" + (
-                    " on " + ", ".join(str(p) for p in r["ports"]) if r.get("ports") else ""
-                )
-                rules += ", dns_query" if r.get("type") in ("domain", "hostname") else ""
             lines.append(
                 f"| `{_cell(r['value'], 70)}` | {r['type']} | {r.get('role', 'unknown')} | "
-                f"{r.get('status', 'unknown')} | {r.get('confidence', 'unknown')} | {rules} |"
+                f"{r.get('status', 'unknown')} | {r.get('confidence', 'unknown')} | {_rule_placements(r)} |"
             )
         lines.append("")
     return "\n".join(lines) + "\n"
