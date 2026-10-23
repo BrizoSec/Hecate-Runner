@@ -26,6 +26,8 @@ _PLATFORMS = {
     "T1207": ["Windows"],  # Rogue Domain Controller
     "T1071.004": ["Linux", "macOS", "Windows"],  # DNS
     "T1546.005": ["Linux", "macOS"],  # Trap
+    "T1505.003": ["Windows", "Linux", "macOS", "Network Devices"],  # Web Shell
+    "T1059.004": ["Linux", "macOS", "Network Devices"],  # Unix Shell
 }
 
 
@@ -68,7 +70,9 @@ def test_the_models_own_contradicting_pick_is_still_dropped(orch: Orchestrator) 
         ["T1207"], scope_text="macOS systems", facts=facts, protected=[]
     )
     assert platforms == ["macOS"]
-    assert facts["T1207"].valid is False
+    # Dropped from the hunt, still a real technique: the audit must not call it invented.
+    assert "T1207" in orch._platform_dropped
+    assert facts["T1207"].valid is True
 
 
 def test_a_wording_match_does_not_widen_onto_platforms_the_intel_never_names(
@@ -86,7 +90,9 @@ def test_a_wording_match_does_not_widen_onto_platforms_the_intel_never_names(
         intel_text="Voice phishing in Microsoft Teams; victims ran a PowerShell one-liner.",
     )
     assert platforms == ["Windows"]
-    assert facts["T1546.005"].valid is False
+    # Dropped from the hunt, still a real technique: the audit must not call it invented.
+    assert "T1546.005" in orch._platform_dropped
+    assert facts["T1546.005"].valid is True
 
 
 def test_a_wording_match_widens_onto_a_platform_the_intel_implies(orch: Orchestrator) -> None:
@@ -174,3 +180,38 @@ def test_scope_without_a_trail_run_still_initialises_drops(
 ) -> None:
     orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
     assert orch._platform_dropped == set()
+
+
+def test_a_technique_the_cti_asserts_is_never_dropped(orch: Orchestrator) -> None:
+    """H-0830: a wrong scope (Identity Provider for a NetScaler report) dropped
+    all 17 source-asserted techniques, and the audit then reported T1190 as
+    "no such technique in the current ATT&CK matrix"."""
+    facts: dict[str, TechniqueFact] = {}
+    orch._resolve_ttps(
+        ["T1207"],
+        scope_text="macOS systems",
+        facts=facts,
+        protected=["T1207"],
+        asserted=["T1207"],
+        # Specimen evidence that blocks widening is what left the drop loop
+        # free to remove a source-asserted technique.
+        specimen=["macOS"],
+    )
+    assert "T1207" not in orch._platform_dropped
+    assert facts["T1207"].valid is True
+
+
+def test_an_appliance_report_scopes_to_the_appliance(orch: Orchestrator) -> None:
+    """H-0830: the specimen evidence named NetScaler throughout and SAML once;
+    the hypothesis said Linux. The hunt belongs on Network Devices."""
+    facts: dict[str, TechniqueFact] = {}
+    _, platforms = orch._resolve_ttps(
+        ["T1505.003", "T1059.004"],
+        scope_text="Linux-based NetScaler appliances",
+        facts=facts,
+        protected=["T1505.003", "T1059.004"],
+        asserted=["T1505.003", "T1059.004"],
+        specimen=["Network Devices", "Identity Provider"],
+    )
+    assert platforms == ["Network Devices"]
+    assert not orch._platform_dropped
