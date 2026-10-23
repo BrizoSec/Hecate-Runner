@@ -1969,11 +1969,24 @@ class Orchestrator:
                     )
 
             # Mark any technique that strongly contradicts our final platforms
-            # so it is stripped from the payload and doesn't pollute the Sigma generator
+            # so it is stripped from the payload and doesn't pollute the Sigma
+            # generator. Never one the CTI itself asserted: H-0830's scope went
+            # wrong (Identity Provider for a NetScaler report) and this loop then
+            # dropped all 17 source techniques, leaving the hunt unmapped and the
+            # Sigma stage drafting from "techniques none". `fact.valid` is left
+            # alone: it means "exists in ATT&CK", and setting it here made the
+            # grounding audit report T1190 as "no such technique".
             if facts is not None:
                 for tech_id, fact in facts.items():
                     if fact.platforms and not any(p in final_platforms for p in fact.platforms):
-                        fact.valid = False
+                        if tech_id in by_cti or tech_id.split(".")[0] in by_cti:
+                            self.trail.step(
+                                "scope",
+                                "keeping %s: the CTI asserts it, though it runs only on %s",
+                                tech_id,
+                                listing(fact.platforms),
+                            )
+                            continue
                         self._platform_dropped.add(tech_id)
                         self.trail.step(
                             "scope",
