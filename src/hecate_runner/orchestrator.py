@@ -1712,124 +1712,71 @@ class Orchestrator:
         out_dir: Path,
         item: CTIItem,
     ) -> None:
-        """Run closed-loop purple-team validation and autonomous self-tuning on drafted Sigma rules."""
+        """Replay drafted rules against events synthesised from the source's artifacts.
+
+        See hecate_runner.purple_team: a replay of what the report names, not
+        emulation, and a rule counts as validated only when it matches its own
+        log source's events and none of the benign sample.
+        """
         if not rules:
             return
 
         try:
-            from hecate_agent.core.sigma_evaluator import SigmaEvaluator
             from hecate_agent.core.sigma_self_tuner import SigmaSelfTuner
         except ImportError as exc:
-            log.warning("Purple-team validation unavailable: %s", exc)
+            log.warning("Purple-team replay unavailable: %s", exc)
             return
+
+        from hecate_runner.purple_team import BENIGN_SAMPLE, replay_events, replay_rule
 
         started = self.trail.elapsed
         tuner = SigmaSelfTuner(max_iterations=3)
+        artifacts = self._source_evidence.artifacts if self._source_evidence is not None else []
+        events = replay_events(self._indicator_records, artifacts)
 
-        attack_events: list[dict[str, Any]] = []
-        for ind in getattr(item, "indicators", []):
-            val = ind.value
-            itype = getattr(ind, "type", "").lower()
-            if "ip" in itype:
-                attack_events.append({"DestinationIp": val, "DestinationPort": 443})
-            elif "hash" in itype:
-                attack_events.append({"TargetFilename": f"/tmp/{val[:8]}", "Hashes": val})
-            elif "domain" in itype or "hostname" in itype:
-                attack_events.append({"QueryName": val})
-            elif "url" in itype:
-                attack_events.append({"c-uri": val})
-
-        if hasattr(self, "_source_evidence") and getattr(self._source_evidence, "commands", None):
-            for cmd in self._source_evidence.commands:
-                parts = cmd.split()
-                attack_events.append({"Image": parts[0] if parts else "cmd", "CommandLine": cmd})
-
-        baseline_events: list[dict[str, Any]] = [
-            {"Image": "/usr/sbin/cron", "CommandLine": "/usr/sbin/cron -f", "User": "root"},
-            {
-                "Image": "/usr/sbin/anacron",
-                "CommandLine": "/usr/sbin/anacron -s /etc/cron.d",
-                "User": "root",
-            },
-            {
-                "Image": "C:\\Windows\\System32\\svchost.exe",
-                "CommandLine": "svchost.exe -k netsvcs",
-                "User": "SYSTEM",
-            },
-            {
-                "Image": "/usr/bin/curl",
-                "CommandLine": "curl https://pypi.org/simple",
-                "User": "app",
-            },
-            {"DestinationIp": "8.8.8.8", "DestinationPort": 53, "QueryName": "microsoft.com"},
-        ]
-
-        validated_count = 0
-        tuned_count = 0
-
+        replayed = validated = tuned = baseline_matches = 0
         for rule in rules:
             rule_yaml = str(rule.get("rule_yaml", "")).strip()
             if not rule_yaml:
                 continue
+            outcome = replay_rule(
+                rule_yaml, events.get(str(rule.get("logsource_category", "")), []), BENIGN_SAMPLE, tuner
+            )
+            rule["purple_team"] = outcome.to_dict()
+            if outcome.status == "no_replay_events":
+                continue
+            replayed += 1
+            validated += outcome.validated
+            baseline_matches += outcome.status == "baseline_match"
+            if outcome.tuned:
+                tuned += 1
+                rule["rule_yaml"] = outcome.final_rule
+            path = Path(str(rule.get("path") or ""))
+            if path.is_file() and (outcome.tuned or outcome.validated):
+                text = outcome.final_rule.rstrip() + "\n"
+                if outcome.validated:
+                    text += "x_hecate_purple_team_validated: true\n"
+                if outcome.tuned:
+                    text += "x_hecate_tuned: true\n"
+                path.write_text(text, encoding="utf-8")
 
-            try:
-                eval_result = SigmaEvaluator.evaluate_rule(
-                    rule_yaml, attack_events, baseline_events
-                )
-                tuned = False
-
-                if eval_result.false_positives > 0 or (
-                    eval_result.false_negatives > 0
-                    and eval_result.true_positives == 0
-                    and attack_events
-                ):
-                    tune_res = tuner.tune(rule_yaml, attack_events, baseline_events)
-                    if tune_res.final_rule != tune_res.initial_rule:
-                        rule["rule_yaml"] = tune_res.final_rule
-                        tuned = True
-                        tuned_count += 1
-                        fn = rule.get("filename")
-                        if fn:
-                            fp = out_dir / f"{fn}.yml"
-                            if fp.exists():
-                                fp.write_text(tune_res.final_rule, encoding="utf-8")
-                        eval_result = tune_res.final_metrics
-
-                rule["purple_team"] = {
-                    "validated": True,
-                    "tuned": tuned,
-                    "precision": eval_result.precision,
-                    "recall": eval_result.recall,
-                    "fp": eval_result.false_positives,
-                    "tp": eval_result.true_positives,
-                }
-                validated_count += 1
-
-                fn = rule.get("filename")
-                if fn:
-                    fp = out_dir / f"{fn}.yml"
-                    if fp.exists():
-                        cur_text = fp.read_text(encoding="utf-8")
-                        if "x_hecate_purple_team_validated:" not in cur_text:
-                            cur_text = (
-                                cur_text.rstrip() + "\nx_hecate_purple_team_validated: true\n"
-                            )
-                            if tuned:
-                                cur_text += "x_hecate_tuned: true\n"
-                            fp.write_text(cur_text, encoding="utf-8")
-            except Exception as exc:
-                log.debug("Purple-team evaluation skipped for rule: %s", exc)
-
-        req.purple_team_rules_evaluated = validated_count
-        req.purple_team_rules_tuned = tuned_count
-        req.purple_team_telemetry_count = len(attack_events) + len(baseline_events)
+        req.purple_team_rules_evaluated = replayed
+        req.purple_team_rules_validated = validated
+        req.purple_team_rules_tuned = tuned
+        req.purple_team_telemetry_count = sum(len(v) for v in events.values())
 
         self.trail.step(
             "purple_team",
-            "validated %d rule(s) in %.0fs: %d tuned, 0 FP",
-            validated_count,
+            "replayed %d of %d rule(s) against %d source-artifact event(s) in %.0fs: "
+            "%d validated, %d matched the benign sample, %d tuned, %d with nothing to replay",
+            replayed,
+            len(rules),
+            req.purple_team_telemetry_count,
             self.trail.elapsed - started,
-            tuned_count,
+            validated,
+            baseline_matches,
+            tuned,
+            len(rules) - replayed,
         )
 
     def _resolve_ttps(

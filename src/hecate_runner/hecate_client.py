@@ -318,6 +318,9 @@ class HecateClient:
                 hunt_id=payload.get("hunt_id"),
             )
             usage = LLMUsage.from_metadata(metadata)
+            # Core writes one file per rule, in rule order; the path lets later
+            # stages update the file they describe.
+            paths = [str(f) for f in files or []]
             rules = [
                 {
                     "logsource_category": rule.logsource_category,
@@ -325,8 +328,9 @@ class HecateClient:
                     "level": rule.level,
                     "techniques": rule.techniques,
                     "rule_yaml": rule.rule_yaml,
+                    "path": paths[i] if i < len(paths) else "",
                 }
-                for rule in output.rules
+                for i, rule in enumerate(output.rules)
             ]
             return SigmaResult(
                 success=bool(metadata.get("success", False)),
@@ -365,6 +369,7 @@ class HecateClient:
         if isinstance(generated, SigmaResult):
             return generated
         output, files = generated
+        paths = [str(f) for f in files or []]
         rules = [
             {
                 "logsource_category": r.logsource_category,
@@ -372,8 +377,9 @@ class HecateClient:
                 "level": r.level,
                 "techniques": r.techniques,
                 "rule_yaml": r.rule_yaml,
+                "path": paths[i] if i < len(paths) else "",
             }
-            for r in output.rules
+            for i, r in enumerate(output.rules)
         ]
         return SigmaResult(
             success=True,

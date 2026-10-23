@@ -62,8 +62,11 @@ class DraftHuntRequest:
     detection_guidance: list[dict[str, Any]] = field(default_factory=list)
     #: Behaviours the rule reviewer found no rule for, each with its verified quote.
     review_gaps: list[dict[str, str]] = field(default_factory=list)
-    #: Purple-team automated validation and self-tuning metrics
+    #: Purple-team replay (hecate_runner.purple_team): rules that had source
+    #: events to replay, rules that matched them and no benign event, rules
+    #: tuned, and the number of synthesised events.
     purple_team_rules_evaluated: int = 0
+    purple_team_rules_validated: int = 0
     purple_team_rules_tuned: int = 0
     purple_team_telemetry_count: int = 0
     #: Claim excerpts and exact source passages checked by the Runner.
@@ -244,26 +247,27 @@ def _render_sigma_section(req: DraftHuntRequest) -> str:
             "```\n"
         )
 
-    has_purple = any(r.get("purple_team", {}).get("validated") for r in req.sigma_rules)
-    if has_purple:
-        parts = [
-            f"> 🟣 **Purple-Team Validated:** {len(req.sigma_rules)} Sigma rule(s) auto-drafted and verified "
-            "against attack telemetry and baseline system noise via automated closed-loop evaluation. "
-            "Exclusion filters and bounds were autonomously self-tuned to ensure high-fidelity signal with 0 false positives.",
-            "> **Unreviewed.** Sigma is platform-neutral: convert with "
-            "`sigma convert -t <backend>` once a target is chosen. Field names and "
-            "false positives are the model's proposal and must be checked against "
-            "real telemetry before anything is run.",
-        ]
-    else:
-        parts = [
-            f"> {len(req.sigma_rules)} Sigma rule(s) auto-drafted from the source intelligence, "
-            "one per applicable log source.",
-            "> **Unreviewed.** Sigma is platform-neutral: convert with "
-            "`sigma convert -t <backend>` once a target is chosen. Field names and "
-            "false positives are the model's proposal and must be checked against "
-            "real telemetry before anything is run.",
-        ]
+    replay = [r.get("purple_team") or {} for r in req.sigma_rules]
+    validated = sum(1 for r in replay if r.get("validated"))
+    replayed = sum(1 for r in replay if r.get("status") and r.get("status") != "no_replay_events")
+    parts = [
+        f"> {len(req.sigma_rules)} Sigma rule(s) auto-drafted from the source intelligence, "
+        "one per applicable log source.",
+    ]
+    if replayed:
+        parts.append(
+            f"> **Purple-team replay:** {validated} of {replayed} replayed rule(s) matched events synthesised "
+            "from the report's own artifacts and none of a small benign sample"
+            + (f"; {len(req.sigma_rules) - replayed} had no source artifact to replay" if replayed < len(req.sigma_rules) else "")
+            + ". A replay of what the report names, not emulation: it shows a rule can match the "
+            "described activity, not that it is quiet in your environment."
+        )
+    parts.append(
+        "> **Unreviewed.** Sigma is platform-neutral: convert with "
+        "`sigma convert -t <backend>` once a target is chosen. Field names and "
+        "false positives are the model's proposal and must be checked against "
+        "real telemetry before anything is run."
+    )
     if req.sigma_rule_dir:
         parts.append(f">\n> Rule files: `{req.sigma_rule_dir}`")
     parts.append("")
@@ -726,14 +730,12 @@ def render_draft(req: DraftHuntRequest) -> str:
         "customer_deliverables: []\n"
         f"tags: {json.dumps(_draft_tags(hyp.is_threat_report, hyp.is_indicator_only))}\n"
         + (
-            f"purple_team_validated: true\n"
-            f"purple_team_rules_evaluated: {req.purple_team_rules_evaluated or sum(1 for r in req.sigma_rules if r.get('purple_team', {}).get('validated'))}\n"
-            f"purple_team_rules_tuned: {req.purple_team_rules_tuned or sum(1 for r in req.sigma_rules if r.get('purple_team', {}).get('tuned'))}\n"
+            f"purple_team_validated: {str(req.purple_team_rules_validated > 0).lower()}\n"
+            f"purple_team_rules_evaluated: {req.purple_team_rules_evaluated}\n"
+            f"purple_team_rules_validated: {req.purple_team_rules_validated}\n"
+            f"purple_team_rules_tuned: {req.purple_team_rules_tuned}\n"
             f"purple_team_telemetry_events: {req.purple_team_telemetry_count}\n"
-            if (
-                req.purple_team_rules_evaluated > 0
-                or any(r.get("purple_team", {}).get("validated") for r in req.sigma_rules)
-            )
+            if req.purple_team_rules_evaluated > 0
             else ""
         )
         + "---\n\n"
