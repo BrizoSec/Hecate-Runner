@@ -2041,3 +2041,18 @@ def test_the_models_actor_is_not_overwritten_by_the_attribution(
     )
 
     assert "| **Actor** | Lazarus (TraderTraitor subgroup) |" in content
+
+
+def test_an_appliance_hunt_lists_no_host_sensor_data_sources() -> None:
+    """H-0830's NetScaler draft listed process_execution and file_operations."""
+    from hecate_runner.orchestrator import platform_consistent_data_sources
+
+    assert platform_consistent_data_sources(
+        ["process_execution", "file_operations", "network_connections"], ["Network Devices"]
+    ) == ["network_connections"]
+    assert platform_consistent_data_sources(
+        ["process_execution", "file_operations"], ["Network Devices"]
+    ) == ["network_logs"]
+    assert platform_consistent_data_sources(
+        ["process_execution"], ["Network Devices", "Linux"]
+    ) == ["process_execution"]
