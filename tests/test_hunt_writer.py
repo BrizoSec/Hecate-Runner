@@ -893,3 +893,36 @@ def test_render_draft_renders_macos_soc_triage_playbook() -> None:
     assert "%TEMP%" not in md
     assert "%APPDATA%" not in md
     assert "LSASS" not in md
+
+
+def test_the_role_table_lists_the_log_sources_the_rules_actually_use(
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    """The table restated the routing and drifted: H-0830's exploitation source
+    IPs read "network_connection" (outbound) and bare dual-use paths "proxy"."""
+    req = DraftHuntRequest(
+        hunt_id="H-0999",
+        threat_intel="x",
+        hypothesis=sample_hypothesis,
+        generated_at=datetime(2026, 10, 23, tzinfo=UTC),
+        source_evidence={"url": "https://example.test/report", "chars": 10, "artifacts": []},
+        indicator_records=[
+            {"value": "45.153.212.101", "type": "ipv4", "role": "inbound", "status": "active"},
+            {
+                "value": "209.141.43.95",
+                "type": "ipv4",
+                "role": "download",
+                "status": "active",
+                "ports": [80],
+            },
+            {"value": "/vpn/index.html", "type": "url", "role": "dual_use", "status": "active"},
+        ],
+    )
+    table = render_draft(req).split("**Indicators by role**", 1)[1].split("\n\n")[1]
+    rows = {
+        cells[1].strip(" `"): cells[6].strip()
+        for cells in (row.split("|") for row in table.splitlines()[2:])
+    }
+    assert rows["45.153.212.101"] == "webserver, network_connection"
+    assert rows["209.141.43.95"] == "network_connection on 80"
+    assert rows["/vpn/index.html"].startswith("none:")
