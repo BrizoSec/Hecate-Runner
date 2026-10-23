@@ -480,7 +480,9 @@ def promotion_check(
         raise typer.Exit(code=2) from exc
 
     if json_output:
-        console.print(json.dumps(decision.to_dict(), sort_keys=True))
+        # Plain echo, not Rich: console.print wraps at terminal width and parses
+        # [brackets] as markup, which corrupts the JSON the promotion workflow parses.
+        typer.echo(json.dumps(decision.to_dict(), sort_keys=True))
         return
     if decision.eligible:
         console.print(f"[green]Auto-merge eligible:[/green] {hunt_id}")
