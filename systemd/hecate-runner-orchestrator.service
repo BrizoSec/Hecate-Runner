@@ -11,8 +11,9 @@ User=chemch
 Group=chemch
 WorkingDirectory=/home/chemch/betas/Hecate-Runner
 
-# Read env from the .env file inside the repo. Keep secrets out of the unit.
-# Prefix with '-' so a missing .env file is ignored instead of causing a fatal unit failure.
+# Read env from the workspace .env (single canonical source of truth), with optional runner-local override.
+# Prefix with '-' so missing files are ignored instead of causing a fatal unit failure.
+EnvironmentFile=-/home/chemch/betas/Hecate-Workspace/.env
 EnvironmentFile=-/home/chemch/betas/Hecate-Runner/.env
 
 # Run via uv so we always execute inside the project venv.

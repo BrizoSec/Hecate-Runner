@@ -1560,16 +1560,31 @@ def list_sources() -> None:
         )
 
 
-def _update_env_key(key: str, value: str) -> None:
-    import os
+def _find_canonical_env_file() -> Path:
+    from hecate_runner.config import Settings
 
+    try:
+        settings = Settings()
+        ws_env = settings.hecate_workspace / ".env"
+        if ws_env.is_file():
+            return ws_env
+    except Exception:
+        pass
+    if Path(".env").is_file():
+        return Path(".env")
+    default_ws = Path.home() / "betas" / "Hecate-Workspace" / ".env"
+    if default_ws.is_file():
+        return default_ws
+    return Path(".env")
+
+
+def _update_env_key(key: str, value: str) -> None:
     from dotenv import set_key
 
-    env_path = ".env"
-    if not os.path.exists(env_path):
-        with open(env_path, "w"):
-            pass
-    set_key(env_path, key, value)
+    env_path = _find_canonical_env_file()
+    if not env_path.exists():
+        env_path.touch()
+    set_key(str(env_path), key, value)
 
 
 @sources_app.command("enable")
