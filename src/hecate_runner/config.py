@@ -5,11 +5,38 @@ Uses pydantic-settings so config is typed, validated, and self-documenting.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+
+def _discover_env_files() -> tuple[str, ...]:
+    """Discover environment files with fallback to Hecate-Workspace/.env.
+
+    Order in pydantic-settings: later files override earlier files.
+    Workspace .env is loaded first, then local cwd .env (if present) to allow
+    local developer overrides.
+    """
+    files: list[str] = []
+    ws_env = os.environ.get("HECATE_WORKSPACE")
+    if ws_env:
+        candidate = Path(ws_env).expanduser().resolve() / ".env"
+        if candidate.is_file():
+            files.append(str(candidate))
+    else:
+        default_ws = Path.home() / "betas" / "Hecate-Workspace" / ".env"
+        if default_ws.is_file():
+            files.append(str(default_ws))
+    files.append(".env")
+    return tuple(files)
 
 
 class Settings(BaseSettings):
@@ -21,6 +48,30 @@ class Settings(BaseSettings):
         extra="ignore",  # HECATE_* and TAVILY_* pass-through env vars are fine to ignore
         populate_by_name=True,
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # If env_file is defaulted to ".env" (no custom _env_file passed to constructor),
+        # dynamically resolve workspace .env and local .env at instantiation time.
+        if getattr(dotenv_settings, "env_file", None) == ".env":
+            dotenv_settings = DotEnvSettingsSource(
+                settings_cls,
+                env_file=_discover_env_files(),
+                env_file_encoding="utf-8",
+            )
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     # --- Hecate workspace -----------------------------------------------------
     hecate_workspace: Path = Field(
