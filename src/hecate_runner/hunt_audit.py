@@ -68,6 +68,16 @@ def _frontmatter_value(lines: list[str], key: str) -> str:
     return ""
 
 
+_CTI_TERMINATORS = (
+    "### Primary Source Evidence",
+    "### Justification",
+    "### ABLE Scoping",
+    "### Threat Intel & Research",
+    "### Grounding",
+    "### Related Tickets",
+)
+
+
 def extract_cti_block(text: str) -> str:
     """Recover the CTI blurb a hunt was drafted from.
 
@@ -84,7 +94,10 @@ def extract_cti_block(text: str) -> str:
 
     collected: list[str] = []
     for line in lines[start + 1 :]:
-        if line.startswith(_SECTION_PREFIX):
+        stripped = line.strip()
+        if any(stripped.startswith(t) for t in _CTI_TERMINATORS) or (
+            stripped.startswith("## ") and not stripped.startswith("### ")
+        ):
             break
         collected.append(line[len(_QUOTE_PREFIX) :] if line.startswith(_QUOTE_PREFIX) else line)
     return "\n".join(collected).strip()
