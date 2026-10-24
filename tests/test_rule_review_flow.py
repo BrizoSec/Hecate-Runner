@@ -63,3 +63,46 @@ def test_the_draft_lists_what_no_rule_covers(
     draft, _ = _run(settings, mock_hecate, caplog)
     section = draft.split("#### Not Covered by Any Rule (rule review)", 1)[1]
     assert '- decoy opened in Word: "opening a DOCX in Word"' in section
+
+
+def test_pass2_generates_targeted_rule_for_uncovered_command(
+    settings: Settings, mock_hecate: MagicMock, caplog: pytest.LogCaptureFixture, tmp_path
+) -> None:
+    caplog.set_level(logging.INFO)
+    mock_hecate.sigma_generator.return_value = SigmaResult(
+        success=True,
+        rules=[
+            {
+                "logsource_category": "process_creation",
+                "title": "Existing Windows Rule",
+                "filename": "existing.yml",
+                "rule_yaml": REVIEWED,
+            }
+        ],
+        review_gaps=[
+            {
+                "behaviour": "container escape and namespace switch",
+                "quote": "nsenter -t 1 -m -u -i -n -p /bin/bash",
+            }
+        ],
+    )
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="OTX Pulse: VShell\nDescription: a resume loader.",
+        source="otx",
+    )
+    result = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
+    assert result.draft_path.exists()
+    trail = [r.getMessage() for r in caplog.records if r.name == LOGGER_NAME]
+    assert any("pass 2: generated 1 rule(s) for uncovered behaviors" in m for m in trail)
+
+    # Verify pass 2 rule written to disk in queries/
+    query_dir = settings.hecate_workspace / "queries" / result.hunt_id
+    pass2_files = list(query_dir.glob("*nsenter*.yml"))
+    assert len(pass2_files) == 1
+    content = pass2_files[0].read_text()
+    import yaml
+
+    doc = yaml.safe_load(content)
+    assert doc["logsource"] == {"category": "process_creation", "product": "linux"}
+    assert doc["detection"]["selection"]["Image|endswith"] == "/nsenter"

@@ -1547,6 +1547,138 @@ class Orchestrator:
         except OSError:
             return ""
 
+    def _generate_pass2_uncovered_rules(
+        self,
+        req: DraftHuntRequest,
+        gaps: list[dict[str, str]],
+        item: CTIItem,
+        out_dir: Path,
+        existing_rules: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Pass 2 (Iterative Uncovered Behavior Pass).
+
+        Extracts unmapped commands, utilities, and concrete observables from
+        the review gaps (uncovered behaviors) and synthesizes targeted Sigma rules.
+        """
+        import uuid
+        from datetime import date
+
+        import yaml
+        from hecate_agent.core.command_rules import command_candidates
+        from hecate_agent.core.sigma_semantics import repair_sigma_semantics, semantic_problem
+
+        pass2_rules: list[dict[str, Any]] = []
+        covered_titles = {str(r.get("title", "")).lower() for r in existing_rules}
+
+        # Gather text from all uncovered gaps
+        gap_texts = [f"{g.get('behaviour', '')} {g.get('quote', '')}".strip() for g in gaps]
+        combined_gap_text = "\n".join(gap_texts)
+        if not combined_gap_text.strip():
+            return []
+
+        # Find command candidates from gap text or primary text that match the gaps
+        candidates = list(
+            command_candidates(combined_gap_text, platforms=["linux", "windows", "macos", "unix"])
+        )
+        primary_candidates = list(
+            command_candidates(
+                self._primary_evidence_text(item), platforms=["linux", "windows", "macos", "unix"]
+            )
+        )
+        for cand in primary_candidates:
+            prog = cand.get("title", "").split()[0].lower()
+            if prog in combined_gap_text.lower() and not any(
+                c.get("title") == cand.get("title") for c in candidates
+            ):
+                candidates.append(cand)
+
+        for candidate in candidates:
+            title = str(candidate.get("title", "")).strip()
+            if not title:
+                continue
+            full_title = f"Command the source shows being run: {title}"
+            if full_title.lower() in covered_titles or title.lower() in covered_titles:
+                continue
+
+            detection = dict(candidate.get("detection") or {})
+            detection, _ = repair_sigma_semantics(detection)
+            cat = str(candidate.get("category", "process_creation"))
+            problem = semantic_problem(detection, cat, title)
+            if problem:
+                continue
+
+            # Determine product (linux vs windows)
+            cand_platform = candidate.get("platform")
+            if not cand_platform:
+                sel = detection.get("selection") or {}
+                img = str(sel.get("Image|endswith", ""))
+                cmd_val = str(candidate.get("command", ""))
+                if img.startswith("/") or any(
+                    u in cmd_val or u in img for u in ("nsenter", "bpftool", "bash", "sh", "kprobe")
+                ):
+                    cand_platform = "linux"
+
+            logsource: dict[str, str] = {"category": cat}
+            if cand_platform in ("linux", "unix"):
+                logsource["product"] = "linux"
+            elif cand_platform == "windows":
+                logsource["product"] = "windows"
+
+            techs = list(req.hypothesis.techniques)
+            document = {
+                "title": full_title[:120],
+                "id": str(uuid.uuid4()),
+                "status": "experimental",
+                "description": (
+                    f"Pass 2 rule auto-generated for uncovered behavior: "
+                    f'The source shows this command being run: "{candidate.get("command", "")}".'
+                ),
+                "references": [item.source_url] if item.source_url else [],
+                "author": "hecate (auto-generated pass 2 from uncovered review behaviors - requires analyst review)",
+                "date": date.today().isoformat(),
+                "tags": [f"attack.{t.lower()}" for t in techs],
+                "logsource": logsource,
+                "detection": detection,
+                "falsepositives": ["Legitimate administration or automation matching the command"],
+                "level": str(candidate.get("level", "medium")),
+            }
+            if req.hunt_id:
+                document["hunt_id"] = req.hunt_id
+
+            rule_yaml = yaml.safe_dump(document, sort_keys=False, allow_unicode=True, width=100)
+
+            # Write rule to out_dir
+            out_dir.mkdir(parents=True, exist_ok=True)
+            slug = "".join(c if c.isalnum() else "_" for c in full_title.lower())
+            slug = "_".join(part for part in slug.split("_") if part)[:60]
+            base_fname = f"{cat}__{slug or 'rule'}.yml"
+            rule_path = out_dir / base_fname
+            counter = 2
+            while rule_path.exists():
+                rule_path = out_dir / f"{base_fname[:-4]}_{counter}.yml"
+                counter += 1
+
+            try:
+                rule_path.write_text(rule_yaml, encoding="utf-8")
+            except OSError as exc:
+                log.warning("Failed to write Pass 2 rule to %s: %s", rule_path, exc)
+                continue
+
+            pass2_rules.append(
+                {
+                    "logsource_category": cat,
+                    "title": full_title[:120],
+                    "level": document["level"],
+                    "techniques": techs,
+                    "rule_yaml": rule_yaml,
+                    "path": str(rule_path),
+                }
+            )
+            covered_titles.add(full_title.lower())
+            covered_titles.add(title.lower())
+
+        return pass2_rules
+
     def _attach_sigma_rules(
         self,
         req: DraftHuntRequest,
@@ -1680,6 +1812,19 @@ class Orchestrator:
                 result.error or "no rules returned",
             )
             return
+
+        if result.review_gaps:
+            pass2_rules = self._generate_pass2_uncovered_rules(
+                req, result.review_gaps, item, out_dir, result.rules
+            )
+            if pass2_rules:
+                result.rules.extend(pass2_rules)
+                self.trail.step(
+                    "sigma",
+                    "pass 2: generated %d rule(s) for uncovered behaviors: %s",
+                    len(pass2_rules),
+                    listing([str(r.get("title", "")) for r in pass2_rules]),
+                )
 
         if self.settings.purple_team_validation_enabled:
             self._run_purple_team_validation(req, result.rules, out_dir, item)
