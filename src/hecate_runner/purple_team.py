@@ -48,6 +48,12 @@ BENIGN_SAMPLE: list[dict[str, Any]] = [
         "result": "success",
         "initiatedBy": {"user": {"userPrincipalName": "developer@example.com"}},
     },
+    {
+        "Image": "k8s.gcr.io/pause:3.6",
+        "ContainerName": "pause",
+        "CommandLine": "/pause",
+        "Privileged": "false",
+    },
 ]
 
 #: Roles and statuses that are not this intrusion's infrastructure.
@@ -229,6 +235,18 @@ def replay_events(
             {
                 "operationName": "Add app role assignment to service principal",
                 "result": "success",
+            },
+        )
+
+    if any(k in lowered_intel for k in ("docker", "container", "nsenter", "k8s", "kubernetes", "pod")):
+        add(
+            "container_runtime",
+            {
+                "Image": "docker.io/library/ubuntu:latest",
+                "ContainerName": "scada-edge-worker",
+                "CommandLine": "nsenter /bin/bash",
+                "VolumeMount": "/dev:/dev",
+                "Privileged": "true",
             },
         )
 

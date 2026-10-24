@@ -12,7 +12,8 @@ Group=chemch
 WorkingDirectory=/home/chemch/betas/Hecate-Runner
 
 # Read env from the .env file inside the repo. Keep secrets out of the unit.
-EnvironmentFile=/home/chemch/betas/Hecate-Runner/.env
+# Prefix with '-' so a missing .env file is ignored instead of causing a fatal unit failure.
+EnvironmentFile=-/home/chemch/betas/Hecate-Runner/.env
 
 # Run via uv so we always execute inside the project venv.
 # If uv isn't on PATH for the service user, use the absolute path from `which uv`.
@@ -30,7 +31,7 @@ StandardError=append:/home/chemch/betas/Hecate-Core/logs/orchestrator.log
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/home/chemch/betas/Hecate-Core /home/chemch/betas/Hecate-Runner
+ReadWritePaths=/home/chemch/betas/Hecate-Core /home/chemch/betas/Hecate-Runner /home/chemch/betas/Hecate-Workspace
 
 [Install]
 WantedBy=multi-user.target
