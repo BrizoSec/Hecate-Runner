@@ -416,9 +416,10 @@ class GitHubAppClient:
                     hunt_id, digest, "closed", branch, existing["number"], existing["html_url"]
                 )
             auto_merge, merge_method = self._manifest_settings(files)
-            self._set_auto_merge(repo_path, existing, auto_merge, merge_method)
+            is_merged = self._set_auto_merge(repo_path, existing, auto_merge, merge_method)
+            status = "merged" if is_merged else "published"
             return PublishResult(
-                hunt_id, digest, "published", branch, existing["number"], existing["html_url"]
+                hunt_id, digest, status, branch, existing["number"], existing["html_url"]
             )
 
         encoded_branch = quote(branch, safe="/")
@@ -511,11 +512,12 @@ class GitHubAppClient:
                     raise
 
         auto_merge, merge_method = self._manifest_settings(files)
-        self._set_auto_merge(repo_path, pull_request, auto_merge, merge_method)
+        is_merged = self._set_auto_merge(repo_path, pull_request, auto_merge, merge_method)
+        status = "merged" if is_merged else "published"
         return PublishResult(
             hunt_id,
             digest,
-            "published",
+            status,
             branch,
             pull_request["number"],
             pull_request["html_url"],
@@ -554,46 +556,73 @@ class GitHubAppClient:
 
     def _set_auto_merge(
         self, repo_path: str, pull_request: dict[str, Any], enabled: bool, merge_method: str
-    ) -> None:
-        operation = "enable" if enabled else "disable"
-        if enabled:
-            query = """mutation EnableAutoMerge($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
-              enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: $mergeMethod}) {
-                pullRequest { number autoMergeRequest { mergeMethod } }
-              }
-            }"""
-            variables = {
-                "pullRequestId": pull_request["node_id"],
-                "mergeMethod": merge_method.upper(),
-            }
-        else:
+    ) -> bool:
+        """Configure auto-merge or merge directly if eligible and repository auto-merge is disabled."""
+        if not enabled:
             query = """mutation DisableAutoMerge($pullRequestId: ID!) {
               disablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId}) {
                 pullRequest { number }
               }
             }"""
-            variables = {"pullRequestId": pull_request["node_id"]}
+            try:
+                self._request(
+                    "POST",
+                    "/graphql",
+                    json={"query": query, "variables": {"pullRequestId": pull_request["node_id"]}},
+                )
+            except PublisherError as exc:
+                log.info(
+                    "Could not disable auto-merge for PR #%s (%s)",
+                    pull_request.get("number"),
+                    exc,
+                )
+            return False
+
+        # Attempt GraphQL enablePullRequestAutoMerge first
+        query = """mutation EnableAutoMerge($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+          enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: $mergeMethod}) {
+            pullRequest { number autoMergeRequest { mergeMethod } }
+          }
+        }"""
+        variables = {
+            "pullRequestId": pull_request["node_id"],
+            "mergeMethod": merge_method.upper(),
+        }
         try:
             response = self._request(
                 "POST",
                 "/graphql",
                 json={"query": query, "variables": variables},
             )
-            if response.get("errors"):
-                log.info(
-                    "Could not %s auto-merge for PR #%s; repository policy remains authoritative",
-                    operation,
-                    pull_request.get("number"),
-                )
-        except PublisherError as exc:
-            # The PR remains useful if auto-merge is disabled at repository level;
-            # branch protection still controls whether it can merge.
+            if not response.get("errors"):
+                return False  # Successfully enabled auto-merge queue on GitHub
             log.info(
-                "Could not %s auto-merge for PR #%s (%s)",
-                operation,
+                "GraphQL auto-merge rejected for PR #%s: %s; attempting direct merge",
+                pull_request.get("number"),
+                response.get("errors"),
+            )
+        except PublisherError as exc:
+            log.info(
+                "GraphQL auto-merge failed for PR #%s (%s); attempting direct merge",
                 pull_request.get("number"),
                 exc,
             )
+
+        # Fallback: If repo setting disables auto-merge mutation, merge directly if PR is clean
+        pr_number = pull_request.get("number")
+        try:
+            merge_res = self._request(
+                "PUT",
+                f"{repo_path}/pulls/{pr_number}/merge",
+                json={"merge_method": merge_method.lower()},
+            )
+            if merge_res.get("merged"):
+                log.info("Directly merged auto-eligible PR #%s into %s", pr_number, repo_path)
+                return True
+        except Exception as exc:
+            log.info("Direct merge fallback for PR #%s could not complete: %s", pr_number, exc)
+
+        return False
 
 
 def outbox_for(settings: Settings) -> PromotionOutbox:
