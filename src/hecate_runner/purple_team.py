@@ -37,6 +37,17 @@ BENIGN_SAMPLE: list[dict[str, Any]] = [
     },
     {"Image": "/usr/bin/curl", "CommandLine": "curl https://pypi.org/simple", "User": "app"},
     {"DestinationIp": "8.8.8.8", "DestinationPort": 53, "QueryName": "microsoft.com"},
+    {
+        "eventSource": "ec2.amazonaws.com",
+        "eventName": "DescribeInstances",
+        "awsRegion": "us-east-1",
+        "userIdentity": {"type": "IAMUser", "arn": "arn:aws:iam::123456789012:user/developer"},
+    },
+    {
+        "operationName": "Sign-in activity",
+        "result": "success",
+        "initiatedBy": {"user": {"userPrincipalName": "developer@example.com"}},
+    },
 ]
 
 #: Roles and statuses that are not this intrusion's infrastructure.
@@ -46,12 +57,13 @@ _REGISTRY_CATEGORIES = ("registry_set", "registry_add", "registry_event")
 
 
 def replay_events(
-    records: Iterable[Any], artifacts: Iterable[Any]
+    records: Iterable[Any], artifacts: Iterable[Any], cti_text: str = ""
 ) -> dict[str, list[dict[str, Any]]]:
     """``{logsource category: [event, ...]}`` from typed indicators and behaviour artifacts.
 
     ``records`` are IndicatorRecord-shaped (value, type, role, status, ports);
     ``artifacts`` are SourceArtifact-shaped (value, kind, status).
+    ``cti_text`` optionally provides raw source text for contextual cloud and identity telemetry.
     """
     from hecate_agent.core.provenance import split_host_port, url_parts
 
@@ -109,6 +121,117 @@ def replay_events(
         elif kind == "registry_key":
             for category in _REGISTRY_CATEGORIES:
                 add(category, {"TargetObject": value})
+
+    # Synthesize cloud_audit and identity_audit events when cloud indicators or text are present
+    combined_intel = (
+        (cti_text or "") + "\n" + "\n".join(str(getattr(a, "value", "") or "") for a in artifacts)
+    )
+    lowered_intel = combined_intel.lower()
+
+    if any(
+        k in lowered_intel
+        for k in (
+            "assumerole",
+            "sts:assumerole",
+            "sts:assumerolewithwebidentity",
+            "sts.amazonaws.com",
+            "federateddevopsadmin",
+        )
+    ):
+        add(
+            "cloud_audit",
+            {
+                "eventSource": "sts.amazonaws.com",
+                "eventName": "AssumeRole",
+                "awsRegion": "us-east-1",
+                "requestParameters": "roleArn: arn:aws:iam::123456789012:role/FederatedDevOpsAdmin",
+                "userIdentity": {
+                    "type": "AssumedRole",
+                    "arn": "arn:aws:iam::123456789012:role/FederatedDevOpsAdmin",
+                },
+            },
+        )
+        add(
+            "cloud_audit",
+            {
+                "eventSource": "sts.amazonaws.com",
+                "eventName": "AssumeRoleWithWebIdentity",
+                "awsRegion": "us-east-1",
+            },
+        )
+
+    if any(k in lowered_intel for k in ("s3:", "aws s3", "s3.amazonaws.com", "s3://")):
+        add(
+            "cloud_audit",
+            {
+                "eventSource": "s3.amazonaws.com",
+                "eventName": "ListObjects",
+                "requestParameters": "bucketName: corp-finance-archive",
+            },
+        )
+
+    if any(
+        k in lowered_intel
+        for k in (
+            "directory.readwrite.all",
+            "rolemanagement.readwrite.directory",
+            "mail.readwrite",
+            "createapplication",
+            "updateapplication",
+            "oauth",
+            "consent",
+        )
+    ):
+        add(
+            "cloud_audit",
+            {
+                "eventSource": "cloudformation.amazonaws.com",
+                "eventName": "CreateApplication",
+                "requestParameters": "Directory.ReadWrite.All",
+            },
+        )
+        add(
+            "cloud_audit",
+            {
+                "eventSource": "cloudformation.amazonaws.com",
+                "eventName": "UpdateApplication",
+                "requestParameters": "RoleManagement.ReadWrite.Directory",
+            },
+        )
+        add(
+            "identity_audit",
+            {
+                "operationName": "Consent to application",
+                "result": "success",
+                "targetResources.displayName": "Core-CloudHealth-Monitor",
+                "targetResources.modifiedProperties.newValue": "Directory.ReadWrite.All RoleManagement.ReadWrite.Directory Mail.ReadWrite",
+            },
+        )
+        add(
+            "identity_audit",
+            {
+                "operationName": "Add service principal",
+                "result": "success",
+                "targetResources.displayName": "Core-CloudHealth-Monitor",
+                "targetResources.modifiedProperties.newValue": "Directory.ReadWrite.All",
+            },
+        )
+        add(
+            "identity_audit",
+            {
+                "operationName": "Add service principal credentials",
+                "result": "success",
+                "targetResources.displayName": "Core-CloudHealth-Monitor",
+            },
+        )
+        add(
+            "identity_audit",
+            {
+                "operationName": "Add app role assignment to service principal",
+                "result": "success",
+            },
+        )
+
     return events
 
 

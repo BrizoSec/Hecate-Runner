@@ -1677,6 +1677,169 @@ class Orchestrator:
             covered_titles.add(full_title.lower())
             covered_titles.add(title.lower())
 
+        # Extract unmapped file path candidates from gaps and artifacts
+        import re
+
+        primary_text = self._primary_evidence_text(item)
+        file_path_candidates: set[str] = set()
+
+        # Artifacts from source evidence
+        if self._source_evidence and self._source_evidence.artifacts:
+            for art in self._source_evidence.artifacts:
+                if getattr(art, "kind", "") == "file_path":
+                    val = str(getattr(art, "value", "") or "").strip()
+                    if val:
+                        file_path_candidates.add(val)
+
+        # Regex patterns for concrete Linux & Windows paths
+        linux_paths = re.findall(
+            r"(?:/etc/(?:cron[^\s\"';<>]+|systemd[^\s\"';<>]+)|/dev/shm/[^\s\"';<>]+|/sys/fs/bpf/[^\s\"';<>]+|/tmp/[^\s\"';<>]+|/var/tmp/[^\s\"';<>]+|/usr/local/bin/[^\s\"';<>]+)",
+            combined_gap_text + "\n" + primary_text,
+        )
+        windows_paths = re.findall(
+            r"(?:[A-Za-z]:\\[A-Za-z0-9_.\-\\]+|\\Tasks\\[A-Za-z0-9_.\-\\]+)",
+            combined_gap_text + "\n" + primary_text,
+        )
+        for p in linux_paths + windows_paths:
+            cleaned_p = p.strip(".,;:\"'()[]`")
+            if cleaned_p and len(cleaned_p) > 5 and not cleaned_p.endswith(("/", "\\")):
+                file_path_candidates.add(cleaned_p)
+
+        gap_lower = combined_gap_text.lower()
+        file_gap_keywords = (
+            "file",
+            "cron",
+            "script",
+            "staged",
+            "persist",
+            "driver",
+            "drop",
+            "directory",
+            "delete",
+            "remove",
+            "elf",
+            "payload",
+            "temporary",
+            "bastion",
+            "stage",
+        )
+        has_file_gap = any(k in gap_lower for k in file_gap_keywords)
+
+        def is_path_covered(fp: str) -> bool:
+            fp_low = fp.lower()
+            for r in existing_rules:
+                if fp_low in str(r.get("title", "")).lower():
+                    return True
+                ryaml = str(r.get("rule_yaml", "")).lower()
+                if "targetfilename" in ryaml and fp_low in ryaml:
+                    return True
+            for r in pass2_rules:
+                if fp_low in str(r.get("title", "")).lower():
+                    return True
+                ryaml = str(r.get("rule_yaml", "")).lower()
+                if "targetfilename" in ryaml and fp_low in ryaml:
+                    return True
+            return False
+
+        if has_file_gap:
+            for path_cand in sorted(file_path_candidates):
+                p_lower = path_cand.lower()
+                # Check relevance to gap: exact match in gap text or semantic match with gap concepts
+                relevant = (
+                    p_lower in gap_lower
+                    or ("cron" in gap_lower and "cron" in p_lower)
+                    or (
+                        any(k in gap_lower for k in ("elf", "staged", "remove", "delete"))
+                        and any(ext in p_lower for ext in (".o", "/dev/shm", "/tmp"))
+                    )
+                    or (
+                        any(k in gap_lower for k in ("staging", "bastion", "temporary", "stage"))
+                        and any(k in p_lower for k in ("stage", "tmp"))
+                    )
+                    or (
+                        any(k in gap_lower for k in ("driver", "byovd", "service"))
+                        and ".sys" in p_lower
+                    )
+                )
+
+                if not relevant or is_path_covered(path_cand):
+                    continue
+
+                full_title = f"File event for uncovered artifact path: {path_cand}"
+                if full_title.lower() in covered_titles:
+                    continue
+
+                cat = "file_event"
+                cand_product = "linux" if path_cand.startswith("/") else "windows"
+                logsource_block: dict[str, str] = {"category": cat, "product": cand_product}
+
+                detection = {
+                    "selection": {"TargetFilename|contains": path_cand},
+                    "condition": "selection",
+                }
+                detection, _ = repair_sigma_semantics(detection)
+                problem = semantic_problem(detection, cat, full_title)
+                if problem:
+                    continue
+
+                techs = list(req.hypothesis.techniques)
+                if "cron" in p_lower and "T1053.003" not in techs:
+                    techs.append("T1053.003")
+                elif ".sys" in p_lower and "T1068" not in techs:
+                    techs.append("T1068")
+
+                document = {
+                    "title": full_title[:120],
+                    "id": str(uuid.uuid4()),
+                    "status": "experimental",
+                    "description": (
+                        f"Pass 2 rule auto-generated for uncovered behavior: "
+                        f"Detects file creation, modification, or artifact staging at '{path_cand}'."
+                    ),
+                    "references": [item.source_url] if item.source_url else [],
+                    "author": "hecate (auto-generated pass 2 from uncovered review behaviors - requires analyst review)",
+                    "date": date.today().isoformat(),
+                    "tags": [f"attack.{t.lower()}" for t in techs],
+                    "logsource": logsource_block,
+                    "detection": detection,
+                    "falsepositives": [
+                        "Legitimate system administration or authorized tool activity matching the path"
+                    ],
+                    "level": "high",
+                }
+                if req.hunt_id:
+                    document["hunt_id"] = req.hunt_id
+
+                rule_yaml = yaml.safe_dump(document, sort_keys=False, allow_unicode=True, width=100)
+
+                out_dir.mkdir(parents=True, exist_ok=True)
+                slug = "".join(c if c.isalnum() else "_" for c in path_cand.lower())
+                slug = "_".join(part for part in slug.split("_") if part)[:60]
+                base_fname = f"{cat}__{slug or 'rule'}.yml"
+                rule_path = out_dir / base_fname
+                counter = 2
+                while rule_path.exists():
+                    rule_path = out_dir / f"{base_fname[:-4]}_{counter}.yml"
+                    counter += 1
+
+                try:
+                    rule_path.write_text(rule_yaml, encoding="utf-8")
+                except OSError as exc:
+                    log.warning("Failed to write Pass 2 rule to %s: %s", rule_path, exc)
+                    continue
+
+                pass2_rules.append(
+                    {
+                        "logsource_category": cat,
+                        "title": full_title[:120],
+                        "level": document["level"],
+                        "techniques": techs,
+                        "rule_yaml": rule_yaml,
+                        "path": str(rule_path),
+                    }
+                )
+                covered_titles.add(full_title.lower())
+
         return pass2_rules
 
     def _attach_sigma_rules(
@@ -1893,7 +2056,8 @@ class Orchestrator:
         started = self.trail.elapsed
         tuner = SigmaSelfTuner(max_iterations=3)
         artifacts = self._source_evidence.artifacts if self._source_evidence is not None else []
-        events = replay_events(self._indicator_records, artifacts)
+        cti_text = self._primary_evidence_text(item)
+        events = replay_events(self._indicator_records, artifacts, cti_text=cti_text)
 
         replayed = validated = tuned = baseline_matches = 0
         for rule in rules:

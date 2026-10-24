@@ -106,3 +106,45 @@ def test_pass2_generates_targeted_rule_for_uncovered_command(
     doc = yaml.safe_load(content)
     assert doc["logsource"] == {"category": "process_creation", "product": "linux"}
     assert doc["detection"]["selection"]["Image|endswith"] == "/nsenter"
+
+
+def test_pass2_generates_targeted_rule_for_uncovered_file_path(
+    settings: Settings, mock_hecate: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    mock_hecate.sigma_generator.return_value = SigmaResult(
+        success=True,
+        rules=[
+            {
+                "logsource_category": "process_creation",
+                "title": "Existing Windows Rule",
+                "filename": "existing.yml",
+                "rule_yaml": REVIEWED,
+            }
+        ],
+        review_gaps=[
+            {
+                "behaviour": "Creation of a rogue cron job for persistence",
+                "quote": "echo '* * * * * root /usr/local/bin/agent' > /etc/cron.d/kworker_audit",
+            }
+        ],
+    )
+    provider = MagicMock()
+    provider.next_item.return_value = CTIItem(
+        content="OTX Pulse: VShell\nDescription: a resume loader with /etc/cron.d/kworker_audit persistence.",
+        source="otx",
+    )
+    result = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
+    assert result.draft_path.exists()
+
+    query_dir = settings.hecate_workspace / "queries" / result.hunt_id
+    pass2_files = list(query_dir.glob("*file_event*.yml"))
+    assert len(pass2_files) >= 1
+    cron_files = [f for f in pass2_files if "kworker_audit" in f.name]
+    assert len(cron_files) == 1
+    content = cron_files[0].read_text()
+    import yaml
+
+    doc = yaml.safe_load(content)
+    assert doc["logsource"] == {"category": "file_event", "product": "linux"}
+    assert "/etc/cron.d/kworker_audit" in doc["detection"]["selection"]["TargetFilename|contains"]

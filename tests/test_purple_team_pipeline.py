@@ -218,3 +218,55 @@ detection:
   condition: selection
 """
     assert replay_rule(rule, events["webserver"], BENIGN_SAMPLE).status == "validated"
+
+
+def test_cloud_audit_and_identity_audit_replay_events() -> None:
+    cti = """The adversary called sts:AssumeRole and sts:AssumeRoleWithWebIdentity.
+    Also executed illicit OAuth consent grant with Directory.ReadWrite.All and Mail.ReadWrite."""
+    artifacts = [
+        SimpleNamespace(
+            value="aws s3 sync s3://target-bucket/ .", kind="command_line", status="active"
+        ),
+        SimpleNamespace(value="Core-CloudHealth-Monitor", kind="application", status="active"),
+    ]
+    events = replay_events([], artifacts, cti_text=cti)
+    assert "cloud_audit" in events
+    assert "identity_audit" in events
+
+    cloud_events = events["cloud_audit"]
+    assert any(e.get("eventName") == "AssumeRole" for e in cloud_events)
+    assert any(e.get("eventSource") == "sts.amazonaws.com" for e in cloud_events)
+    assert any(e.get("eventSource") == "s3.amazonaws.com" for e in cloud_events)
+
+    identity_events = events["identity_audit"]
+    assert any(e.get("operationName") == "Consent to application" for e in identity_events)
+
+    # Validate an AWS STS cloud_audit rule
+    sts_rule = """title: Suspicious AWS STS AssumeRole
+logsource:
+  category: cloud_audit
+detection:
+  selection:
+    eventSource: sts.amazonaws.com
+    eventName:
+    - AssumeRole
+    - AssumeRoleWithWebIdentity
+  condition: selection
+"""
+    sts_outcome = replay_rule(sts_rule, cloud_events, BENIGN_SAMPLE)
+    assert sts_outcome.status == "validated"
+    assert sts_outcome.false_positives == 0
+
+    # Validate an Entra ID identity_audit rule
+    entra_rule = """title: Consent to Application with Sensitive Scopes
+logsource:
+  category: identity_audit
+detection:
+  selection:
+    operationName: Consent to application
+    targetResources.modifiedProperties.newValue|contains: Directory.ReadWrite.All
+  condition: selection
+"""
+    entra_outcome = replay_rule(entra_rule, identity_events, BENIGN_SAMPLE)
+    assert entra_outcome.status == "validated"
+    assert entra_outcome.false_positives == 0
