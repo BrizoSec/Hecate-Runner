@@ -2,6 +2,7 @@
 
 Commands:
     hecate-runner run           Execute one orchestrator cycle
+    hecate-runner demo          Run an end-to-end zero-config demonstration cycle
     hecate-runner status        Print state, quota, config summary
     hecate-runner metrics       Summarize stage latency and LLM usage
     hecate-runner config        Dump effective config (redacts secrets)
@@ -26,7 +27,7 @@ import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from dotenv import dotenv_values
@@ -174,6 +175,25 @@ def _print_result(result: RunResult) -> None:
         console.print(f"[bold]Research ID:[/bold] {result.research_id}")
     if result.draft_path:
         console.print(f"[bold]Draft path:[/bold] {result.draft_path}")
+
+
+@app.command()
+def demo(
+    keep: Annotated[
+        bool,
+        typer.Option("--keep", help="Preserve the temporary demonstration workspace on disk."),
+    ] = False,
+) -> None:
+    """Run an end-to-end demonstration cycle with bundled fixtures and mock providers.
+
+    Requires no API keys, no LLM, and no network access. Creates a temporary workspace,
+    processes a sample CTI item through research, hypothesis generation, ATT&CK mapping,
+    grounding audit, and Sigma drafting, and displays the resulting draft hunt.
+    """
+    from hecate_runner.demo import run_demo
+
+    exit_code, _ = run_demo(keep=keep, console=console)
+    raise typer.Exit(code=exit_code)
 
 
 @app.command()
@@ -819,10 +839,34 @@ def watch(
 
 
 @app.command()
-def status() -> None:
+def status(
+    json_output: Annotated[bool, typer.Option("--json", help="Emit status as JSON.")] = False,
+) -> None:
     """Show quota, last run, and total drafts."""
     settings = Settings()
     state = OrchestratorState.load(settings.state_file)
+    from hecate_runner.parked_store import list_parked
+
+    parked_count = len(list_parked(settings.cti_queue_dir_resolved))
+
+    if json_output:
+        data = {
+            "version": __version__,
+            "hecate_workspace": str(settings.hecate_workspace),
+            "cti_provider": settings.cti_provider,
+            "cti_queue_dir": str(settings.cti_queue_dir_resolved),
+            "model": _effective_model(settings),
+            "drafts_today": state.drafts_today,
+            "max_drafts_per_day": settings.max_drafts_per_day,
+            "research_runs_today": state.research_runs_today,
+            "max_research_runs_per_day": settings.max_research_runs_per_day,
+            "total_drafts_ever": state.total_drafts_ever,
+            "last_run": state.last_run_iso,
+            "consecutive_failures": state.consecutive_failures,
+            "parked_drafts": parked_count,
+        }
+        typer.echo(json.dumps(data, indent=2))
+        return
 
     table = Table(title="hecate-runner status", show_header=False)
     table.add_column("key", style="cyan")
@@ -841,10 +885,6 @@ def status() -> None:
     table.add_row("Total drafts ever", str(state.total_drafts_ever))
     table.add_row("Last run", state.last_run_iso or "(never)")
     table.add_row("Consecutive failures", str(state.consecutive_failures))
-
-    from hecate_runner.parked_store import list_parked
-
-    parked_count = len(list_parked(settings.cti_queue_dir_resolved))
     table.add_row("Parked drafts", str(parked_count))
     console.print(table)
 
@@ -859,10 +899,18 @@ def metrics(
         str | None,
         typer.Option("--source", help="Filter to one CTI provider, e.g. rss or misp"),
     ] = None,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Emit aggregated metrics as JSON.")
+    ] = False,
 ) -> None:
     """Summarize stage latency and estimated LLM cost by CTI source."""
     settings = Settings()
     rows = MetricsStore(settings.metrics_file).aggregate(days=days, source=source)
+
+    if json_output:
+        typer.echo(json.dumps(rows or [], indent=2))
+        return
+
     if not rows:
         console.print("No stage metrics found for that period.")
         return
@@ -1062,7 +1110,11 @@ def reset(
 
 
 @app.command()
-def config() -> None:
+def config(
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Emit effective settings as plain JSON.")
+    ] = False,
+) -> None:
     """Dump effective settings as JSON (safe for pasting into an issue)."""
     settings = Settings()
     dumped = settings.redacted_dict()
@@ -1074,7 +1126,10 @@ def config() -> None:
         "log_file": str(settings.log_file),
         "state_file": str(settings.state_file),
     }
-    console.print_json(json.dumps(dumped))
+    if json_output:
+        typer.echo(json.dumps(dumped, indent=2))
+    else:
+        console.print_json(json.dumps(dumped))
 
 
 @app.command(name="slack-test")
@@ -1095,24 +1150,48 @@ def slack_test() -> None:
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Emit deployment health check as JSON.")
+    ] = False,
+) -> None:
     """Sanity-check the deployment. Non-zero exit code if anything is off."""
     settings = Settings()
     problems: list[str] = []
+    checks: list[dict[str, Any]] = []
 
     def check(condition: bool, label: str, remediation: str) -> None:
-        status_mark = "[green]✓[/green]" if condition else "[red]✗[/red]"
-        console.print(f"{status_mark} {label}")
+        checks.append(
+            {
+                "name": label,
+                "status": "pass" if condition else "fail",
+                "severity": "error",
+                "remediation": remediation if not condition else None,
+            }
+        )
+        if not json_output:
+            status_mark = "[green]✓[/green]" if condition else "[red]✗[/red]"
+            console.print(f"{status_mark} {label}")
+            if not condition:
+                console.print(f"    [yellow]fix:[/yellow] {remediation}")
         if not condition:
-            console.print(f"    [yellow]fix:[/yellow] {remediation}")
             problems.append(label)
 
     def warn(condition: bool, label: str, remediation: str) -> None:
         """Like `check`, but doesn't fail the command or set a non-zero exit."""
-        status_mark = "[green]✓[/green]" if condition else "[yellow]![/yellow]"
-        console.print(f"{status_mark} {label}")
-        if not condition:
-            console.print(f"    [yellow]note:[/yellow] {remediation}")
+        checks.append(
+            {
+                "name": label,
+                "status": "pass" if condition else "warn",
+                "severity": "warning",
+                "remediation": remediation if not condition else None,
+            }
+        )
+        if not json_output:
+            status_mark = "[green]✓[/green]" if condition else "[yellow]![/yellow]"
+            console.print(f"{status_mark} {label}")
+            if not condition:
+                console.print(f"    [yellow]note:[/yellow] {remediation}")
 
     check(
         settings.hecate_workspace.exists(),
@@ -1235,10 +1314,34 @@ def doctor() -> None:
             "before running `hecate-runner approve` against it.",
         )
     else:
-        console.print(
-            f"[dim]i Query provider is '{settings.query_provider}' — `hecate-runner approve` cannot touch a real "
-            "system yet. Set HECATE_RUNNER_QUERY_PROVIDER=splunk once real access exists.[/dim]"
+        checks.append(
+            {
+                "name": f"Query provider is '{settings.query_provider}'",
+                "status": "info",
+                "severity": "info",
+                "remediation": None,
+            }
         )
+        if not json_output:
+            console.print(
+                f"[dim]i Query provider is '{settings.query_provider}' — `hecate-runner approve` cannot touch a real "
+                "system yet. Set HECATE_RUNNER_QUERY_PROVIDER=splunk once real access exists.[/dim]"
+            )
+
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": len(problems) == 0,
+                    "problems": problems,
+                    "checks": checks,
+                },
+                indent=2,
+            )
+        )
+        if problems:
+            raise typer.Exit(code=1)
+        return
 
     if problems:
         console.print(f"\n[red]{len(problems)} problem(s) found[/red]")

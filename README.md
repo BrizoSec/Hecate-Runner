@@ -16,9 +16,37 @@ for the design and its diagrams. This README is the operating reference.
 
 Runs as a systemd timer on a hunting host, or by hand: `hecate-runner run` takes the next item from the configured feeds, and `hecate-runner draft` takes intelligence you supply. Both go through the same cycle.
 
+## Component status & production readiness
+
+| Component | Status | Notes |
+|---|---|---|
+| **CTI intake** (`file` / `otx` / `rss` / `misp` / `cisa_kev` / `abuse_ch`) | Live-tested | Ingests, normalizes, dedupes, and cursors real feeds |
+| **Grounding audit** | Live-tested | Multi-point claim verification against primary report and feed |
+| **Sigma drafting** | Live-tested | Deterministic log source derivation, AST validation, pySigma syntax check |
+| **GitHub publisher** | Configured but narrow | Durable SQLite outbox + GitHub App; strict promotion policy |
+| **Splunk query backend** | Not validated against a real SIEM | Unit-tested against a fake binary; defaults to `mock` provider |
+
+## Prerequisites and directory layout
+
+> [!IMPORTANT]
+> **Prerequisites: Access to private Hecate-Core repository**
+> `hecate-runner` is licensed under the MIT license, but it depends on `Hecate-Core` as an in-process library. Currently, `Hecate-Core` lives in a private repository (`BrizoSec/Hecate-Core`). Access requires an authorized GitHub account with repository read permissions or a deploy key (contact the maintainers or BrizoSec team). Once Core is published to PyPI or distributed as tagged wheels, Runner will pin to a version range.
+>
+> In CI, checkout is automated via a read-only GitHub Deploy Key.
+
+`hecate-runner` and `Hecate-Core` must reside side-by-side in your workspace parent directory:
+
+```text
+~/betas/                # or ~/hecate/
+├── Hecate-Core/        # Core library, workspace (.env, hunts/, queries/, research/)
+└── Hecate-Runner/      # Orchestrator CLI, daemon, and pollers
+```
+
+`uv sync` inside `Hecate-Runner` automatically links Core via the local path dependency `../Hecate-Core` declared in `pyproject.toml`.
+
 ## Design principles
 
-- **Core is a library, the workspace is shared.** `hecate-runner` imports `hecate_agent` and calls it in-process; it does not shell out to the `hecate-agent` CLI. Core's optional dependencies must therefore be installed in the Runner's environment, which `uv sync` does from the sibling `../Hecate-Core` checkout.
+- **Core is a library, the workspace is shared — with one deliberate exception: query execution shells out to the Core CLI.** `hecate-runner` imports `hecate_agent` and calls it in-process for research context, hypothesis generation, and candidate Sigma rule drafting. The one deliberate exception is query execution (`SplunkQueryProvider`), which shells out to `hecate-agent splunk search` (see [Query execution](#query-execution-propose-dont-run)). Core's optional dependencies must therefore be installed in the Runner's environment, which `uv sync` does from the sibling `../Hecate-Core` checkout.
 - **The model proposes, deterministic code disposes.** Every model output is checked by ordinary code before it reaches a draft.
 - **Human-in-the-loop by default.** Every generated hunt is `status: planning` with a "review required" banner. Nothing auto-executes.
 - **Guardrails first.** Daily draft and research quotas, hard timeouts on LLM calls, structured logs, per-run state persistence.
@@ -210,8 +238,22 @@ Guardrails (`HECATE_RUNNER_MAX_QUERY_TIME_RANGE_DAYS`, default 7; `HECATE_RUNNER
 
 ## Quickstart (local dev)
 
+### Zero-config demo (try it in 5 seconds)
+
+Run a complete, isolated end-to-end hunting cycle with mock providers — no LLM keys, no network access, and no pre-existing workspace required:
+
 ```bash
-# Clone both repositories side by side: the Runner depends on ../Hecate-Core
+# Run full cycle against bundled CTI fixture in a temporary workspace
+uv run hecate-runner demo
+
+# Or leave demo artifacts in /tmp for manual inspection:
+uv run hecate-runner demo --keep
+```
+
+### Full local setup
+
+```bash
+# Clone both repositories side by side: Runner depends on ../Hecate-Core
 git clone https://github.com/BrizoSec/Hecate-Core.git
 git clone https://github.com/BrizoSec/Hecate-Runner.git
 cd Hecate-Runner
@@ -219,21 +261,29 @@ cd Hecate-Runner
 # uv installs Python + venv + deps in one shot
 uv sync --dev
 
-# Copy env template and edit
+# Copy env template and point HECATE_WORKSPACE at your Hecate-Core checkout
 cp .env.example .env
-# edit .env to point HECATE_WORKSPACE at wherever your Hecate workspace lives
+$EDITOR .env
 
-# Run tests
-uv run pytest
+# Verify the deployment before doing anything
+uv run hecate-runner doctor
 
 # Preview an orchestrator cycle (uses your local Hecate workspace)
 uv run hecate-runner run --dry-run
 
-# Real run (researches, generates a hypothesis and writes a draft hunt)
+# Real run (researches, generates a hypothesis, and writes a draft hunt)
 uv run hecate-runner run
 
 # Or draft from intelligence you already have, skipping the feeds
 uv run hecate-runner draft --file intel.txt --url https://example.com/the-report
+```
+
+### Verification
+
+Run the isolated test suite locally (no network and no LLM required):
+
+```bash
+uv run pytest
 ```
 
 ## Deploy to k3s-core
@@ -265,6 +315,22 @@ sudo systemctl start hecate-runner-orchestrator.service
 sudo systemctl enable --now hecate-runner-orchestrator.timer
 sudo systemctl list-timers hecate-runner-orchestrator.timer
 ```
+
+## CTI providers
+
+`hecate-runner` can ingest intelligence from multiple upstream sources or continuous rotations. Use this decision matrix to determine the right provider for your hunting objectives:
+
+### Provider selection matrix
+
+| Provider | Shape | Best for | Caveat |
+|---|---|---|---|
+| `rss` | Behavioral | General hunting from threat intelligence research blogs | Summaries lack IOCs; needs linked report fetch (`HECATE_RUNNER_SOURCE_EVIDENCE_ENABLED=true`) |
+| `misp` | Behavioral (curated) | Organizations with MISP feeds or CIRCL | One high-volume feed can bury others; use `MISP_ORG_ALLOWLIST` and `MISP_REQUIRE_GALAXY` |
+| `otx` | Mixed | Broad coverage across community pulses | Crowdsourced noise; filter by TLP and MITRE ATT&CK mapping |
+| `cisa_kev` | Vulnerability | Exploitation tracking and patch prioritization | Single CVE scope; not broad TTP hunts |
+| `abuse_ch` | Indicator dump | Rapid IOC sweeps (ThreatFox) | No behavior; deterministic indicator inventory without hypothesis generation |
+| `multi` | Rotation | Continuous production hunting across multiple sources | Requires per-source cursors; cycles through enabled feeds automatically |
+| `file` | Queued / Manual | Ad-hoc drop-ins or custom ingestion pipelines | Requires an external feeder script or human dropping text blurbs |
 
 ### Optional: AlienVault OTX CTI provider
 
@@ -403,22 +469,108 @@ Key ones:
 | `HECATE_RUNNER_MAX_QUERY_LIMIT` | Hard ceiling on a proposed query's result limit | `1000` |
 | `HECATE_RUNNER_SLACK_WEBHOOK_URL` | Slack incoming webhook — posts on every draft creation, no-op if unset | — |
 
+### Cost and rate-limit budget
+
+`HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY=7` and `HECATE_RUNNER_MAX_DRAFTS_PER_DAY=4` provide sensible operational defaults, but spend depends on research depth and enabled stages:
+
+| Stage | Calls per Run | Typical Duration | Est. Cost (Advanced Depth) |
+|---|---|---|---|
+| **Source evidence extraction** | 1 LLM call | ~10-30s | ~$0.01 - $0.03 |
+| **Research context** (Tavily search + synthesis) | 1-2 LLM calls + web searches | ~5-15m | ~$0.05 - $0.15 |
+| **Hypothesis generation** | 1 LLM call | ~30-60s | ~$0.04 - $0.10 |
+| **Sigma rule drafting** (1-3 rules) | 1-3 LLM calls | ~30-90s | ~$0.02 - $0.06 |
+| **Sigma review** (grounding check per rule) | 2-4 LLM calls | ~30-60s | ~$0.04 - $0.08 |
+| **Total per successful cycle** | **~5-11 model calls** | **~8-20m** | **~$0.15 - $0.45** |
+
+#### Worked daily budget example
+At defaults with research and Sigma review enabled:
+- **Typical single cycle:** ~5 to 11 model calls, ~$0.15 to $0.45.
+- **Daily ceiling (4 drafts, 7 research runs):** ~25 to 50 model calls / day (~$1.00 to $3.50/day depending on underlying LLM model pricing).
+- Run `uv run hecate-runner metrics` or `uv run hecate-runner metrics --json` to inspect actual stage latencies and estimated costs aggregated from `logs/stage_metrics.jsonl`.
+- Live per-call tokens and latency can be monitored mid-cycle via `logs/llm_calls.jsonl` or `hecate-agent monitor`.
+
 ## Operating it
 
 Beyond `run` and the pollers, the CLI covers the things you reach for when a
 cycle looks wrong:
 
 ```bash
+hecate-runner demo       # run isolated zero-config end-to-end cycle (mock providers, no LLM)
 hecate-runner draft      # draft from intelligence you supply (text, --file or stdin), same cycle as `run`
 hecate-runner watch      # follow the decision trail of the running cycle, line by line
-hecate-runner status     # quota used today, last run, total drafts
-hecate-runner metrics    # stage latency and estimated LLM cost, by CTI source
-hecate-runner doctor     # sanity-check the deployment; non-zero exit if anything is off
-hecate-runner config     # effective settings as JSON, safe to paste into an issue
+hecate-runner status     # quota used today, last run, total drafts (--json supported)
+hecate-runner metrics    # stage latency and estimated LLM cost, by CTI source (--json supported)
+hecate-runner doctor     # sanity-check the deployment; non-zero exit if anything is off (--json supported)
+hecate-runner config     # effective settings as JSON, safe to paste into an issue (--json supported)
 hecate-runner parked     # list / show / restore CTI held back by triage
 hecate-runner sources    # list / enable / disable / reset cursors, editing .env in place
 hecate-runner reset      # return the workspace to a blank state for a fresh evaluation
 ```
+
+### JSON output for automation and monitoring
+
+The `status`, `metrics`, `doctor`, and `config` commands support the `--json` flag to emit parseable JSON for operational dashboards, Prometheus node exporters, or alerting scripts without parsing table borders:
+
+```bash
+# Ingest daily quotas and draft counts into telemetry
+uv run hecate-runner status --json
+
+# Feed stage latencies and estimated LLM spend into Prometheus or Grafana
+uv run hecate-runner metrics --json --days 30
+
+# Automate health checks in CI or monitoring daemons (exits 1 on failure, outputs structured check results)
+uv run hecate-runner doctor --json
+
+# Dump sanitized configuration dictionary for state auditing
+uv run hecate-runner config --json
+```
+
+### Recovering from a bad cycle
+
+When an automated cycle produces an unexpected draft or trips an audit gate, use the following operational procedures to recover:
+
+#### Scenario 1: A draft was created with an unsupported CVE or technique claim
+1. **Identify the claim gap:** Run a strict audit against the hunt:
+   ```bash
+   uv run hecate-runner audit H-0042 --strict
+   ```
+   If any claim traces to no primary source, the command exits with code 1.
+2. **Inspect the audit trail:** Open the generated hunt (`hunts/YYYY/Qn/H-0042.md`) and examine the **Grounding** and **Claim Evidence References** tables. Check whether the unverified claim was derived from secondary context or a failed report fetch.
+3. **Re-audit and update:** If source evidence was subsequently fetched or corrected, update the hunt's grounding block:
+   ```bash
+   uv run hecate-runner audit H-0042 --update --check-attack
+   ```
+
+#### Scenario 2: An important CTI item was parked by intake triage
+Intake triage automatically parks commentary, news summaries, or non-behavioral articles into `<cti_queue>/parked/` instead of discarding them.
+1. **List parked items:**
+   ```bash
+   uv run hecate-runner parked list
+   ```
+2. **Inspect the triage reason:**
+   ```bash
+   uv run hecate-runner parked show <parked-id>
+   ```
+3. **Restore for next cycle:** If the item was parked in error (e.g., commentary containing actionable TTPs):
+   ```bash
+   uv run hecate-runner parked restore <parked-id>
+   ```
+   The item returns to `cti_queue/next.txt` and will be processed on the next cycle.
+
+#### Scenario 3: Feed ingestion skipped events or cursor rewind needed
+1. **Inspect current provider status and cursors:**
+   ```bash
+   uv run hecate-runner status --json
+   uv run hecate-runner sources list
+   ```
+2. **Rewind the cursor:** To re-process items that were walked past by an overly restrictive galaxy filter or allowlist:
+   ```bash
+   uv run hecate-runner sources reset <source-name>
+   ```
+3. **Clean workspace reset (dev/eval only):** To return a test workspace to a pristine blank state:
+   ```bash
+   uv run hecate-runner reset
+   ```
 
 For a full-screen view of a running cycle, run `hecate-agent monitor` from the
 workspace: the stage in hand, the trail, host load, the queue, and model usage.

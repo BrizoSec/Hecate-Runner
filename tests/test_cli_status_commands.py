@@ -73,6 +73,17 @@ class TestStatusCommand:
         assert "0 / 4" in result.stdout
         assert "(never)" in result.stdout
 
+    def test_json_flag_emits_structured_data(self, cli_env: Path) -> None:
+        result = runner.invoke(app, ["status", "--json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert data["version"] == "0.1.0"
+        assert data["drafts_today"] == 0
+        assert data["max_drafts_per_day"] == 4
+        assert "hecate_workspace" in data
+        assert "cti_provider" in data
+
 
 class TestConfigCommand:
     def test_dumps_valid_json_with_derived_paths(self, cli_env: Path) -> None:
@@ -90,6 +101,14 @@ class TestConfigCommand:
         result = runner.invoke(app, ["config"])
 
         assert "super-secret-value" not in result.stdout
+
+    def test_json_flag_emits_valid_json(self, cli_env: Path) -> None:
+        result = runner.invoke(app, ["config", "--json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert "_derived" in data
+        assert "hunts_root" in data["_derived"]
 
 
 class TestDoctorCommand:
@@ -269,3 +288,52 @@ class TestDoctorCommand:
         result = runner.invoke(app, ["doctor"])
 
         assert result.exit_code == 0
+
+    def test_doctor_json_output(self, cli_env: Path) -> None:
+        result = runner.invoke(app, ["doctor", "--json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert data["ok"] is True
+        assert data["problems"] == []
+        assert isinstance(data["checks"], list)
+        assert any(c["name"].startswith("Hecate workspace exists") for c in data["checks"])
+
+    def test_doctor_json_output_with_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HECATE_WORKSPACE", str(tmp_path / "does-not-exist"))
+        monkeypatch.setenv("HECATE_RUNNER_RSS_FEED_URLS", "https://example.com/feed")
+
+        result = runner.invoke(app, ["doctor", "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.stdout)
+        assert data["ok"] is False
+        assert len(data["problems"]) > 0
+
+
+class TestMetricsCommand:
+    def test_metrics_json_output_empty(self, cli_env: Path) -> None:
+        result = runner.invoke(app, ["metrics", "--json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert isinstance(data, list)
+
+
+class TestDemoCommand:
+    def test_demo_runs_successfully(self) -> None:
+        result = runner.invoke(app, ["demo"])
+
+        assert result.exit_code == 0
+        assert "Zero-Config Demonstration" in result.stdout
+        assert "Demo Hunt Summary" in result.stdout
+        assert "H-0001" in result.stdout
+
+    def test_demo_keep_flag(self) -> None:
+        result = runner.invoke(app, ["demo", "--keep"])
+
+        assert result.exit_code == 0
+        assert "Workspace preserved at:" in result.stdout
+        assert "/tmp/hecate-demo-" in result.stdout
