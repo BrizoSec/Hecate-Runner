@@ -31,6 +31,7 @@ def cli_env(workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))
     monkeypatch.setenv("HECATE_RUNNER_RSS_FEED_URLS", "https://example.com/feed")
     monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")
+    (workspace / ".env").touch()
     return workspace
 
 
