@@ -17,11 +17,14 @@ import httpx
 
 from hecate_runner.config import Settings
 from hecate_runner.slack_blocks import (
+    build_detection_engineering_digest_card,
     build_draft_card,
     build_hunt_completed_card,
     build_ops_metrics_card,
     build_purple_team_card,
+    build_threat_hunting_digest_card,
     build_threat_intake_card,
+    build_threat_intel_digest_card,
 )
 
 if TYPE_CHECKING:
@@ -118,6 +121,25 @@ class SlackNotificationRouter:
                 data = resp.json()
                 if not data.get("ok"):
                     error_msg = str(data.get("error") or "Unknown Slack API error")
+                    if error_msg == "channel_not_found" and channel != "#all-hecate-hunt":
+                        log.info(
+                            "Channel %s not found in workspace; attempting fallback to #all-hecate-hunt",
+                            channel,
+                        )
+                        fallback_payload = dict(payload)
+                        fallback_payload["channel"] = "#all-hecate-hunt"
+                        try:
+                            fb_resp = (
+                                self._client.post(url, headers=headers, json=fallback_payload)
+                                if self._client is not None
+                                else httpx.post(url, headers=headers, json=fallback_payload, timeout=10.0)
+                            )
+                            if fb_resp.is_success and fb_resp.json().get("ok"):
+                                log.info("Successfully delivered fallback notification to #all-hecate-hunt")
+                                return True, f"Channel {channel} not found; fallback delivered to #all-hecate-hunt."
+                        except Exception as fb_exc:
+                            log.debug("Fallback delivery to #all-hecate-hunt failed: %s", fb_exc)
+
                     log.warning(
                         "Slack API postMessage to %s failed: %s; payload text: %s",
                         channel,
@@ -309,6 +331,75 @@ def notify_ops_metrics(
     router.post_message(target_channel, text, attachments=attachments)
 
 
+def notify_detection_digest(
+    settings: Settings,
+    data: dict[str, Any],
+    channel: str | None = None,
+) -> tuple[bool, str]:
+    """Post Daily Detection Engineering Digest to Slack."""
+    router = SlackNotificationRouter(settings)
+    if not router.is_configured:
+        return False, "Slack unconfigured."
+
+    total_rules = data.get("total_sigma_rules", 0)
+    pass_rate = data.get("pass_rate_pct", "100%")
+    target_channel = channel or settings.slack_channel_detection_engineering
+
+    text = (
+        f":shield: *Hecate Daily Detection Engineering Digest*\n"
+        f"*Total Sigma Rules:* `{total_rules:,}` | *Purple Team Pass Rate:* `{pass_rate}`\n"
+        f"Delivered to `{target_channel}`."
+    )
+    attachments = build_detection_engineering_digest_card(data)
+    return router.post_message(target_channel, text, attachments=attachments)
+
+
+def notify_threat_intel_digest(
+    settings: Settings,
+    data: dict[str, Any],
+    channel: str | None = None,
+) -> tuple[bool, str]:
+    """Post Daily Threat Intelligence Digest to Slack."""
+    router = SlackNotificationRouter(settings)
+    if not router.is_configured:
+        return False, "Slack unconfigured."
+
+    sources_count = data.get("total_sources_count", 0)
+    research_count = data.get("recent_research_count", 0)
+    target_channel = channel or settings.slack_channel_threat_intel
+
+    text = (
+        f":rotating_light: *Hecate Daily Threat Intelligence Digest*\n"
+        f"*Active Feeds:* `{sources_count}` | *New Research Contexts (24h):* `{research_count}`\n"
+        f"Delivered to `{target_channel}`."
+    )
+    attachments = build_threat_intel_digest_card(data)
+    return router.post_message(target_channel, text, attachments=attachments)
+
+
+def notify_threat_hunting_digest(
+    settings: Settings,
+    data: dict[str, Any],
+    channel: str | None = None,
+) -> tuple[bool, str]:
+    """Post Daily Threat Hunting Digest to Slack."""
+    router = SlackNotificationRouter(settings)
+    if not router.is_configured:
+        return False, "Slack unconfigured."
+
+    recent_hunts = data.get("recent_hunts_count", 0)
+    total_hunts = data.get("total_hunts", 0)
+    target_channel = channel or settings.slack_channel_threat_hunting
+
+    text = (
+        f":dart: *Hecate Daily Threat Hunting Digest*\n"
+        f"*Hunts Executed (24h):* `{recent_hunts}` | *Total Library:* `{total_hunts:,}`\n"
+        f"Delivered to `{target_channel}`."
+    )
+    attachments = build_threat_hunting_digest_card(data)
+    return router.post_message(target_channel, text, attachments=attachments)
+
+
 def send_test_notification(
     settings: Settings, channel: str | None = None
 ) -> tuple[bool, str]:
@@ -329,11 +420,14 @@ def send_test_notification(
 
 
 def send_test_all_channels(settings: Settings) -> dict[str, tuple[bool, str]]:
-    """Test connectivity across all 8 configured Slack channels."""
+    """Test connectivity across all 11 configured Slack channels."""
     channels = [
         settings.slack_channel_ops_metrics,
         settings.slack_channel_hunts_exec,
         settings.slack_channel_purple_team,
+        settings.slack_channel_detection_engineering,
+        settings.slack_channel_threat_intel,
+        settings.slack_channel_threat_hunting,
         settings.slack_channel_exploits,
         settings.slack_channel_sandbox,
         settings.slack_channel_apt,

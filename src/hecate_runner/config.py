@@ -563,6 +563,21 @@ class Settings(BaseSettings):
         alias="SLACK_CHANNEL_C2",
         description="Slack channel for C2 beacon infrastructure, Cobalt Strike clusters, and fingerprints.",
     )
+    slack_channel_detection_engineering: str = Field(
+        default="#detection-engineering",
+        alias="SLACK_CHANNEL_DETECTION_ENGINEERING",
+        description="Slack channel for Detection Engineering daily digests and Sigma rule updates.",
+    )
+    slack_channel_threat_intel: str = Field(
+        default="#threat-intel",
+        alias="SLACK_CHANNEL_THREAT_INTEL",
+        description="Slack channel for Threat Intelligence daily digests and incoming CTI telemetry.",
+    )
+    slack_channel_threat_hunting: str = Field(
+        default="#threat-hunting",
+        alias="SLACK_CHANNEL_THREAT_HUNTING",
+        description="Slack channel for Threat Hunting daily digests and campaign outcomes.",
+    )
 
     # --- Auxiliary CTI & Enrichment keys --------------------------------------
     urlscan_api_key: str | None = Field(

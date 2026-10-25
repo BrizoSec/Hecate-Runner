@@ -17,6 +17,7 @@ COLOR_SUCCESS = "#2EB886"  # Emerald green (Validated hunt, detection passed)
 COLOR_INFO = "#3AA3E3"     # Cerulean blue (Metrics, telemetry, digest)
 COLOR_WARNING = "#ECB22E"  # Amber yellow (Planning draft, review required, telemetry gap)
 COLOR_CRITICAL = "#E01E5A" # Crimson red (Critical exploit spike, weaponization alert)
+COLOR_PURPLE = "#7928CA"   # Aubergine / Purple (Purple team, threat hunting)
 
 
 def build_draft_card(result: RunResult) -> list[dict[str, Any]]:
@@ -379,3 +380,213 @@ def build_ops_metrics_card(metrics_summary: dict[str, Any]) -> list[dict[str, An
     ]
 
     return [{"color": COLOR_INFO, "blocks": blocks}]
+
+
+def build_detection_engineering_digest_card(
+    data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Build a Daily Detection Engineering Digest card."""
+    total_rules = data.get("total_sigma_rules", 0)
+    rules_validated = data.get("rules_validated_24h", 0)
+    rules_evaluated = data.get("rules_evaluated_24h", 0)
+    pass_rate = data.get("pass_rate_pct", "100%")
+    top_tactics = ", ".join(data.get("top_tactics", [])[:3]) or "Execution, Persistence"
+    platforms = ", ".join(data.get("platforms", [])[:4]) or "Enterprise"
+
+    recent_rules = data.get("recent_rules", [])
+    rules_md_lines = []
+    for r in recent_rules[:4]:
+        tech = f" [`{r['technique']}`]" if r.get("technique") and r["technique"] != "N/A" else ""
+        rules_md_lines.append(f"• *{r['title']}*{tech}\n  ↳ `{r['file']}`")
+    rules_md = "\n".join(rules_md_lines) or "No new rules validated in lookback window."
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "🛡️ Daily Detection Engineering Digest",
+                "emoji": True,
+            },
+        },
+        {
+            "type": "section",
+            "fields": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Total Sigma Rules:*\n*{total_rules:,} rules in library*",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Purple Team Pass Rate:*\n*{pass_rate}* ({rules_validated}/{rules_evaluated} validated)",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Primary MITRE Tactics:*\n`{top_tactics}`",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Target Platforms:*\n`{platforms}`",
+                },
+            ],
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Recently Validated Detections (24h):*\n{rules_md}",
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "🔍 *Detection Engine:* Continuous CI/CD validation | Automated Sigma & PyTest passes",
+                }
+            ],
+        },
+    ]
+
+    return [{"color": COLOR_SUCCESS, "blocks": blocks}]
+
+
+def build_threat_intel_digest_card(
+    data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Build a Daily Threat Intelligence Digest card."""
+    active_sources = data.get("active_sources", [])
+    total_research = data.get("total_research_count", 0)
+    recent_research = data.get("recent_research_count", 0)
+    cves_count = data.get("cves_tracked_count", 0)
+    cves_sample = ", ".join(f"`{c}`" for c in data.get("cves_sample", [])[:3]) or "None active"
+    misp_status = "🟢 Connected & Syncing" if data.get("misp_sync_active") else "⚪ Offline"
+
+    recent_topics = data.get("recent_topics", [])
+    topics_md_lines = []
+    for t in recent_topics[:4]:
+        topics_md_lines.append(f"• *{t['id']}*: {t['topic']} `[{t['complexity'].upper()}]`")
+    topics_md = "\n".join(topics_md_lines) or "No threat research items generated in lookback window."
+
+    sources_str = ", ".join(f"`{s}`" for s in active_sources) or "No sources active"
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "🚨 Daily Threat Intelligence Digest",
+                "emoji": True,
+            },
+        },
+        {
+            "type": "section",
+            "fields": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Active Feeds ({len(active_sources)}):*\n{sources_str}",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*MISP Telemetry:*\n{misp_status}",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Research Contexts:*\n*{recent_research} new* (Total: {total_research:,})",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*High-Weapon CVEs:*\n*{cves_count} tracked* ({cves_sample})",
+                },
+            ],
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Threat Research & Campaign Spotlights:*\n{topics_md}",
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "🌐 *CTI Feed Health:* Live polling active across Sandbox, Exploits, APT & Cloud feeds",
+                }
+            ],
+        },
+    ]
+
+    return [{"color": COLOR_CRITICAL, "blocks": blocks}]
+
+
+def build_threat_hunting_digest_card(
+    data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Build a Daily Threat Hunting Digest card."""
+    total_hunts = data.get("total_hunts", 0)
+    recent_hunts = data.get("recent_hunts_count", 0)
+    spend_today = float(data.get("spend_today_usd", 0.0))
+    daily_budget = float(data.get("daily_budget_usd", 20.0))
+    budget_pct = data.get("budget_pct", "0.0%")
+    status_counts = data.get("status_counts", {})
+    planning = status_counts.get("planning", 0)
+    promoted = status_counts.get("promoted", 0) + status_counts.get("completed", 0)
+
+    hunt_spotlights = data.get("hunt_spotlights", [])
+    spotlights_md_lines = []
+    for h in hunt_spotlights[:4]:
+        spotlights_md_lines.append(f"• *{h['id']}*: {h['title']} `[{h['status']}]`")
+    spotlights_md = "\n".join(spotlights_md_lines) or "No active hunt operations in lookback window."
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "🎯 Daily Threat Hunting Digest",
+                "emoji": True,
+            },
+        },
+        {
+            "type": "section",
+            "fields": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Hunts Executed (24h):*\n*{recent_hunts} runs* (Total: {total_hunts:,})",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Campaign Pipeline:*\n*{planning} in planning* | *{promoted} promoted*",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*LLM Spend / Budget:*\n*${spend_today:.2f}* / ${daily_budget:.2f} ({budget_pct})",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": "*Hunter Engine:*\n`hecate-runner autonomous`",
+                },
+            ],
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Recent Hunt Operations & Hypotheses:*\n{spotlights_md}",
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "🎯 *Hunt Status:* Autonomous hypothesis evaluation, telemetry sweep & query generation",
+                }
+            ],
+        },
+    ]
+
+    return [{"color": COLOR_PURPLE, "blocks": blocks}]
+

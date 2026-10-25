@@ -29,6 +29,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
+import httpx
 import typer
 from dotenv import dotenv_values
 from hecate_agent.core.grounding import TechniqueFact, render_grounding_section
@@ -40,6 +41,11 @@ from hecate_runner import __version__
 from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.config import Settings
 from hecate_runner.cti.base import CTIItem
+from hecate_runner.digests import (
+    collect_detection_engineering_metrics,
+    collect_threat_hunting_metrics,
+    collect_threat_intel_metrics,
+)
 from hecate_runner.github_publisher import enqueue_hunt, outbox_status, sync_outbox
 from hecate_runner.hecate_client import HecateClient
 from hecate_runner.hunt_audit import (
@@ -52,7 +58,10 @@ from hecate_runner.log_rotation import rotate_log_if_needed
 from hecate_runner.metrics import MetricsStore
 from hecate_runner.misp_poller import run_misp_poll
 from hecate_runner.notifications import (
+    notify_detection_digest,
     notify_ops_metrics,
+    notify_threat_hunting_digest,
+    notify_threat_intel_digest,
     send_test_all_channels,
     send_test_notification,
 )
@@ -1166,6 +1175,24 @@ def slack_channels() -> None:
         "Adversary emulation validation, detection firing rates",
     )
     table.add_row(
+        "Tier 1",
+        settings.slack_channel_detection_engineering,
+        "Detection Engineering",
+        "Daily digest, validated Sigma rules, Purple Team pass rates",
+    )
+    table.add_row(
+        "Tier 1",
+        settings.slack_channel_threat_intel,
+        "Threat Intelligence",
+        "Daily CTI digest, ingested research, CVE/EPSS telemetry",
+    )
+    table.add_row(
+        "Tier 1",
+        settings.slack_channel_threat_hunting,
+        "Threat Hunting",
+        "Daily hunt digest, campaign execution, hypotheses promoted",
+    )
+    table.add_row(
         "Tier 2",
         settings.slack_channel_exploits,
         "Exploits & EPSS",
@@ -1334,6 +1361,228 @@ def ops_digest(
         console.print(f"[dim]Posting visual ops digest to {target}...[/dim]")
         notify_ops_metrics(settings, metrics_summary, channel=target)
         console.print(f"[green]✓ Ops digest posted to {target} successfully.[/green]")
+
+
+@app.command(name="setup-slack-channels")
+def setup_slack_channels() -> None:
+    """Verify or attempt creation of Detection Engineering, Threat Intel, and Threat Hunting Slack channels."""
+    settings = Settings()
+    if not settings.slack_bot_token:
+        console.print("[red]SLACK_BOT_TOKEN is required to check or configure Slack channels.[/red]")
+        raise typer.Exit(code=1)
+
+    target_channels = [
+        ("Detection Engineering", settings.slack_channel_detection_engineering),
+        ("Threat Intel", settings.slack_channel_threat_intel),
+        ("Threat Hunting", settings.slack_channel_threat_hunting),
+        ("Ops Metrics", settings.slack_channel_ops_metrics),
+        ("Executive Hunts", settings.slack_channel_hunts_exec),
+        ("Purple Team", settings.slack_channel_purple_team),
+    ]
+
+    console.print("[dim]Querying workspace public channels...[/dim]")
+    headers = {"Authorization": f"Bearer {settings.slack_bot_token}"}
+    existing_channels: dict[str, str] = {}
+    try:
+        resp = httpx.get(
+            "https://slack.com/api/conversations.list",
+            headers=headers,
+            params={"types": "public_channel", "limit": 200},
+            timeout=10.0,
+        )
+        data = resp.json()
+        if data.get("ok"):
+            for ch in data.get("channels", []):
+                existing_channels[ch["name"].lower()] = ch["id"]
+        else:
+            console.print(f"[yellow]Warning: Could not list channels: {data.get('error')}[/yellow]")
+    except Exception as exc:
+        console.print(f"[yellow]Warning: conversations.list failed: {exc}[/yellow]")
+
+    table = Table(title="Hecate Specialized Slack Channels Status", box=box.ROUNDED)
+    table.add_column("Domain", style="bold cyan")
+    table.add_column("Channel Name", style="white")
+    table.add_column("Status", style="green")
+    table.add_column("Channel ID / Note", style="dim")
+
+    needs_manual_creation = []
+
+    for domain, ch_raw in target_channels:
+        ch_name = ch_raw.lstrip("#").lower()
+        if ch_name in existing_channels:
+            table.add_row(domain, f"#{ch_name}", "✓ Online (Exists)", existing_channels[ch_name])
+        else:
+            create_resp = httpx.post(
+                "https://slack.com/api/conversations.create",
+                headers=headers,
+                json={"name": ch_name},
+                timeout=10.0,
+            )
+            create_data = create_resp.json()
+            if create_data.get("ok"):
+                new_id = create_data.get("channel", {}).get("id", "Created")
+                table.add_row(domain, f"#{ch_name}", "✓ Created Successfully", new_id)
+            else:
+                err = create_data.get("error", "unknown")
+                if err == "name_taken":
+                    table.add_row(domain, f"#{ch_name}", "✓ Online (Exists)", "Name taken")
+                elif err == "missing_scope":
+                    table.add_row(domain, f"#{ch_name}", "⚠️ Needs Creation", "Missing channels:manage")
+                    needs_manual_creation.append(f"#{ch_name}")
+                else:
+                    table.add_row(domain, f"#{ch_name}", f"⚠️ {err}", "Create failed")
+                    needs_manual_creation.append(f"#{ch_name}")
+
+    console.print(table)
+
+    if needs_manual_creation:
+        console.print()
+        console.print("[bold yellow]To activate these channels:[/bold yellow]")
+        console.print(
+            f"1. In your Slack app or web client, create public channels: [bold]{', '.join(needs_manual_creation)}[/bold]"
+        )
+        console.print(
+            "[dim]Because the bot has `chat:write.public`, it can immediately post to them without needing an invitation.[/dim]"
+        )
+
+
+@app.command(name="daily-digest")
+def daily_digest(
+    domain: Annotated[
+        str,
+        typer.Option(
+            "--domain",
+            "-d",
+            help="Domain to digest: 'all', 'detection', 'intel', or 'hunting'.",
+        ),
+    ] = "all",
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", "-c", help="Override destination Slack channel."),
+    ] = None,
+    hours: Annotated[
+        int,
+        typer.Option("--hours", "-h", help="Lookback window in hours."),
+    ] = 24,
+    post: Annotated[
+        bool,
+        typer.Option(
+            "--post/--no-post",
+            help="Post the visual digest card(s) to Slack.",
+        ),
+    ] = True,
+) -> None:
+    """Generate and post specialized daily digests for Detection Engineering, Threat Intel, and Threat Hunting."""
+    settings = Settings()
+    dom = domain.lower()
+    if dom not in ("all", "detection", "intel", "hunting"):
+        console.print(
+            f"[red]Invalid domain: '{domain}'. Choose 'all', 'detection', 'intel', or 'hunting'.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    # 1. Detection Engineering Digest
+    if dom in ("all", "detection"):
+        det_data = collect_detection_engineering_metrics(settings, hours=hours)
+        table = Table(
+            title=f"Daily Detection Engineering Digest ({hours}h)", box=box.ROUNDED
+        )
+        table.add_column("Metric", style="bold cyan")
+        table.add_column("Value", style="green")
+        table.add_row("Total Sigma Rules", f"{det_data['total_sigma_rules']:,} rules")
+        table.add_row(
+            "Purple Team Pass Rate",
+            f"{det_data['pass_rate_pct']} ({det_data['rules_validated_24h']}/{det_data['rules_evaluated_24h']} validated)",
+        )
+        table.add_row(
+            "Primary MITRE Tactics", ", ".join(det_data["top_tactics"]) or "N/A"
+        )
+        table.add_row(
+            "Target Platforms", ", ".join(det_data["platforms"]) or "Enterprise"
+        )
+        console.print(table)
+
+        if post:
+            target = channel or settings.slack_channel_detection_engineering
+            console.print(
+                f"[dim]Posting Detection Engineering digest to {target}...[/dim]"
+            )
+            success, msg = notify_detection_digest(settings, det_data, channel=target)
+            if success:
+                console.print(f"[green]✓ Detection digest delivered. ({msg})[/green]")
+            else:
+                console.print(f"[yellow]⚠️ Detection digest post note: {msg}[/yellow]")
+
+    # 2. Threat Intel Digest
+    if dom in ("all", "intel"):
+        intel_data = collect_threat_intel_metrics(settings, hours=hours)
+        table = Table(
+            title=f"Daily Threat Intelligence Digest ({hours}h)", box=box.ROUNDED
+        )
+        table.add_column("Metric", style="bold cyan")
+        table.add_column("Value", style="green")
+        table.add_row(
+            "Active CTI Feeds", f"{intel_data['total_sources_count']} sources online"
+        )
+        table.add_row(
+            "New Research Contexts",
+            f"{intel_data['recent_research_count']} (Total: {intel_data['total_research_count']:,})",
+        )
+        table.add_row(
+            "High-Weapon CVEs",
+            f"{intel_data['cves_tracked_count']} tracked ({', '.join(intel_data['cves_sample'][:3]) or 'None'})",
+        )
+        table.add_row(
+            "MISP Synchronization",
+            "🟢 Online" if intel_data["misp_sync_active"] else "⚪ Offline",
+        )
+        console.print(table)
+
+        if post:
+            target = channel or settings.slack_channel_threat_intel
+            console.print(f"[dim]Posting Threat Intel digest to {target}...[/dim]")
+            success, msg = notify_threat_intel_digest(
+                settings, intel_data, channel=target
+            )
+            if success:
+                console.print(f"[green]✓ Threat Intel digest delivered. ({msg})[/green]")
+            else:
+                console.print(f"[yellow]⚠️ Threat Intel digest post note: {msg}[/yellow]")
+
+    # 3. Threat Hunting Digest
+    if dom in ("all", "hunting"):
+        hunt_data = collect_threat_hunting_metrics(settings, hours=hours)
+        table = Table(title=f"Daily Threat Hunting Digest ({hours}h)", box=box.ROUNDED)
+        table.add_column("Metric", style="bold cyan")
+        table.add_column("Value", style="green")
+        table.add_row(
+            "Hunts Executed (24h)",
+            f"{hunt_data['recent_hunts_count']} runs (Total: {hunt_data['total_hunts']:,})",
+        )
+        table.add_row(
+            "Campaign Pipeline",
+            f"{hunt_data['status_counts'].get('planning', 0)} in planning | {hunt_data['status_counts'].get('promoted', 0)} promoted",
+        )
+        table.add_row(
+            "Spend / Daily Budget",
+            f"${hunt_data['spend_today_usd']:.2f} / ${hunt_data['daily_budget_usd']:.2f} ({hunt_data['budget_pct']})",
+        )
+        console.print(table)
+
+        if post:
+            target = channel or settings.slack_channel_threat_hunting
+            console.print(f"[dim]Posting Threat Hunting digest to {target}...[/dim]")
+            success, msg = notify_threat_hunting_digest(
+                settings, hunt_data, channel=target
+            )
+            if success:
+                console.print(
+                    f"[green]✓ Threat Hunting digest delivered. ({msg})[/green]"
+                )
+            else:
+                console.print(
+                    f"[yellow]⚠️ Threat Hunting digest post note: {msg}[/yellow]"
+                )
 
 
 @app.command()

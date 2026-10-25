@@ -326,8 +326,11 @@ def test_send_test_all_channels(settings: Settings, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(SlackNotificationRouter, "post_message", fake_post)
 
     results = send_test_all_channels(settings)
-    assert len(results) == 8
+    assert len(results) == 11
     assert settings.slack_channel_ops_metrics in results
+    assert settings.slack_channel_detection_engineering in results
+    assert settings.slack_channel_threat_intel in results
+    assert settings.slack_channel_threat_hunting in results
     assert settings.slack_channel_exploits in results
     assert results[settings.slack_channel_ops_metrics][0] is True
 
@@ -354,5 +357,42 @@ def test_notify_ops_metrics_custom_channel(settings: Settings, monkeypatch: pyte
     assert captured[0][0] == "#custom-metrics"
     assert "Hecate Daily Autonomous Ops" in captured[0][1]
     assert captured[0][2] is not None
+
+
+def test_specialized_daily_digests_dispatch(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    from hecate_runner.notifications import (
+        SlackNotificationRouter,
+        notify_detection_digest,
+        notify_threat_hunting_digest,
+        notify_threat_intel_digest,
+    )
+
+    settings = settings.model_copy(update={"slack_bot_token": "xoxb-test-bot"})
+    dispatched = []
+
+    def fake_post(self, channel: str, text: str, **kw):
+        dispatched.append((channel, text, kw.get("attachments")))
+        return True, "delivered"
+
+    monkeypatch.setattr(SlackNotificationRouter, "post_message", fake_post)
+
+    # 1. Detection Engineering
+    ok1, _ = notify_detection_digest(settings, {"total_sigma_rules": 500, "pass_rate_pct": "95%"})
+    assert ok1 is True
+    assert dispatched[-1][0] == settings.slack_channel_detection_engineering
+    assert "Detection Engineering" in dispatched[-1][1]
+
+    # 2. Threat Intel
+    ok2, _ = notify_threat_intel_digest(settings, {"total_sources_count": 12, "recent_research_count": 4})
+    assert ok2 is True
+    assert dispatched[-1][0] == settings.slack_channel_threat_intel
+    assert "Threat Intelligence" in dispatched[-1][1]
+
+    # 3. Threat Hunting
+    ok3, _ = notify_threat_hunting_digest(settings, {"recent_hunts_count": 2, "total_hunts": 200})
+    assert ok3 is True
+    assert dispatched[-1][0] == settings.slack_channel_threat_hunting
+    assert "Threat Hunting" in dispatched[-1][1]
+
 
 
