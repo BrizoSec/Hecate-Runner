@@ -32,6 +32,7 @@ from typing import Annotated, Any
 import typer
 from dotenv import dotenv_values
 from hecate_agent.core.grounding import TechniqueFact, render_grounding_section
+from rich import box
 from rich.console import Console
 from rich.table import Table
 
@@ -50,7 +51,7 @@ from hecate_runner.hunt_audit import (
 from hecate_runner.log_rotation import rotate_log_if_needed
 from hecate_runner.metrics import MetricsStore
 from hecate_runner.misp_poller import run_misp_poll
-from hecate_runner.notifications import send_test_notification
+from hecate_runner.notifications import send_test_all_channels, send_test_notification
 from hecate_runner.orchestrator import (
     RunResult,
     build_default_orchestrator,
@@ -1132,16 +1133,114 @@ def config(
         console.print_json(json.dumps(dumped))
 
 
-@app.command(name="slack-test")
-def slack_test() -> None:
-    """Send a test alert to the configured Slack incoming webhook."""
+@app.command(name="slack-channels")
+def slack_channels() -> None:
+    """List configured Slack channels and their mapped threat intelligence feeds."""
     settings = Settings()
-    if not settings.slack_webhook_url:
-        console.print("[red]HECATE_RUNNER_SLACK_WEBHOOK_URL is not set in .env[/red]")
+    table = Table(title="Hecate Slack Multi-Channel Architecture", box=box.ROUNDED)
+    table.add_column("Tier", style="dim")
+    table.add_column("Channel", style="bold cyan")
+    table.add_column("Feed Type", style="green")
+    table.add_column("Mapped Threat Sources / Triggers", style="white")
+
+    table.add_row(
+        "Tier 1",
+        settings.slack_channel_ops_metrics,
+        "Ops & Spend Metrics",
+        "Daily summary, Sigma rules count, LLM token budget, uptime",
+    )
+    table.add_row(
+        "Tier 1",
+        settings.slack_channel_hunts_exec,
+        "Executive Hunts",
+        "Validated hunts, PR merges, MISP sync events",
+    )
+    table.add_row(
+        "Tier 1",
+        settings.slack_channel_purple_team,
+        "Purple Team Feed",
+        "Adversary emulation validation, detection firing rates",
+    )
+    table.add_row(
+        "Tier 2",
+        settings.slack_channel_exploits,
+        "Exploits & EPSS",
+        "first_org (EPSS), cisa_kev, vulncheck, msrc",
+    )
+    table.add_row(
+        "Tier 2",
+        settings.slack_channel_sandbox,
+        "Sandbox & Detonation",
+        "anyrun, triage, malwarebazaar, vxunderground",
+    )
+    table.add_row(
+        "Tier 2",
+        settings.slack_channel_apt,
+        "APT & Campaigns",
+        "opencti (STIX 2.1), otx, dfir_report",
+    )
+    table.add_row(
+        "Tier 2",
+        settings.slack_channel_cloud,
+        "Cloud & Identity",
+        "cloud_threat (AWS/Azure), certstream",
+    )
+    table.add_row(
+        "Tier 2",
+        settings.slack_channel_c2,
+        "C2 Infrastructure",
+        "censys_c2, shadowserver, abuse_ch",
+    )
+
+    console.print(table)
+    mode = (
+        "[bold green]Slack Bot Token (SLACK_BOT_TOKEN)[/bold green]"
+        if settings.slack_bot_token
+        else (
+            "[bold yellow]Incoming Webhook Fallback (HECATE_RUNNER_SLACK_WEBHOOK_URL)[/bold yellow]"
+            if settings.slack_webhook_url
+            else "[bold red]Unconfigured (No SLACK_BOT_TOKEN or webhook)[/bold red]"
+        )
+    )
+    console.print(f"Current Delivery Mode: {mode}")
+
+
+@app.command(name="slack-test")
+def slack_test(
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", "-c", help="Specific channel to test (requires SLACK_BOT_TOKEN)."),
+    ] = None,
+    test_all: Annotated[
+        bool,
+        typer.Option("--all", "-a", help="Test connectivity to all 8 configured Slack channels."),
+    ] = False,
+) -> None:
+    """Send a test alert to the configured Slack incoming webhook or Bot Token channels."""
+    settings = Settings()
+    if not settings.slack_bot_token and not settings.slack_webhook_url:
+        console.print(
+            "[red]Neither SLACK_BOT_TOKEN nor HECATE_RUNNER_SLACK_WEBHOOK_URL is set in .env[/red]"
+        )
         raise typer.Exit(code=1)
 
-    console.print("[dim]Sending test notification to Slack...[/dim]")
-    success, msg = send_test_notification(settings)
+    if test_all:
+        console.print("[dim]Testing delivery across all configured Slack channels...[/dim]")
+        results = send_test_all_channels(settings)
+        failed = False
+        for ch, (success, msg) in results.items():
+            if success:
+                console.print(f"[green]✓ {ch}: {msg}[/green]")
+            else:
+                console.print(f"[red]✗ {ch}: {msg}[/red]")
+                failed = True
+        if failed:
+            raise typer.Exit(code=1)
+        return
+
+    target = channel or settings.slack_channel_hunts_exec
+    console.print(f"[dim]Sending test notification to {target}...[/dim]")
+    success, msg = send_test_notification(settings, channel=channel)
     if success:
         console.print(f"[green]✓ {msg}[/green]")
     else:
@@ -1301,8 +1400,8 @@ def doctor(
             "to run drafts without research context deliberately.",
         )
     warn(
-        bool(settings.slack_webhook_url),
-        "HECATE_RUNNER_SLACK_WEBHOOK_URL set (draft-created notifications)",
+        bool(settings.slack_bot_token or settings.slack_webhook_url),
+        "SLACK_BOT_TOKEN or HECATE_RUNNER_SLACK_WEBHOOK_URL set (Slack alerts)",
         "Optional — without it, drafts land silently in hunts/ with no alert.",
     )
     if settings.query_provider == "splunk":

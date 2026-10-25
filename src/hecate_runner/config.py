@@ -512,6 +512,51 @@ class Settings(BaseSettings):
             "the orchestrator creates a draft hunt. Unset = no-op, not an error."
         ),
     )
+    slack_bot_token: str | None = Field(
+        default=None,
+        alias="SLACK_BOT_TOKEN",
+        description="Slack Bot OAuth token (xoxb-...) for multi-channel chat:write delivery.",
+    )
+    slack_channel_ops_metrics: str = Field(
+        default="#hecate-ops-metrics",
+        alias="SLACK_CHANNEL_OPS_METRICS",
+        description="Slack channel for high-level daily operations and spend metrics.",
+    )
+    slack_channel_hunts_exec: str = Field(
+        default="#hecate-hunts-executive",
+        alias="SLACK_CHANNEL_HUNTS_EXEC",
+        description="Slack channel for executive validated hunts, PR merges, and MISP sync alerts.",
+    )
+    slack_channel_purple_team: str = Field(
+        default="#hecate-purple-team-feed",
+        alias="SLACK_CHANNEL_PURPLE_TEAM",
+        description="Slack channel for purple-team adversary emulation validation outcomes.",
+    )
+    slack_channel_exploits: str = Field(
+        default="#threat-exploits-epss",
+        alias="SLACK_CHANNEL_EXPLOITS",
+        description="Slack channel for high-weaponization vulnerabilities and EPSS spikes.",
+    )
+    slack_channel_sandbox: str = Field(
+        default="#threat-sandbox-malware",
+        alias="SLACK_CHANNEL_SANDBOX",
+        description="Slack channel for interactive sandbox malware detonations and LoLBin telemetry.",
+    )
+    slack_channel_apt: str = Field(
+        default="#threat-apt-campaigns",
+        alias="SLACK_CHANNEL_APT",
+        description="Slack channel for procedural intrusion sets and APT campaigns.",
+    )
+    slack_channel_cloud: str = Field(
+        default="#threat-cloud-identity",
+        alias="SLACK_CHANNEL_CLOUD",
+        description="Slack channel for cloud identity, IAM escalation, and phishing domain threats.",
+    )
+    slack_channel_c2: str = Field(
+        default="#threat-c2-infrastructure",
+        alias="SLACK_CHANNEL_C2",
+        description="Slack channel for C2 beacon infrastructure, Cobalt Strike clusters, and fingerprints.",
+    )
 
     # --- Auxiliary CTI & Enrichment keys --------------------------------------
     urlscan_api_key: str | None = Field(
@@ -841,6 +886,7 @@ class Settings(BaseSettings):
     _SENSITIVE_FIELDS: ClassVar[set[str]] = {
         "otx_api_key",
         "slack_webhook_url",
+        "slack_bot_token",
         "misp_api_key",
         "urlscan_api_key",
         "spur_api_key",
