@@ -1378,7 +1378,9 @@ class Orchestrator:
                 # IPs represent internal target hosts, not external threat infrastructure.
                 try:
                     ip_obj = ipaddress.ip_address(value)
-                    if category != "network_connection" and any(ip_obj in net for net in rfc1918_nets):
+                    if category != "network_connection" and any(
+                        ip_obj in net for net in rfc1918_nets
+                    ):
                         continue
                 except ValueError:
                     pass

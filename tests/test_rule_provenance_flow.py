@@ -92,4 +92,3 @@ def test_private_ip_in_command_is_not_flagged_as_untraced(
     trail = _run(settings, mock_hecate, caplog, PRIVATE_IP_RULE)
     assert not any("untraced indicator(s)" in m for m in trail)
     assert not any("no provenance" in r.getMessage() for r in caplog.records)
-

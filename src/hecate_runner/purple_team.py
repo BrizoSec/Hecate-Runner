@@ -238,7 +238,9 @@ def replay_events(
             },
         )
 
-    if any(k in lowered_intel for k in ("docker", "container", "nsenter", "k8s", "kubernetes", "pod")):
+    if any(
+        k in lowered_intel for k in ("docker", "container", "nsenter", "k8s", "kubernetes", "pod")
+    ):
         add(
             "container_runtime",
             {
