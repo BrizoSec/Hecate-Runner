@@ -73,3 +73,23 @@ def test_an_untraced_address_is_named(
         r.levelname == "WARNING" and "no provenance: 198.18.7.7" in r.getMessage()
         for r in caplog.records
     )
+
+
+PRIVATE_IP_RULE = """title: LoLBin lateral movement via sc
+logsource: {category: process_creation}
+detection:
+  selection:
+    CommandLine|contains:
+      - sc
+      - \\\\10.0.0.45
+  condition: selection
+"""
+
+
+def test_private_ip_in_command_is_not_flagged_as_untraced(
+    settings: Settings, mock_hecate: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    trail = _run(settings, mock_hecate, caplog, PRIVATE_IP_RULE)
+    assert not any("untraced indicator(s)" in m for m in trail)
+    assert not any("no provenance" in r.getMessage() for r in caplog.records)
+

@@ -1349,7 +1349,16 @@ class Orchestrator:
         indicators; an address or hash with no entry here means one slipped
         through, and the reviewer is told which.
         """
+        import ipaddress
+
         import yaml
+
+        rfc1918_nets = (
+            ipaddress.ip_network("10.0.0.0/8"),
+            ipaddress.ip_network("172.16.0.0/12"),
+            ipaddress.ip_network("192.168.0.0/16"),
+            ipaddress.ip_network("127.0.0.0/8"),
+        )
 
         traced = 0
         untraced: list[str] = []
@@ -1362,8 +1371,17 @@ class Orchestrator:
                 str(e.get("value", "")).lower() for e in document.get("hecate_provenance") or []
             }
             traced += len(known)
+            category = str((document.get("logsource") or {}).get("category", "")).lower()
             text = yaml.safe_dump(document.get("detection") or {}).lower()
             for value in set(_RULE_IOC_RE.findall(text)):
+                # In host events (such as process_creation command lines), private RFC 1918
+                # IPs represent internal target hosts, not external threat infrastructure.
+                try:
+                    ip_obj = ipaddress.ip_address(value)
+                    if category != "network_connection" and any(ip_obj in net for net in rfc1918_nets):
+                        continue
+                except ValueError:
+                    pass
                 if not any(value in k or k in value for k in known if k):
                     untraced.append(f"{value} ({rule.get('title', 'untitled')})")
         if untraced:
