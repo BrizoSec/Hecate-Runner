@@ -16,6 +16,13 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from hecate_runner.config import Settings
+from hecate_runner.slack_blocks import (
+    build_draft_card,
+    build_hunt_completed_card,
+    build_ops_metrics_card,
+    build_purple_team_card,
+    build_threat_intake_card,
+)
 
 if TYPE_CHECKING:
     from hecate_runner.cti.base import CTIItem
@@ -83,6 +90,7 @@ class SlackNotificationRouter:
         text: str,
         *,
         blocks: list[dict[str, Any]] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> tuple[bool, str]:
         """Post a message to a channel using bot token or webhook fallback."""
         if not self.is_configured:
@@ -96,7 +104,9 @@ class SlackNotificationRouter:
                 "Content-Type": "application/json; charset=utf-8",
             }
             payload: dict[str, Any] = {"channel": channel, "text": text}
-            if blocks:
+            if attachments:
+                payload["attachments"] = attachments
+            elif blocks:
                 payload["blocks"] = blocks
 
             try:
@@ -123,7 +133,9 @@ class SlackNotificationRouter:
         # Mode 2: Slack Webhook Fallback
         if self.settings.slack_webhook_url:
             payload = {"text": text}
-            if blocks:
+            if attachments:
+                payload["attachments"] = attachments
+            elif blocks:
                 payload["blocks"] = blocks
 
             try:
@@ -167,7 +179,8 @@ def notify_draft_created(settings: Settings, result: RunResult) -> None:
         f"Status: `planning` — human review required before execution.{parked_note}"
     )
 
-    router.post_message(settings.slack_channel_hunts_exec, text)
+    attachments = build_draft_card(result)
+    router.post_message(settings.slack_channel_hunts_exec, text, attachments=attachments)
 
 
 def notify_hunt_completed(
@@ -199,7 +212,15 @@ def notify_hunt_completed(
         f"{pr_part}{misp_part}"
     )
 
-    router.post_message(settings.slack_channel_hunts_exec, text)
+    attachments = build_hunt_completed_card(
+        hunt_id=hunt_id,
+        topic=topic,
+        techniques=techniques,
+        sigma_count=sigma_count,
+        pr_url=pr_url,
+        misp_event_id=misp_event_id,
+    )
+    router.post_message(settings.slack_channel_hunts_exec, text, attachments=attachments)
 
 
 def notify_purple_team(
@@ -227,7 +248,14 @@ def notify_purple_team(
         f"*Outcome:* {summary}"
     )
 
-    router.post_message(settings.slack_channel_purple_team, text)
+    attachments = build_purple_team_card(
+        hunt_id=hunt_id,
+        technique=technique,
+        success=success,
+        telemetry_count=telemetry_count,
+        summary=summary,
+    )
+    router.post_message(settings.slack_channel_purple_team, text, attachments=attachments)
 
 
 def notify_threat_intake(settings: Settings, item: CTIItem) -> None:
@@ -246,7 +274,8 @@ def notify_threat_intake(settings: Settings, item: CTIItem) -> None:
         f"```{item.content[:280]}...```"
     )
 
-    router.post_message(target_channel, text)
+    attachments = build_threat_intake_card(item)
+    router.post_message(target_channel, text, attachments=attachments)
 
 
 def notify_ops_metrics(settings: Settings, metrics_summary: dict[str, Any]) -> None:
@@ -271,7 +300,8 @@ def notify_ops_metrics(settings: Settings, metrics_summary: dict[str, Any]) -> N
         f"*Active Threat Feeds:* {sources_str}"
     )
 
-    router.post_message(settings.slack_channel_ops_metrics, text)
+    attachments = build_ops_metrics_card(metrics_summary)
+    router.post_message(settings.slack_channel_ops_metrics, text, attachments=attachments)
 
 
 def send_test_notification(
