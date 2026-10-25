@@ -1543,6 +1543,54 @@ def list_sources() -> None:
         cursor_status(settings.vxunderground_cursor_file),
     )
 
+    # dfir_report
+    table.add_row(
+        "dfir_report",
+        format_active("dfir_report"),
+        "Public Feed / Procedural",
+        cursor_status(settings.dfir_report_cursor_file),
+    )
+
+    # triage
+    triage_cred = "API Key present" if settings.triage_api_key else "Missing API Key"
+    table.add_row(
+        "triage",
+        format_active("triage"),
+        triage_cred,
+        cursor_status(settings.triage_cursor_file),
+    )
+
+    # vulncheck
+    vc_cred = "API Key present" if settings.vulncheck_api_key else "Missing API Key"
+    table.add_row(
+        "vulncheck",
+        format_active("vulncheck"),
+        vc_cred,
+        cursor_status(settings.vulncheck_cursor_file),
+    )
+
+    # censys_c2
+    censys_cred = "Token present" if settings.censys_api_token else "Missing Token"
+    table.add_row(
+        "censys_c2",
+        format_active("censys_c2"),
+        censys_cred,
+        cursor_status(settings.censys_c2_cursor_file),
+    )
+
+    # shadowserver
+    ss_cred = (
+        "API Key/Secret present"
+        if settings.shadowserver_api_key and settings.shadowserver_api_secret
+        else "Free Community / Keyless"
+    )
+    table.add_row(
+        "shadowserver",
+        format_active("shadowserver"),
+        ss_cred,
+        cursor_status(settings.shadowserver_cursor_file),
+    )
+
     # File Queue
     file_queue_dir = settings.cti_queue_dir_resolved
     file_status = (
@@ -1607,6 +1655,11 @@ def enable_source(name: str) -> None:
         "github_poc",
         "malwarebazaar",
         "vxunderground",
+        "dfir_report",
+        "triage",
+        "vulncheck",
+        "censys_c2",
+        "shadowserver",
         "file",
     }
     if name not in valid:
@@ -1701,6 +1754,11 @@ def reset_cursor(name: str) -> None:
         "github_poc": settings.github_poc_cursor_file,
         "malwarebazaar": settings.malwarebazaar_cursor_file,
         "vxunderground": settings.vxunderground_cursor_file,
+        "dfir_report": settings.dfir_report_cursor_file,
+        "triage": settings.triage_cursor_file,
+        "vulncheck": settings.vulncheck_cursor_file,
+        "censys_c2": settings.censys_c2_cursor_file,
+        "shadowserver": settings.shadowserver_cursor_file,
     }
 
     if name not in cursors:
