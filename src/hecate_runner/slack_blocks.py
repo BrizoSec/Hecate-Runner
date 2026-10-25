@@ -257,6 +257,12 @@ def build_threat_intake_card(item: CTIItem) -> list[dict[str, Any]]:
     profile = str(item.metadata.get("evidence_profile") or "unclassified")
     color = COLOR_CRITICAL if profile == "vulnerability_advisory" else COLOR_INFO
 
+    ingested_time = (
+        item.received_at.strftime("%Y-%m-%d %H:%M UTC")
+        if item.received_at is not None
+        else "Recent"
+    )
+
     blocks: list[dict[str, Any]] = [
         {
             "type": "header",
@@ -283,7 +289,7 @@ def build_threat_intake_card(item: CTIItem) -> list[dict[str, Any]]:
                 },
                 {
                     "type": "mrkdwn",
-                    "text": f"*Ingested:*\n`{item.received_at.strftime('%Y-%m-%d %H:%M UTC')}`",
+                    "text": f"*Ingested:*\n`{ingested_time}`",
                 },
             ],
         },

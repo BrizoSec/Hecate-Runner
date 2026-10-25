@@ -2127,6 +2127,27 @@ class Orchestrator:
             len(rules) - replayed,
         )
 
+        try:
+            from hecate_runner.notifications import notify_purple_team
+
+            tech_list = getattr(req, "attack_techniques", []) or []
+            tech_label = str(tech_list[0]) if tech_list else "Adversary TTPs"
+            summary_msg = (
+                f"{validated} of {replayed} evaluated rules validated "
+                f"({baseline_matches} baseline matches, {tuned} tuned) "
+                f"against {req.purple_team_telemetry_count} telemetry events."
+            )
+            notify_purple_team(
+                self.settings,
+                hunt_id=req.hunt_id,
+                technique=tech_label,
+                success=validated > 0,
+                telemetry_count=req.purple_team_telemetry_count,
+                summary=summary_msg,
+            )
+        except Exception as exc:
+            log.warning("Purple-team Slack notification failed (%s)", exc)
+
     def _resolve_ttps(
         self,
         techniques: list[str],
@@ -2434,6 +2455,12 @@ class Orchestrator:
                             if verdict is None
                             else "no commentary category or title shape",
                         )
+                        try:
+                            from hecate_runner.notifications import notify_threat_intake
+
+                            notify_threat_intake(self.settings, item)
+                        except Exception as exc:
+                            log.warning("Threat-intake Slack notification failed (%s)", exc)
                         return item, skipped, parked_count
                     reason = (
                         f"already drafted as {earlier} from the same source ({item.source_url})"

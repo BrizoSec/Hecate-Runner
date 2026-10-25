@@ -15,6 +15,7 @@ from hecate_runner.orchestrator import RunResult
 def test_noop_when_webhook_not_configured(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    settings = settings.model_copy(update={"slack_webhook_url": None, "slack_bot_token": None})
     calls = []
     monkeypatch.setattr(httpx, "post", lambda *a, **kw: calls.append((a, kw)))
 
@@ -143,7 +144,7 @@ def test_non_2xx_response_is_swallowed_not_raised(
 def test_send_test_notification_unconfigured(settings: Settings) -> None:
     from hecate_runner.notifications import send_test_notification
 
-    settings = settings.model_copy(update={"slack_webhook_url": None})
+    settings = settings.model_copy(update={"slack_webhook_url": None, "slack_bot_token": None})
     success, msg = send_test_notification(settings)
     assert not success
     assert "not configured" in msg
@@ -329,4 +330,29 @@ def test_send_test_all_channels(settings: Settings, monkeypatch: pytest.MonkeyPa
     assert settings.slack_channel_ops_metrics in results
     assert settings.slack_channel_exploits in results
     assert results[settings.slack_channel_ops_metrics][0] is True
+
+
+def test_notify_ops_metrics_custom_channel(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    from hecate_runner.notifications import SlackNotificationRouter, notify_ops_metrics
+
+    settings = settings.model_copy(update={"slack_bot_token": "xoxb-test-bot"})
+    captured = []
+
+    def fake_post(self, channel: str, text: str, **kw):
+        captured.append((channel, text, kw.get("attachments")))
+        return True, "ok"
+
+    monkeypatch.setattr(SlackNotificationRouter, "post_message", fake_post)
+
+    notify_ops_metrics(
+        settings,
+        metrics_summary={"hunts_completed": 5, "sigma_rules_produced": 40, "spend_today_usd": 1.25},
+        channel="#custom-metrics",
+    )
+
+    assert len(captured) == 1
+    assert captured[0][0] == "#custom-metrics"
+    assert "Hecate Daily Autonomous Ops" in captured[0][1]
+    assert captured[0][2] is not None
+
 

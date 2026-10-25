@@ -278,7 +278,11 @@ def notify_threat_intake(settings: Settings, item: CTIItem) -> None:
     router.post_message(target_channel, text, attachments=attachments)
 
 
-def notify_ops_metrics(settings: Settings, metrics_summary: dict[str, Any]) -> None:
+def notify_ops_metrics(
+    settings: Settings,
+    metrics_summary: dict[str, Any],
+    channel: str | None = None,
+) -> None:
     """Post daily operational and cost metrics digest."""
     router = SlackNotificationRouter(settings)
     if not router.is_configured:
@@ -300,8 +304,9 @@ def notify_ops_metrics(settings: Settings, metrics_summary: dict[str, Any]) -> N
         f"*Active Threat Feeds:* {sources_str}"
     )
 
+    target_channel = channel or settings.slack_channel_ops_metrics
     attachments = build_ops_metrics_card(metrics_summary)
-    router.post_message(settings.slack_channel_ops_metrics, text, attachments=attachments)
+    router.post_message(target_channel, text, attachments=attachments)
 
 
 def send_test_notification(

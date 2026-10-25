@@ -99,6 +99,12 @@ class Settings(BaseSettings):
     hecate_llm_model: str | None = Field(default=None)
 
     # --- Orchestrator guardrails -------------------------------------------
+    daily_budget_usd: float = Field(
+        default=20.0,
+        ge=0.0,
+        alias="HECATE_RUNNER_DAILY_BUDGET_USD",
+        description="Daily LLM spend limit or alerting budget threshold in USD.",
+    )
     max_drafts_per_day: int = Field(
         default=2,
         ge=1,
