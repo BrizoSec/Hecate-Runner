@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from hecate_runner.config import Settings
 from hecate_runner.cti.abuse_ch import AbuseChProvider
+from hecate_runner.cti.anyrun import AnyRunProvider
 from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
 from hecate_runner.cti.censys_c2 import CensysC2Provider
 from hecate_runner.cti.certstream import CertStreamProvider
@@ -11,11 +12,13 @@ from hecate_runner.cti.cisa_kev import CisaKevProvider
 from hecate_runner.cti.cloud_threat import CloudThreatProvider
 from hecate_runner.cti.dfir_report import DfirReportProvider
 from hecate_runner.cti.file_queue import FileQueueProvider
+from hecate_runner.cti.first_org import FirstOrgProvider
 from hecate_runner.cti.github_poc import GitHubPocProvider
 from hecate_runner.cti.malwarebazaar import MalwareBazaarProvider
 from hecate_runner.cti.misp import MispProvider
 from hecate_runner.cti.msrc import MsrcProvider
 from hecate_runner.cti.multi import MultiProvider
+from hecate_runner.cti.opencti import OpenCTIProvider
 from hecate_runner.cti.otx import OtxProvider
 from hecate_runner.cti.rss import RssProvider
 from hecate_runner.cti.shadowserver import ShadowserverProvider
@@ -26,6 +29,7 @@ from hecate_runner.cti.vxunderground import VxUndergroundProvider
 __all__ = [
     "ATTACK_TECHNIQUE_LINE",
     "AbuseChProvider",
+    "AnyRunProvider",
     "CTIItem",
     "CTIProvider",
     "CensysC2Provider",
@@ -34,11 +38,13 @@ __all__ = [
     "CloudThreatProvider",
     "DfirReportProvider",
     "FileQueueProvider",
+    "FirstOrgProvider",
     "GitHubPocProvider",
     "MalwareBazaarProvider",
     "MispProvider",
     "MsrcProvider",
     "MultiProvider",
+    "OpenCTIProvider",
     "OtxProvider",
     "RssProvider",
     "ShadowserverProvider",
@@ -169,6 +175,32 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             feed_urls=settings.cloud_threat_feed_urls,
             max_entry_age_days=settings.cloud_threat_max_entry_age_days,
             request_timeout_sec=settings.cloud_threat_request_timeout_sec,
+        )
+    if name == "first_org":
+        return FirstOrgProvider(
+            cursor_file=settings.first_org_cursor_file,
+            base_url=settings.first_org_base_url,
+            min_epss=settings.first_org_min_epss,
+            min_percentile=settings.first_org_min_percentile,
+            limit=settings.first_org_limit,
+            request_timeout_sec=settings.first_org_request_timeout_sec,
+        )
+    if name == "anyrun":
+        return AnyRunProvider(
+            cursor_file=settings.anyrun_cursor_file,
+            api_key=settings.anyrun_api_key,
+            api_url=settings.anyrun_api_url,
+            feed_url=settings.anyrun_feed_url,
+            max_age_days=settings.anyrun_max_age_days,
+            request_timeout_sec=settings.anyrun_request_timeout_sec,
+        )
+    if name == "opencti":
+        return OpenCTIProvider(
+            cursor_file=settings.opencti_cursor_file,
+            base_url=settings.opencti_url,
+            api_token=settings.opencti_token,
+            limit=settings.opencti_limit,
+            request_timeout_sec=settings.opencti_request_timeout_sec,
         )
     if name == "multi":
         sub_names = settings.cti_multi_provider_names

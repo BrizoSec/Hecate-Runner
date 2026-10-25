@@ -1612,6 +1612,32 @@ def list_sources() -> None:
         cursor_status(settings.cloud_threat_cursor_file),
     )
 
+    # first_org
+    table.add_row(
+        "first_org",
+        format_active("first_org"),
+        f"EPSS >= {settings.first_org_min_epss:.0%}",
+        cursor_status(settings.first_org_cursor_file),
+    )
+
+    # anyrun
+    ar_cred = "API Key present" if settings.anyrun_api_key else "Public Feed / Keyless"
+    table.add_row(
+        "anyrun",
+        format_active("anyrun"),
+        ar_cred,
+        cursor_status(settings.anyrun_cursor_file),
+    )
+
+    # opencti
+    octi_cred = "GraphQL Client" if settings.opencti_token else "Community STIX 2.1"
+    table.add_row(
+        "opencti",
+        format_active("opencti"),
+        octi_cred,
+        cursor_status(settings.opencti_cursor_file),
+    )
+
     # File Queue
     file_queue_dir = settings.cti_queue_dir_resolved
     file_status = (
@@ -1683,6 +1709,9 @@ def enable_source(name: str) -> None:
         "shadowserver",
         "msrc",
         "cloud_threat",
+        "first_org",
+        "anyrun",
+        "opencti",
         "file",
     }
     if name not in valid:
@@ -1784,6 +1813,9 @@ def reset_cursor(name: str) -> None:
         "shadowserver": settings.shadowserver_cursor_file,
         "msrc": settings.msrc_cursor_file,
         "cloud_threat": settings.cloud_threat_cursor_file,
+        "first_org": settings.first_org_cursor_file,
+        "anyrun": settings.anyrun_cursor_file,
+        "opencti": settings.opencti_cursor_file,
     }
 
     if name not in cursors:

@@ -162,6 +162,9 @@ class Settings(BaseSettings):
         "shadowserver",
         "msrc",
         "cloud_threat",
+        "first_org",
+        "anyrun",
+        "opencti",
         "multi",
     ] = Field(
         default="file",
@@ -746,6 +749,92 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_CLOUD_THREAT_TIMEOUT_SEC",
     )
 
+    # --- FIRST.org EPSS provider -------------------------------------------
+    first_org_base_url: str = Field(
+        default="https://api.first.org/data/v1/epss",
+        alias="HECATE_RUNNER_FIRST_ORG_BASE_URL",
+        description="FIRST.org EPSS API base URL.",
+    )
+    first_org_min_epss: float = Field(
+        default=0.50,
+        ge=0.01,
+        le=1.0,
+        alias="HECATE_RUNNER_FIRST_ORG_MIN_EPSS",
+        description="Minimum EPSS probability to trigger a hunt draft.",
+    )
+    first_org_min_percentile: float = Field(
+        default=0.85,
+        ge=0.01,
+        le=1.0,
+        alias="HECATE_RUNNER_FIRST_ORG_MIN_PERCENTILE",
+        description="Minimum EPSS percentile score.",
+    )
+    first_org_limit: int = Field(
+        default=50,
+        ge=1,
+        le=1000,
+        alias="HECATE_RUNNER_FIRST_ORG_LIMIT",
+    )
+    first_org_request_timeout_sec: float = Field(
+        default=20.0,
+        ge=5.0,
+        le=120.0,
+        alias="HECATE_RUNNER_FIRST_ORG_TIMEOUT_SEC",
+    )
+
+    # --- ANY.RUN Sandbox provider ------------------------------------------
+    anyrun_api_key: str | None = Field(
+        default=None,
+        alias="ANYRUN_API_KEY",
+        description="ANY.RUN API Key for private interactive detonation task polling.",
+    )
+    anyrun_api_url: str = Field(
+        default="https://api.any.run/v1/analysis",
+        alias="HECATE_RUNNER_ANYRUN_API_URL",
+        description="ANY.RUN analysis tasks API URL.",
+    )
+    anyrun_feed_url: str = Field(
+        default="https://any.run/cybersecurity-blog/feed/",
+        alias="HECATE_RUNNER_ANYRUN_FEED_URL",
+        description="ANY.RUN public threat analysis feed URL.",
+    )
+    anyrun_max_age_days: int = Field(
+        default=90,
+        ge=1,
+        le=365,
+        alias="HECATE_RUNNER_ANYRUN_MAX_AGE_DAYS",
+    )
+    anyrun_request_timeout_sec: float = Field(
+        default=25.0,
+        ge=5.0,
+        le=120.0,
+        alias="HECATE_RUNNER_ANYRUN_TIMEOUT_SEC",
+    )
+
+    # --- OpenCTI provider --------------------------------------------------
+    opencti_url: str | None = Field(
+        default=None,
+        alias="OPENCTI_URL",
+        description="OpenCTI platform base URL, e.g. http://localhost:8080.",
+    )
+    opencti_token: str | None = Field(
+        default=None,
+        alias="OPENCTI_TOKEN",
+        description="OpenCTI API bearer token.",
+    )
+    opencti_limit: int = Field(
+        default=25,
+        ge=1,
+        le=200,
+        alias="HECATE_RUNNER_OPENCTI_LIMIT",
+    )
+    opencti_request_timeout_sec: float = Field(
+        default=25.0,
+        ge=5.0,
+        le=120.0,
+        alias="HECATE_RUNNER_OPENCTI_TIMEOUT_SEC",
+    )
+
     # Field names whose values must never appear in `hecate-runner config` output —
     # anyone holding the raw webhook URL can post into the channel, same as
     # an API key.
@@ -767,6 +856,8 @@ class Settings(BaseSettings):
         "censys_api_token",
         "shadowserver_api_key",
         "shadowserver_api_secret",
+        "anyrun_api_key",
+        "opencti_token",
     }
 
     # --- CTI intake triage ----------------------------------------------------
@@ -921,6 +1012,18 @@ class Settings(BaseSettings):
     @property
     def cloud_threat_cursor_file(self) -> Path:
         return self.hecate_workspace / ".cursors" / "cloud_threat_cursor.json"
+
+    @property
+    def first_org_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "first_org_cursor.json"
+
+    @property
+    def anyrun_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "anyrun_cursor.json"
+
+    @property
+    def opencti_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "opencti_cursor.json"
 
     @property
     def cloud_threat_feed_urls(self) -> list[str]:
