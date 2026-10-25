@@ -14,10 +14,10 @@ if TYPE_CHECKING:
 
 # Brand / Severity accent colors
 COLOR_SUCCESS = "#2EB886"  # Emerald green (Validated hunt, detection passed)
-COLOR_INFO = "#3AA3E3"     # Cerulean blue (Metrics, telemetry, digest)
+COLOR_INFO = "#3AA3E3"  # Cerulean blue (Metrics, telemetry, digest)
 COLOR_WARNING = "#ECB22E"  # Amber yellow (Planning draft, review required, telemetry gap)
-COLOR_CRITICAL = "#E01E5A" # Crimson red (Critical exploit spike, weaponization alert)
-COLOR_PURPLE = "#7928CA"   # Aubergine / Purple (Purple team, threat hunting)
+COLOR_CRITICAL = "#E01E5A"  # Crimson red (Critical exploit spike, weaponization alert)
+COLOR_PURPLE = "#7928CA"  # Aubergine / Purple (Purple team, threat hunting)
 
 
 def build_draft_card(result: RunResult) -> list[dict[str, Any]]:
@@ -466,7 +466,9 @@ def build_threat_intel_digest_card(
     topics_md_lines = []
     for t in recent_topics[:4]:
         topics_md_lines.append(f"• *{t['id']}*: {t['topic']} `[{t['complexity'].upper()}]`")
-    topics_md = "\n".join(topics_md_lines) or "No threat research items generated in lookback window."
+    topics_md = (
+        "\n".join(topics_md_lines) or "No threat research items generated in lookback window."
+    )
 
     sources_str = ", ".join(f"`{s}`" for s in active_sources) or "No sources active"
 
@@ -538,7 +540,9 @@ def build_threat_hunting_digest_card(
     spotlights_md_lines = []
     for h in hunt_spotlights[:4]:
         spotlights_md_lines.append(f"• *{h['id']}*: {h['title']} `[{h['status']}]`")
-    spotlights_md = "\n".join(spotlights_md_lines) or "No active hunt operations in lookback window."
+    spotlights_md = (
+        "\n".join(spotlights_md_lines) or "No active hunt operations in lookback window."
+    )
 
     blocks: list[dict[str, Any]] = [
         {
@@ -589,4 +593,3 @@ def build_threat_hunting_digest_card(
     ]
 
     return [{"color": COLOR_PURPLE, "blocks": blocks}]
-

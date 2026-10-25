@@ -31,9 +31,7 @@ def _parse_yaml_frontmatter(file_path: Path) -> dict[str, Any]:
     return {}
 
 
-def collect_detection_engineering_metrics(
-    settings: Settings, hours: int = 24
-) -> dict[str, Any]:
+def collect_detection_engineering_metrics(settings: Settings, hours: int = 24) -> dict[str, Any]:
     """Collects metrics for the Daily Detection Engineering Digest."""
     cutoff = datetime.now(UTC) - timedelta(hours=hours)
 
@@ -42,7 +40,8 @@ def collect_detection_engineering_metrics(
     valid_sigma = [
         p
         for p in all_sigma_files
-        if p.is_file() and any(k in p.name.lower() for k in ("rule", "query", "audit", "connection", "dns"))
+        if p.is_file()
+        and any(k in p.name.lower() for k in ("rule", "query", "audit", "connection", "dns"))
     ]
     # Fallback to general yml if specific pattern didn't match
     if not valid_sigma:
@@ -96,14 +95,20 @@ def collect_detection_engineering_metrics(
         for r in rule_candidates[:5]:
             rule_text = r.read_text(encoding="utf-8", errors="ignore")
             title_match = re.search(r"title:\s*[\"']?(.*?)[\"']?$", rule_text, re.MULTILINE)
-            title = title_match.group(1).strip() if title_match else r.stem.replace("__", ": ").replace("_", " ")
+            title = (
+                title_match.group(1).strip()
+                if title_match
+                else r.stem.replace("__", ": ").replace("_", " ")
+            )
             tech_match = re.search(r"attack\.(t\d+(\.\d+)?)", rule_text, re.IGNORECASE)
             tech_id = tech_match.group(1).upper() if tech_match else "N/A"
-            recent_rule_samples.append({
-                "title": title[:70],
-                "technique": tech_id,
-                "file": r.name,
-            })
+            recent_rule_samples.append(
+                {
+                    "title": title[:70],
+                    "technique": tech_id,
+                    "file": r.name,
+                }
+            )
 
     return {
         "total_sigma_rules": len(valid_sigma),
@@ -118,9 +123,7 @@ def collect_detection_engineering_metrics(
     }
 
 
-def collect_threat_intel_metrics(
-    settings: Settings, hours: int = 24
-) -> dict[str, Any]:
+def collect_threat_intel_metrics(settings: Settings, hours: int = 24) -> dict[str, Any]:
     """Collects metrics for the Daily Threat Intelligence Digest."""
     cutoff = datetime.now(UTC) - timedelta(hours=hours)
 
@@ -150,11 +153,13 @@ def collect_threat_intel_metrics(
         if topic.lower().startswith("title:"):
             topic = topic[6:].strip()
         complexity = str(fm.get("estimated_hunt_complexity") or "standard")
-        recent_topics.append({
-            "id": rp.stem,
-            "topic": topic[:80],
-            "complexity": complexity,
-        })
+        recent_topics.append(
+            {
+                "id": rp.stem,
+                "topic": topic[:80],
+                "complexity": complexity,
+            }
+        )
 
         content = rp.read_text(encoding="utf-8", errors="ignore")
         for match in re.findall(r"CVE-\d{4}-\d{4,7}", content, re.IGNORECASE):
@@ -168,11 +173,13 @@ def collect_threat_intel_metrics(
             topic = str(fm.get("topic") or rp.stem)
             if topic.lower().startswith("title:"):
                 topic = topic[6:].strip()
-            recent_topics.append({
-                "id": rp.stem,
-                "topic": topic[:80],
-                "complexity": str(fm.get("estimated_hunt_complexity") or "standard"),
-            })
+            recent_topics.append(
+                {
+                    "id": rp.stem,
+                    "topic": topic[:80],
+                    "complexity": str(fm.get("estimated_hunt_complexity") or "standard"),
+                }
+            )
 
     # 3. MISP Sync Status
     misp_configured = bool(settings.misp_base_url and settings.misp_api_key)
@@ -189,9 +196,7 @@ def collect_threat_intel_metrics(
     }
 
 
-def collect_threat_hunting_metrics(
-    settings: Settings, hours: int = 24
-) -> dict[str, Any]:
+def collect_threat_hunting_metrics(settings: Settings, hours: int = 24) -> dict[str, Any]:
     """Collects metrics for the Daily Threat Hunting Digest."""
     cutoff = datetime.now(UTC) - timedelta(hours=hours)
 
@@ -222,12 +227,14 @@ def collect_threat_hunting_metrics(
             title = str(fm.get("title") or hp.stem)
             if title.startswith("DRAFT - "):
                 title = title[8:].strip()
-            hunt_spotlights.append({
-                "id": hp.stem,
-                "title": title[:75],
-                "status": status.title(),
-                "hunter": str(fm.get("hunter") or "hecate-runner").split()[0],
-            })
+            hunt_spotlights.append(
+                {
+                    "id": hp.stem,
+                    "title": title[:75],
+                    "status": status.title(),
+                    "hunter": str(fm.get("hunter") or "hecate-runner").split()[0],
+                }
+            )
 
     # 3. Cost & Spend
     metrics_store = MetricsStore(settings.metrics_file)

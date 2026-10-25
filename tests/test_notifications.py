@@ -243,7 +243,9 @@ def test_resolve_threat_channel_profiles(settings: Settings) -> None:
     router = SlackNotificationRouter(settings)
 
     # Vulnerability / EPSS
-    assert router.resolve_threat_channel("vulnerability_advisory") == settings.slack_channel_exploits
+    assert (
+        router.resolve_threat_channel("vulnerability_advisory") == settings.slack_channel_exploits
+    )
     assert router.resolve_threat_channel("", "first_org") == settings.slack_channel_exploits
 
     # Sandbox
@@ -263,7 +265,9 @@ def test_resolve_threat_channel_profiles(settings: Settings) -> None:
     assert router.resolve_threat_channel("", "censys_c2") == settings.slack_channel_c2
 
 
-def test_notify_hunt_completed_and_purple_team(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_notify_hunt_completed_and_purple_team(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from hecate_runner.notifications import notify_hunt_completed, notify_purple_team
 
     settings = settings.model_copy(
@@ -314,9 +318,7 @@ def test_notify_hunt_completed_and_purple_team(settings: Settings, monkeypatch: 
 def test_send_test_all_channels(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     from hecate_runner.notifications import send_test_all_channels
 
-    settings = settings.model_copy(
-        update={"slack_bot_token": "xoxb-test-bot"}
-    )
+    settings = settings.model_copy(update={"slack_bot_token": "xoxb-test-bot"})
 
     def fake_post(self, channel: str, text: str, **kw):
         return True, f"Sent to {channel}"
@@ -335,7 +337,9 @@ def test_send_test_all_channels(settings: Settings, monkeypatch: pytest.MonkeyPa
     assert results[settings.slack_channel_ops_metrics][0] is True
 
 
-def test_notify_ops_metrics_custom_channel(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_notify_ops_metrics_custom_channel(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from hecate_runner.notifications import SlackNotificationRouter, notify_ops_metrics
 
     settings = settings.model_copy(update={"slack_bot_token": "xoxb-test-bot"})
@@ -359,7 +363,9 @@ def test_notify_ops_metrics_custom_channel(settings: Settings, monkeypatch: pyte
     assert captured[0][2] is not None
 
 
-def test_specialized_daily_digests_dispatch(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_specialized_daily_digests_dispatch(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from hecate_runner.notifications import (
         SlackNotificationRouter,
         notify_detection_digest,
@@ -383,7 +389,9 @@ def test_specialized_daily_digests_dispatch(settings: Settings, monkeypatch: pyt
     assert "Detection Engineering" in dispatched[-1][1]
 
     # 2. Threat Intel
-    ok2, _ = notify_threat_intel_digest(settings, {"total_sources_count": 12, "recent_research_count": 4})
+    ok2, _ = notify_threat_intel_digest(
+        settings, {"total_sources_count": 12, "recent_research_count": 4}
+    )
     assert ok2 is True
     assert dispatched[-1][0] == settings.slack_channel_threat_intel
     assert "Threat Intelligence" in dispatched[-1][1]
@@ -393,6 +401,3 @@ def test_specialized_daily_digests_dispatch(settings: Settings, monkeypatch: pyt
     assert ok3 is True
     assert dispatched[-1][0] == settings.slack_channel_threat_hunting
     assert "Threat Hunting" in dispatched[-1][1]
-
-
-

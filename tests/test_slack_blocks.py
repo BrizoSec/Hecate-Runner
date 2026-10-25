@@ -211,4 +211,3 @@ def test_build_threat_hunting_digest_card() -> None:
     fields = cards[0]["blocks"][1]["fields"]
     assert "4 runs" in fields[0]["text"]
     assert "$1.50" in fields[2]["text"]
-

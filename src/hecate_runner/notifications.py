@@ -132,11 +132,18 @@ class SlackNotificationRouter:
                             fb_resp = (
                                 self._client.post(url, headers=headers, json=fallback_payload)
                                 if self._client is not None
-                                else httpx.post(url, headers=headers, json=fallback_payload, timeout=10.0)
+                                else httpx.post(
+                                    url, headers=headers, json=fallback_payload, timeout=10.0
+                                )
                             )
                             if fb_resp.is_success and fb_resp.json().get("ok"):
-                                log.info("Successfully delivered fallback notification to #all-hecate-hunt")
-                                return True, f"Channel {channel} not found; fallback delivered to #all-hecate-hunt."
+                                log.info(
+                                    "Successfully delivered fallback notification to #all-hecate-hunt"
+                                )
+                                return (
+                                    True,
+                                    f"Channel {channel} not found; fallback delivered to #all-hecate-hunt.",
+                                )
                         except Exception as fb_exc:
                             log.debug("Fallback delivery to #all-hecate-hunt failed: %s", fb_exc)
 
@@ -164,9 +171,7 @@ class SlackNotificationRouter:
                 if self._client is not None:
                     resp = self._client.post(self.settings.slack_webhook_url, json=payload)
                 else:
-                    resp = httpx.post(
-                        self.settings.slack_webhook_url, json=payload, timeout=10.0
-                    )
+                    resp = httpx.post(self.settings.slack_webhook_url, json=payload, timeout=10.0)
                 resp.raise_for_status()
                 return True, "Notification sent successfully."
             except Exception as exc:
@@ -186,9 +191,7 @@ def notify_draft_created(settings: Settings, result: RunResult) -> None:
         return
 
     research_context = (
-        f"research context {result.research_id}"
-        if result.research_id
-        else "no research context"
+        f"research context {result.research_id}" if result.research_id else "no research context"
     )
     parked_note = (
         f"\n:information_source: {result.parked_count} item(s) were held back (parked) during intake triage."
@@ -222,9 +225,7 @@ def notify_hunt_completed(
 
     tech_str = ", ".join(f"`{t}`" for t in techniques[:6]) or "Unspecified"
     pr_part = f"\n*Content PR:* <{pr_url}|View Pull Request>" if pr_url else ""
-    misp_part = (
-        f"\n*MISP Sync:* Event #{misp_event_id} published" if misp_event_id else ""
-    )
+    misp_part = f"\n*MISP Sync:* Event #{misp_event_id} published" if misp_event_id else ""
 
     text = (
         f":shield: *Hunt Validated & Published: {hunt_id}*\n"
@@ -400,9 +401,7 @@ def notify_threat_hunting_digest(
     return router.post_message(target_channel, text, attachments=attachments)
 
 
-def send_test_notification(
-    settings: Settings, channel: str | None = None
-) -> tuple[bool, str]:
+def send_test_notification(settings: Settings, channel: str | None = None) -> tuple[bool, str]:
     """Send a test message to verify Slack connectivity. Returns (success, message)."""
     router = SlackNotificationRouter(settings)
     if not router.is_configured:

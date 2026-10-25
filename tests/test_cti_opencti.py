@@ -142,3 +142,32 @@ def test_opencti_stix_fallback(tmp_path: Path) -> None:
 
     provider.acknowledge(item)
     assert provider.next_item() is None
+
+
+def test_opencti_stix_cyber_observable_extraction(tmp_path: Path) -> None:
+    from hecate_runner.cti.opencti import extract_stix_observables
+
+    objects = [
+        {"type": "ipv4-addr", "value": "198.51.100.1"},
+        {"type": "domain-name", "value": "c2-domain.org"},
+        {"type": "url", "value": "https://c2-domain.org/beacon"},
+        {
+            "type": "file",
+            "hashes": {
+                "SHA-256": "44D88612FEA8A8F36DE82E1278ABB02F1846B046A2A074092B7405E35E7FF2EB",
+                "MD5": "5d41402abc4b2a76b9719d911017c592",
+            },
+        },
+        {
+            "type": "indicator",
+            "pattern": "[file:hashes.'SHA-256' = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'] AND [ipv4-addr:value = '203.0.113.5']",
+        },
+    ]
+
+    extracted = extract_stix_observables(objects)
+    assert extracted["ipv4"] == ["198.51.100.1", "203.0.113.5"]
+    assert extracted["domain"] == ["c2-domain.org"]
+    assert extracted["url"] == ["https://c2-domain.org/beacon"]
+    assert "44d88612fea8a8f36de82e1278abb02f1846b046a2a074092b7405e35e7ff2eb" in extracted["sha256"]
+    assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in extracted["sha256"]
+    assert extracted["md5"] == ["5d41402abc4b2a76b9719d911017c592"]

@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -95,7 +96,28 @@ class FirstOrgProvider(CTIProvider):
             headers={"User-Agent": "Hecate-Runner/1.0", "Accept": "application/json"},
             follow_redirects=True,
         )
+        self._kev_cache: dict[str, dict[str, Any]] | None = None
         self.cursor_file.parent.mkdir(parents=True, exist_ok=True)
+
+    def _get_cve_enrichment(self, cve: str) -> dict[str, Any]:
+        """Cross-references the CVE against CISA KEV to enrich telemetry context."""
+        if self._kev_cache is None:
+            self._kev_cache = {}
+            try:
+                kev_resp = self._client.get(
+                    "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+                    timeout=10.0,
+                )
+                if kev_resp.status_code == 200:
+                    vulns = kev_resp.json().get("vulnerabilities", [])
+                    for v in vulns:
+                        vid = str(v.get("cveID") or "").strip().upper()
+                        if vid:
+                            self._kev_cache[vid] = v
+            except Exception as exc:
+                log.debug("CISA KEV enrichment fetch omitted (%s)", exc)
+
+        return self._kev_cache.get(cve.upper(), {})
 
     def close(self) -> None:
         if not self._external_client:
@@ -134,20 +156,31 @@ class FirstOrgProvider(CTIProvider):
 
             epss_date = str(entry.get("date") or datetime.now(UTC).strftime("%Y-%m-%d"))
             title = f"FIRST.org EPSS Spike: {cve} (Exploit Probability: {epss:.1%}, Top {max(0.01, (1.0 - percentile) * 100):.2f}%)"
-            content = self._format_content(cve, epss, percentile, epss_date)
+            enrichment = self._get_cve_enrichment(cve)
+            content = self._format_content(cve, epss, percentile, epss_date, enrichment=enrichment)
+
+            metadata: dict[str, Any] = {
+                "evidence_profile": "vulnerability_advisory",
+                "cve": cve,
+                "epss": epss,
+                "percentile": percentile,
+                "date": epss_date,
+            }
+            if enrichment:
+                metadata["cisa_kev_enrichment"] = enrichment
+                if enrichment.get("vendorProject"):
+                    metadata["vendor"] = enrichment.get("vendorProject")
+                if enrichment.get("product"):
+                    metadata["product"] = enrichment.get("product")
+                if enrichment.get("knownRansomwareCampaignUse"):
+                    metadata["ransomware_use"] = enrichment.get("knownRansomwareCampaignUse")
 
             return CTIItem(
                 content=content,
                 source=self.name,
                 received_at=datetime.now(UTC),
                 identifier=f"first-org-{cve.lower()}",
-                metadata={
-                    "evidence_profile": "vulnerability_advisory",
-                    "cve": cve,
-                    "epss": epss,
-                    "percentile": percentile,
-                    "date": epss_date,
-                },
+                metadata=metadata,
                 title=title,
                 source_url="https://www.first.org/epss/",
             )
@@ -162,7 +195,14 @@ class FirstOrgProvider(CTIProvider):
             cursor.advance(cve, date)
             cursor.save(self.cursor_file)
 
-    def _format_content(self, cve: str, epss: float, percentile: float, date: str) -> str:
+    def _format_content(
+        self,
+        cve: str,
+        epss: float,
+        percentile: float,
+        date: str,
+        enrichment: dict[str, Any] | None = None,
+    ) -> str:
         lines = [
             f"Title: FIRST.org EPSS Exploit Weaponization Alert: {cve}",
             "Source: FIRST.org EPSS Exploit Prediction Engine",
@@ -170,17 +210,43 @@ class FirstOrgProvider(CTIProvider):
             f"Published / Scored Date: {date}",
             f"Exploit Prediction Score (EPSS): {epss:.4f} ({epss:.1%} estimated probability of exploitation in next 30 days)",
             f"Global Threat Percentile: {percentile:.4f} (Higher threat than {percentile * 100:.2f}% of all indexed CVEs)",
-            "",
-            "Threat Intelligence Summary:",
-            f"FIRST.org EPSS model has flagged {cve} with an elevated weaponization probability of {epss:.1%}. "
-            "High EPSS percentiles indicate active adversary targeting, public exploit availability, or rapid weaponization velocity. "
-            "Defenders should proactively hunt for exploitation attempts across external perimeters, web applications, and network services.",
-            "",
-            "Attack Context & Threat Vectors:",
-            f"- Targeted Vulnerability: {cve}",
-            "- Exploitation Vector: Remote Code Execution, Authentication Bypass, or Privilege Escalation",
-            "- Recommended Monitoring: Outbound reverse shells, unexpected child processes under web/service accounts, abnormal memory pool corruption.",
-            "",
-            f"{ATTACK_TECHNIQUE_LINE} T1190, T1210, T1068",
         ]
+
+        enrich = enrichment or {}
+        if enrich:
+            vendor = enrich.get("vendorProject") or "Unknown"
+            product = enrich.get("product") or "Unknown"
+            vuln_name = enrich.get("vulnerabilityName") or ""
+            desc = enrich.get("shortDescription") or ""
+            ransomware = enrich.get("knownRansomwareCampaignUse") or "Unknown"
+            lines.extend(
+                [
+                    "",
+                    "CISA KEV Vulnerability Context:",
+                    f"- Vendor / Project: {vendor}",
+                    f"- Product: {product}",
+                ]
+            )
+            if vuln_name:
+                lines.append(f"- Vulnerability Name: {vuln_name}")
+            if desc:
+                lines.append(f"- Description: {desc}")
+            lines.append(f"- Known Ransomware Campaign Use: {ransomware}")
+
+        lines.extend(
+            [
+                "",
+                "Threat Intelligence Summary:",
+                f"FIRST.org EPSS model has flagged {cve} with an elevated weaponization probability of {epss:.1%}. "
+                "High EPSS percentiles indicate active adversary targeting, public exploit availability, or rapid weaponization velocity. "
+                "Defenders should proactively hunt for exploitation attempts across external perimeters, web applications, and network services.",
+                "",
+                "Attack Context & Threat Vectors:",
+                f"- Targeted Vulnerability: {cve}",
+                "- Exploitation Vector: Remote Code Execution, Authentication Bypass, or Privilege Escalation",
+                "- Recommended Monitoring: Outbound reverse shells, unexpected child processes under web/service accounts, abnormal memory pool corruption.",
+                "",
+                f"{ATTACK_TECHNIQUE_LINE} T1190, T1210, T1068",
+            ]
+        )
         return "\n".join(lines)

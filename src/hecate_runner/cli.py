@@ -1240,7 +1240,9 @@ def slack_channels() -> None:
 def slack_test(
     channel: Annotated[
         str | None,
-        typer.Option("--channel", "-c", help="Specific channel to test (requires SLACK_BOT_TOKEN)."),
+        typer.Option(
+            "--channel", "-c", help="Specific channel to test (requires SLACK_BOT_TOKEN)."
+        ),
     ] = None,
     test_all: Annotated[
         bool,
@@ -1301,17 +1303,13 @@ def ops_digest(
     # 1. Hunts completed in last 24h & total
     all_hunts = list(settings.hunts_root.rglob("H-*.md"))
     recent_hunts = [
-        p
-        for p in all_hunts
-        if datetime.fromtimestamp(p.stat().st_mtime, tz=UTC) >= cutoff
+        p for p in all_hunts if datetime.fromtimestamp(p.stat().st_mtime, tz=UTC) >= cutoff
     ]
 
     # 2. Sigma rules count
     sigma_rules = list(settings.hecate_workspace.rglob("*.yml"))
     valid_sigma = [
-        p
-        for p in sigma_rules
-        if "rule" in p.read_text(encoding="utf-8", errors="ignore").lower()
+        p for p in sigma_rules if "rule" in p.read_text(encoding="utf-8", errors="ignore").lower()
     ]
 
     # 3. Spend in last 24h
@@ -1340,9 +1338,7 @@ def ops_digest(
     table.add_column("Metric", style="bold cyan")
     table.add_column("Value", style="green")
 
-    table.add_row(
-        "Hunts Completed (24h)", f"{len(recent_hunts)} (Total: {len(all_hunts)})"
-    )
+    table.add_row("Hunts Completed (24h)", f"{len(recent_hunts)} (Total: {len(all_hunts)})")
     table.add_row("Sigma Rules Validated", f"{len(valid_sigma)} rules")
     table.add_row("Purple Team Pass Rate", str(metrics_summary["purple_team_pass_pct"]))
     table.add_row(
@@ -1368,7 +1364,9 @@ def setup_slack_channels() -> None:
     """Verify or attempt creation of Detection Engineering, Threat Intel, and Threat Hunting Slack channels."""
     settings = Settings()
     if not settings.slack_bot_token:
-        console.print("[red]SLACK_BOT_TOKEN is required to check or configure Slack channels.[/red]")
+        console.print(
+            "[red]SLACK_BOT_TOKEN is required to check or configure Slack channels.[/red]"
+        )
         raise typer.Exit(code=1)
 
     target_channels = [
@@ -1427,7 +1425,9 @@ def setup_slack_channels() -> None:
                 if err == "name_taken":
                     table.add_row(domain, f"#{ch_name}", "✓ Online (Exists)", "Name taken")
                 elif err == "missing_scope":
-                    table.add_row(domain, f"#{ch_name}", "⚠️ Needs Creation", "Missing channels:manage")
+                    table.add_row(
+                        domain, f"#{ch_name}", "⚠️ Needs Creation", "Missing channels:manage"
+                    )
                     needs_manual_creation.append(f"#{ch_name}")
                 else:
                     table.add_row(domain, f"#{ch_name}", f"⚠️ {err}", "Create failed")
@@ -1484,9 +1484,7 @@ def daily_digest(
     # 1. Detection Engineering Digest
     if dom in ("all", "detection"):
         det_data = collect_detection_engineering_metrics(settings, hours=hours)
-        table = Table(
-            title=f"Daily Detection Engineering Digest ({hours}h)", box=box.ROUNDED
-        )
+        table = Table(title=f"Daily Detection Engineering Digest ({hours}h)", box=box.ROUNDED)
         table.add_column("Metric", style="bold cyan")
         table.add_column("Value", style="green")
         table.add_row("Total Sigma Rules", f"{det_data['total_sigma_rules']:,} rules")
@@ -1494,19 +1492,13 @@ def daily_digest(
             "Purple Team Pass Rate",
             f"{det_data['pass_rate_pct']} ({det_data['rules_validated_24h']}/{det_data['rules_evaluated_24h']} validated)",
         )
-        table.add_row(
-            "Primary MITRE Tactics", ", ".join(det_data["top_tactics"]) or "N/A"
-        )
-        table.add_row(
-            "Target Platforms", ", ".join(det_data["platforms"]) or "Enterprise"
-        )
+        table.add_row("Primary MITRE Tactics", ", ".join(det_data["top_tactics"]) or "N/A")
+        table.add_row("Target Platforms", ", ".join(det_data["platforms"]) or "Enterprise")
         console.print(table)
 
         if post:
             target = channel or settings.slack_channel_detection_engineering
-            console.print(
-                f"[dim]Posting Detection Engineering digest to {target}...[/dim]"
-            )
+            console.print(f"[dim]Posting Detection Engineering digest to {target}...[/dim]")
             success, msg = notify_detection_digest(settings, det_data, channel=target)
             if success:
                 console.print(f"[green]✓ Detection digest delivered. ({msg})[/green]")
@@ -1516,14 +1508,10 @@ def daily_digest(
     # 2. Threat Intel Digest
     if dom in ("all", "intel"):
         intel_data = collect_threat_intel_metrics(settings, hours=hours)
-        table = Table(
-            title=f"Daily Threat Intelligence Digest ({hours}h)", box=box.ROUNDED
-        )
+        table = Table(title=f"Daily Threat Intelligence Digest ({hours}h)", box=box.ROUNDED)
         table.add_column("Metric", style="bold cyan")
         table.add_column("Value", style="green")
-        table.add_row(
-            "Active CTI Feeds", f"{intel_data['total_sources_count']} sources online"
-        )
+        table.add_row("Active CTI Feeds", f"{intel_data['total_sources_count']} sources online")
         table.add_row(
             "New Research Contexts",
             f"{intel_data['recent_research_count']} (Total: {intel_data['total_research_count']:,})",
@@ -1541,9 +1529,7 @@ def daily_digest(
         if post:
             target = channel or settings.slack_channel_threat_intel
             console.print(f"[dim]Posting Threat Intel digest to {target}...[/dim]")
-            success, msg = notify_threat_intel_digest(
-                settings, intel_data, channel=target
-            )
+            success, msg = notify_threat_intel_digest(settings, intel_data, channel=target)
             if success:
                 console.print(f"[green]✓ Threat Intel digest delivered. ({msg})[/green]")
             else:
@@ -1572,17 +1558,11 @@ def daily_digest(
         if post:
             target = channel or settings.slack_channel_threat_hunting
             console.print(f"[dim]Posting Threat Hunting digest to {target}...[/dim]")
-            success, msg = notify_threat_hunting_digest(
-                settings, hunt_data, channel=target
-            )
+            success, msg = notify_threat_hunting_digest(settings, hunt_data, channel=target)
             if success:
-                console.print(
-                    f"[green]✓ Threat Hunting digest delivered. ({msg})[/green]"
-                )
+                console.print(f"[green]✓ Threat Hunting digest delivered. ({msg})[/green]")
             else:
-                console.print(
-                    f"[yellow]⚠️ Threat Hunting digest post note: {msg}[/yellow]"
-                )
+                console.print(f"[yellow]⚠️ Threat Hunting digest post note: {msg}[/yellow]")
 
 
 @app.command()

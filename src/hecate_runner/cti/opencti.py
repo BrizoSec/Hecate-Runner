@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -24,6 +25,76 @@ from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
 log = logging.getLogger(__name__)
 
 _TECHNIQUE_RE = re.compile(r"\bT\d{4}(?:\.\d{3})?\b")
+_STIX_IPV4_RE = re.compile(r"ipv4-addr:value\s*=\s*'([^']+)'", re.IGNORECASE)
+_STIX_DOMAIN_RE = re.compile(r"domain-name:value\s*=\s*'([^']+)'", re.IGNORECASE)
+_STIX_URL_RE = re.compile(r"url:value\s*=\s*'([^']+)'", re.IGNORECASE)
+_STIX_HASH_RE = re.compile(
+    r"file:hashes\.(?:'[^']+'|[A-Za-z0-9_-]+)\s*=\s*'([a-fA-F0-9]{32,64})'", re.IGNORECASE
+)
+
+
+def extract_stix_observables(
+    objects: list[dict[str, Any]],
+    raw_patterns: list[str] | None = None,
+) -> dict[str, list[str]]:
+    """Extracts STIX 2.1 Cyber Observables (SCOs) into categorized indicator lists."""
+    indicators: dict[str, set[str]] = {
+        "ipv4": set(),
+        "domain": set(),
+        "url": set(),
+        "sha256": set(),
+        "md5": set(),
+    }
+
+    def _process_pattern(pat: str) -> None:
+        if not pat:
+            return
+        for ip in _STIX_IPV4_RE.findall(pat):
+            indicators["ipv4"].add(ip.strip())
+        for dom in _STIX_DOMAIN_RE.findall(pat):
+            indicators["domain"].add(dom.strip())
+        for u in _STIX_URL_RE.findall(pat):
+            indicators["url"].add(u.strip())
+        for h in _STIX_HASH_RE.findall(pat):
+            clean = h.strip().lower()
+            if len(clean) == 64:
+                indicators["sha256"].add(clean)
+            elif len(clean) == 32:
+                indicators["md5"].add(clean)
+
+    # 1. Parse objects directly
+    for obj in objects:
+        otype = str(obj.get("type") or "").lower()
+        if otype == "ipv4-addr":
+            val = str(obj.get("value") or "").strip()
+            if val:
+                indicators["ipv4"].add(val)
+        elif otype == "domain-name":
+            val = str(obj.get("value") or "").strip()
+            if val:
+                indicators["domain"].add(val)
+        elif otype == "url":
+            val = str(obj.get("value") or "").strip()
+            if val:
+                indicators["url"].add(val)
+        elif otype == "file":
+            hashes = obj.get("hashes")
+            if isinstance(hashes, dict):
+                for h in hashes.values():
+                    clean = str(h).strip().lower()
+                    if len(clean) == 64:
+                        indicators["sha256"].add(clean)
+                    elif len(clean) == 32:
+                        indicators["md5"].add(clean)
+
+        _process_pattern(str(obj.get("pattern") or ""))
+
+    # 2. Parse any extra raw patterns
+    for pat in raw_patterns or []:
+        _process_pattern(pat)
+
+    return {k: sorted(v) for k, v in indicators.items() if v}
+
 
 _OPENCTI_GRAPHQL_QUERY = """
 query GetReports($first: Int) {
@@ -201,9 +272,12 @@ class OpenCTIProvider(CTIProvider):
             actors: list[str] = []
             malware: list[str] = []
             indicators: list[str] = []
+            patterns: list[str] = []
+            raw_objects: list[dict[str, Any]] = []
 
             for obj_edge in node.get("objects", {}).get("edges", []):
                 obj = obj_edge.get("node") or {}
+                raw_objects.append(obj)
                 if obj.get("x_mitre_id"):
                     techniques.add(str(obj["x_mitre_id"]))
                 elif "standard_id" in obj and "attack-pattern" in str(obj["standard_id"]):
@@ -211,27 +285,49 @@ class OpenCTIProvider(CTIProvider):
                         techniques.add(t)
 
                 if "pattern" in obj:
-                    indicators.append(str(obj.get("name") or obj["pattern"]))
+                    pat_str = str(obj["pattern"])
+                    patterns.append(pat_str)
+                    indicators.append(str(obj.get("name") or pat_str))
                 elif obj.get("id", "").startswith("threat-actor--"):
                     actors.append(str(obj.get("name") or ""))
                 elif obj.get("id", "").startswith("malware--"):
                     malware.append(str(obj.get("name") or ""))
 
+            structured_indicators = extract_stix_observables(raw_objects, raw_patterns=patterns)
+
+            # Combine named indicators and structured observables for display
+            display_indicators = list(indicators)
+            for cat, vals in structured_indicators.items():
+                for v in vals:
+                    item_str = f"{cat}: {v}"
+                    if item_str not in display_indicators and v not in display_indicators:
+                        display_indicators.append(item_str)
+
             content = self._format_report(
-                name, description, published, actors, malware, sorted(techniques), indicators
+                name,
+                description,
+                published,
+                actors,
+                malware,
+                sorted(techniques),
+                display_indicators,
             )
+
+            metadata: dict[str, Any] = {
+                "evidence_profile": "procedural_intrusion",
+                "report_id": report_id,
+                "actors": actors,
+                "malware": malware,
+            }
+            if structured_indicators:
+                metadata["indicators"] = structured_indicators
 
             return CTIItem(
                 content=content,
                 source=self.name,
                 received_at=datetime.now(UTC),
                 identifier=f"opencti-{report_id[:32]}",
-                metadata={
-                    "evidence_profile": "procedural_intrusion",
-                    "report_id": report_id,
-                    "actors": actors,
-                    "malware": malware,
-                },
+                metadata=metadata,
                 title=f"OpenCTI: {name}",
                 source_url=f"{self.base_url}/dashboard/analyses/reports/{node.get('id')}",
             )
@@ -253,9 +349,7 @@ class OpenCTIProvider(CTIProvider):
         reports = [o for o in objects if o.get("type") == "report"]
 
         malware_names = [
-            str(o.get("name"))
-            for o in objects
-            if o.get("type") == "malware" and o.get("name")
+            str(o.get("name")) for o in objects if o.get("type") == "malware" and o.get("name")
         ]
         actor_names = [
             str(o.get("name"))
@@ -269,6 +363,11 @@ class OpenCTIProvider(CTIProvider):
                 for ext in o.get("external_references", []):
                     if ext.get("source_name") == "mitre-attack" and ext.get("external_id"):
                         stix_techniques.add(str(ext.get("external_id")))
+
+        structured_indicators = extract_stix_observables(objects)
+        fallback_indicators = [
+            f"{cat}: {v}" for cat, vals in structured_indicators.items() for v in vals
+        ]
 
         for rep in reports:
             rep_id = str(rep.get("id") or "").strip()
@@ -292,18 +391,22 @@ class OpenCTIProvider(CTIProvider):
                 actors=actor_names[:4] or ["Threat Cluster"],
                 malware=malware_names[:4],
                 techniques=techniques,
-                indicators=[],
+                indicators=fallback_indicators,
             )
+
+            metadata: dict[str, Any] = {
+                "evidence_profile": "procedural_intrusion",
+                "report_id": rep_id,
+            }
+            if structured_indicators:
+                metadata["indicators"] = structured_indicators
 
             return CTIItem(
                 content=content,
                 source=self.name,
                 received_at=datetime.now(UTC),
                 identifier=f"opencti-{abs(hash(rep_id)) % 10000000}",
-                metadata={
-                    "evidence_profile": "procedural_intrusion",
-                    "report_id": rep_id,
-                },
+                metadata=metadata,
                 title=f"OpenCTI Report: {name}",
                 source_url="https://github.com/OpenCTI-Platform",
             )
