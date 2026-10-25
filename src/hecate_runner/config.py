@@ -160,6 +160,8 @@ class Settings(BaseSettings):
         "vulncheck",
         "censys_c2",
         "shadowserver",
+        "msrc",
+        "cloud_threat",
         "multi",
     ] = Field(
         default="file",
@@ -701,6 +703,49 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_SHADOWSERVER_TIMEOUT_SEC",
     )
 
+    # --- MSRC provider ----------------------------------------------------
+    msrc_updates_url: str = Field(
+        default="https://api.msrc.microsoft.com/cvrf/v2.0/updates",
+        alias="HECATE_RUNNER_MSRC_UPDATES_URL",
+        description="Microsoft MSRC API updates index URL.",
+    )
+    msrc_doc_base_url: str = Field(
+        default="https://api.msrc.microsoft.com/cvrf/v3.0/cvrf/",
+        alias="HECATE_RUNNER_MSRC_DOC_BASE_URL",
+        description="Microsoft MSRC API document base URL.",
+    )
+    msrc_max_age_days: int = Field(
+        default=90,
+        ge=1,
+        le=365,
+        alias="HECATE_RUNNER_MSRC_MAX_AGE_DAYS",
+    )
+    msrc_request_timeout_sec: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=120.0,
+        alias="HECATE_RUNNER_MSRC_TIMEOUT_SEC",
+    )
+
+    # --- Cloud Threat Intel provider ---------------------------------------
+    cloud_threat_feed_urls_raw: str = Field(
+        default="https://permiso.io/blog/rss.xml,https://www.wiz.io/feed/rss.xml,https://aws.amazon.com/security/security-bulletins/feed/",
+        alias="HECATE_RUNNER_CLOUD_THREAT_FEEDS",
+        description="Comma-separated cloud security research RSS/Atom feed URLs.",
+    )
+    cloud_threat_max_entry_age_days: int = Field(
+        default=90,
+        ge=1,
+        le=365,
+        alias="HECATE_RUNNER_CLOUD_THREAT_MAX_AGE_DAYS",
+    )
+    cloud_threat_request_timeout_sec: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=120.0,
+        alias="HECATE_RUNNER_CLOUD_THREAT_TIMEOUT_SEC",
+    )
+
     # Field names whose values must never appear in `hecate-runner config` output —
     # anyone holding the raw webhook URL can post into the channel, same as
     # an API key.
@@ -868,6 +913,18 @@ class Settings(BaseSettings):
     @property
     def shadowserver_cursor_file(self) -> Path:
         return self.hecate_workspace / ".cursors" / "shadowserver_cursor.json"
+
+    @property
+    def msrc_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "msrc_cursor.json"
+
+    @property
+    def cloud_threat_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "cloud_threat_cursor.json"
+
+    @property
+    def cloud_threat_feed_urls(self) -> list[str]:
+        return [f.strip() for f in self.cloud_threat_feed_urls_raw.split(",") if f.strip()]
 
     @property
     def certstream_brand_patterns(self) -> list[str]:

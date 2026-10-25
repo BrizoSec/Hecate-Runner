@@ -1591,6 +1591,27 @@ def list_sources() -> None:
         cursor_status(settings.shadowserver_cursor_file),
     )
 
+    # msrc
+    table.add_row(
+        "msrc",
+        format_active("msrc"),
+        "Public API (Keyless)",
+        cursor_status(settings.msrc_cursor_file),
+    )
+
+    # cloud_threat
+    ct_cred = (
+        f"{len(settings.cloud_threat_feed_urls)} feeds"
+        if settings.cloud_threat_feed_urls
+        else "No feeds"
+    )
+    table.add_row(
+        "cloud_threat",
+        format_active("cloud_threat"),
+        ct_cred,
+        cursor_status(settings.cloud_threat_cursor_file),
+    )
+
     # File Queue
     file_queue_dir = settings.cti_queue_dir_resolved
     file_status = (
@@ -1660,6 +1681,8 @@ def enable_source(name: str) -> None:
         "vulncheck",
         "censys_c2",
         "shadowserver",
+        "msrc",
+        "cloud_threat",
         "file",
     }
     if name not in valid:
@@ -1759,6 +1782,8 @@ def reset_cursor(name: str) -> None:
         "vulncheck": settings.vulncheck_cursor_file,
         "censys_c2": settings.censys_c2_cursor_file,
         "shadowserver": settings.shadowserver_cursor_file,
+        "msrc": settings.msrc_cursor_file,
+        "cloud_threat": settings.cloud_threat_cursor_file,
     }
 
     if name not in cursors:

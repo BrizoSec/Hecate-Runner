@@ -8,11 +8,13 @@ from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
 from hecate_runner.cti.censys_c2 import CensysC2Provider
 from hecate_runner.cti.certstream import CertStreamProvider
 from hecate_runner.cti.cisa_kev import CisaKevProvider
+from hecate_runner.cti.cloud_threat import CloudThreatProvider
 from hecate_runner.cti.dfir_report import DfirReportProvider
 from hecate_runner.cti.file_queue import FileQueueProvider
 from hecate_runner.cti.github_poc import GitHubPocProvider
 from hecate_runner.cti.malwarebazaar import MalwareBazaarProvider
 from hecate_runner.cti.misp import MispProvider
+from hecate_runner.cti.msrc import MsrcProvider
 from hecate_runner.cti.multi import MultiProvider
 from hecate_runner.cti.otx import OtxProvider
 from hecate_runner.cti.rss import RssProvider
@@ -29,11 +31,13 @@ __all__ = [
     "CensysC2Provider",
     "CertStreamProvider",
     "CisaKevProvider",
+    "CloudThreatProvider",
     "DfirReportProvider",
     "FileQueueProvider",
     "GitHubPocProvider",
     "MalwareBazaarProvider",
     "MispProvider",
+    "MsrcProvider",
     "MultiProvider",
     "OtxProvider",
     "RssProvider",
@@ -150,6 +154,21 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             api_key=settings.shadowserver_api_key,
             api_secret=settings.shadowserver_api_secret,
             request_timeout_sec=settings.shadowserver_request_timeout_sec,
+        )
+    if name == "msrc":
+        return MsrcProvider(
+            cursor_file=settings.msrc_cursor_file,
+            updates_url=settings.msrc_updates_url,
+            doc_base_url=settings.msrc_doc_base_url,
+            max_age_days=settings.msrc_max_age_days,
+            request_timeout_sec=settings.msrc_request_timeout_sec,
+        )
+    if name == "cloud_threat":
+        return CloudThreatProvider(
+            cursor_file=settings.cloud_threat_cursor_file,
+            feed_urls=settings.cloud_threat_feed_urls,
+            max_entry_age_days=settings.cloud_threat_max_entry_age_days,
+            request_timeout_sec=settings.cloud_threat_request_timeout_sec,
         )
     if name == "multi":
         sub_names = settings.cti_multi_provider_names

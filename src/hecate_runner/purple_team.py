@@ -241,7 +241,17 @@ def replay_events(
         )
 
     if any(
-        k in lowered_intel for k in ("docker", "container", "nsenter", "k8s", "kubernetes", "pod")
+        k in lowered_intel
+        for k in (
+            "docker",
+            "container",
+            "nsenter",
+            "k8s",
+            "kubernetes",
+            "pod",
+            "cluster-admin",
+            "hostpath",
+        )
     ):
         add(
             "container_runtime",
@@ -250,6 +260,26 @@ def replay_events(
                 "ContainerName": "scada-edge-worker",
                 "CommandLine": "nsenter /bin/bash",
                 "VolumeMount": "/dev:/dev",
+                "Privileged": "true",
+            },
+        )
+        add(
+            "kubernetes_audit",
+            {
+                "verb": "create",
+                "resource": "pods",
+                "namespace": "kube-system",
+                "requestObject.spec.containers.securityContext.privileged": "true",
+                "requestObject.spec.volumes.hostPath.path": "/",
+                "userAgent": "kubectl/v1.28.0",
+            },
+        )
+        add(
+            "container_activity",
+            {
+                "Image": "docker.io/library/ubuntu:latest",
+                "ContainerName": "scada-edge-worker",
+                "CommandLine": "nsenter /bin/bash",
                 "Privileged": "true",
             },
         )

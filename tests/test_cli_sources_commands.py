@@ -46,6 +46,8 @@ class TestSourcesCommands:
         assert "vulncheck" in result.stdout
         assert "censys_c2" in result.stdout
         assert "shadowserver" in result.stdout
+        assert "msrc" in result.stdout
+        assert "cloud_threat" in result.stdout
 
     def test_enable_source(self, cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # Currently defaults to file in tests? Wait, cli_env doesn't set provider, default is file.

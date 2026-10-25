@@ -309,3 +309,26 @@ detection:
     assert outcome.status == "validated"
     assert outcome.true_positives == 1
     assert outcome.false_positives == 0
+
+
+def test_replay_events_synthesises_kubernetes_audit() -> None:
+    cti_text = "Adversary deployed privileged container escape using hostPath volume in kubernetes cluster-admin."
+    events = replay_events([], [], cti_text=cti_text)
+    assert "kubernetes_audit" in events
+    k8s_events = events["kubernetes_audit"]
+    assert any(e.get("resource") == "pods" for e in k8s_events)
+    assert any(e.get("userAgent") == "kubectl/v1.28.0" for e in k8s_events)
+
+    k8s_rule = """title: Privileged Pod Creation in Kubernetes
+logsource:
+  category: kubernetes_audit
+detection:
+  selection:
+    resource: pods
+    verb: create
+  condition: selection
+"""
+    outcome = replay_rule(k8s_rule, k8s_events, BENIGN_SAMPLE)
+    assert outcome.status == "validated"
+    assert outcome.true_positives == 1
+    assert outcome.false_positives == 0

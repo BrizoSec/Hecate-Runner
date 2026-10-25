@@ -245,3 +245,15 @@ def test_factory_builds_phase_2_subproviders(
     provider = get_provider("multi", settings=multi_settings)
     assert isinstance(provider, MultiProvider)
     assert {p.name for p in provider.providers} == {"censys_c2", "shadowserver"}
+
+
+def test_factory_builds_phase_3_subproviders(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HECATE_RUNNER_CTI_PROVIDER", "multi")
+    monkeypatch.setenv("HECATE_RUNNER_CTI_MULTI_PROVIDERS", "msrc,cloud_threat")
+    multi_settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    provider = get_provider("multi", settings=multi_settings)
+    assert isinstance(provider, MultiProvider)
+    assert {p.name for p in provider.providers} == {"msrc", "cloud_threat"}
