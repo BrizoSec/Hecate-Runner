@@ -158,6 +158,8 @@ class Settings(BaseSettings):
         "dfir_report",
         "triage",
         "vulncheck",
+        "censys_c2",
+        "shadowserver",
         "multi",
     ] = Field(
         default="file",
@@ -663,6 +665,42 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_VULNCHECK_TIMEOUT_SEC",
     )
 
+    # --- Censys C2 infrastructure provider ---------------------------------
+    censys_api_token: str | None = Field(
+        default=None,
+        alias="CENSYS_API_TOKEN",
+        description="Censys API token for C2 infrastructure monitoring.",
+    )
+    censys_c2_query: str = Field(
+        default="services.service_name: (COBALT_STRIKE or SLIVER or MYTHIC or HAVOC)",
+        alias="HECATE_RUNNER_CENSYS_C2_QUERY",
+        description="Search query to discover adversary C2 infrastructure on Censys.",
+    )
+    censys_c2_request_timeout_sec: float = Field(
+        default=20.0,
+        ge=5.0,
+        le=120.0,
+        alias="HECATE_RUNNER_CENSYS_C2_TIMEOUT_SEC",
+    )
+
+    # --- Shadowserver Foundation CTI provider -------------------------------
+    shadowserver_api_key: str | None = Field(
+        default=None,
+        alias="SHADOWSERVER_API_KEY",
+        description="Shadowserver Foundation API key for infection reports and sinkhole telemetry.",
+    )
+    shadowserver_api_secret: str | None = Field(
+        default=None,
+        alias="SHADOWSERVER_API_SECRET",
+        description="Shadowserver Foundation API secret.",
+    )
+    shadowserver_request_timeout_sec: float = Field(
+        default=20.0,
+        ge=5.0,
+        le=120.0,
+        alias="HECATE_RUNNER_SHADOWSERVER_TIMEOUT_SEC",
+    )
+
     # Field names whose values must never appear in `hecate-runner config` output —
     # anyone holding the raw webhook URL can post into the channel, same as
     # an API key.
@@ -681,6 +719,9 @@ class Settings(BaseSettings):
         "abusech_api_key",
         "triage_api_key",
         "vulncheck_api_key",
+        "censys_api_token",
+        "shadowserver_api_key",
+        "shadowserver_api_secret",
     }
 
     # --- CTI intake triage ----------------------------------------------------
@@ -819,6 +860,14 @@ class Settings(BaseSettings):
     @property
     def vulncheck_cursor_file(self) -> Path:
         return self.hecate_workspace / ".cursors" / "vulncheck_cursor.json"
+
+    @property
+    def censys_c2_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "censys_c2_cursor.json"
+
+    @property
+    def shadowserver_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "shadowserver_cursor.json"
 
     @property
     def certstream_brand_patterns(self) -> list[str]:

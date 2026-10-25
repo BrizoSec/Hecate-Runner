@@ -270,3 +270,42 @@ detection:
     entra_outcome = replay_rule(entra_rule, identity_events, BENIGN_SAMPLE)
     assert entra_outcome.status == "validated"
     assert entra_outcome.false_positives == 0
+
+
+def test_replay_events_synthesises_tls_fingerprints() -> None:
+    records = [
+        IndicatorRecord(
+            value="07d14d16d21d21d07c42d41407d41d4ae3d3e5896041892ff5da154584d1c4",
+            type="jarm",
+            role="c2",
+            status="active",
+        ),
+        IndicatorRecord(
+            value="t13d1516h2_8daaf6152771_019a76b17a1d",
+            type="ja4",
+            role="c2",
+            status="active",
+        ),
+    ]
+
+    events = replay_events(records, [])
+    assert "network_connection" in events
+    net_events = events["network_connection"]
+    assert any(
+        e.get("jarm") == "07d14d16d21d21d07c42d41407d41d4ae3d3e5896041892ff5da154584d1c4"
+        for e in net_events
+    )
+    assert any(e.get("ja4") == "t13d1516h2_8daaf6152771_019a76b17a1d" for e in net_events)
+
+    jarm_rule = """title: Cobalt Strike Default JARM Fingerprint
+logsource:
+  category: network_connection
+detection:
+  selection:
+    jarm: 07d14d16d21d21d07c42d41407d41d4ae3d3e5896041892ff5da154584d1c4
+  condition: selection
+"""
+    outcome = replay_rule(jarm_rule, net_events, BENIGN_SAMPLE)
+    assert outcome.status == "validated"
+    assert outcome.true_positives == 1
+    assert outcome.false_positives == 0

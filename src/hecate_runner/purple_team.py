@@ -112,6 +112,8 @@ def replay_events(
             hashes = f"{_HASH_LABELS[rtype]}={value}"
             add("process_creation", {"Hashes": hashes})
             add("image_load", {"Hashes": hashes})
+        elif rtype in ("jarm", "ja4", "ja4s", "ja3"):
+            add("network_connection", {rtype: value})
 
     for artifact in artifacts:
         value = str(getattr(artifact, "value", "") or "").strip()

@@ -5,6 +5,7 @@ from __future__ import annotations
 from hecate_runner.config import Settings
 from hecate_runner.cti.abuse_ch import AbuseChProvider
 from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
+from hecate_runner.cti.censys_c2 import CensysC2Provider
 from hecate_runner.cti.certstream import CertStreamProvider
 from hecate_runner.cti.cisa_kev import CisaKevProvider
 from hecate_runner.cti.dfir_report import DfirReportProvider
@@ -15,6 +16,7 @@ from hecate_runner.cti.misp import MispProvider
 from hecate_runner.cti.multi import MultiProvider
 from hecate_runner.cti.otx import OtxProvider
 from hecate_runner.cti.rss import RssProvider
+from hecate_runner.cti.shadowserver import ShadowserverProvider
 from hecate_runner.cti.triage import TriageProvider
 from hecate_runner.cti.vulncheck import VulnCheckProvider
 from hecate_runner.cti.vxunderground import VxUndergroundProvider
@@ -24,6 +26,7 @@ __all__ = [
     "AbuseChProvider",
     "CTIItem",
     "CTIProvider",
+    "CensysC2Provider",
     "CertStreamProvider",
     "CisaKevProvider",
     "DfirReportProvider",
@@ -34,6 +37,7 @@ __all__ = [
     "MultiProvider",
     "OtxProvider",
     "RssProvider",
+    "ShadowserverProvider",
     "TriageProvider",
     "VulnCheckProvider",
     "VxUndergroundProvider",
@@ -132,6 +136,20 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             api_key=settings.vulncheck_api_key,
             max_age_days=settings.vulncheck_max_age_days,
             request_timeout_sec=settings.vulncheck_request_timeout_sec,
+        )
+    if name == "censys_c2":
+        return CensysC2Provider(
+            cursor_file=settings.censys_c2_cursor_file,
+            api_token=settings.censys_api_token,
+            query=settings.censys_c2_query,
+            request_timeout_sec=settings.censys_c2_request_timeout_sec,
+        )
+    if name == "shadowserver":
+        return ShadowserverProvider(
+            cursor_file=settings.shadowserver_cursor_file,
+            api_key=settings.shadowserver_api_key,
+            api_secret=settings.shadowserver_api_secret,
+            request_timeout_sec=settings.shadowserver_request_timeout_sec,
         )
     if name == "multi":
         sub_names = settings.cti_multi_provider_names
