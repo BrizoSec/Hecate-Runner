@@ -221,3 +221,15 @@ def test_factory_rejects_self_reference(
     settings_with_self = Settings(_env_file=None)  # type: ignore[call-arg]
     with pytest.raises(ValueError, match="cannot include 'multi'"):
         get_provider("multi", settings=settings_with_self)
+
+
+def test_factory_builds_phase_1_subproviders(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HECATE_RUNNER_CTI_PROVIDER", "multi")
+    monkeypatch.setenv("HECATE_RUNNER_CTI_MULTI_PROVIDERS", "dfir_report,triage,vulncheck")
+    multi_settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    provider = get_provider("multi", settings=multi_settings)
+    assert isinstance(provider, MultiProvider)
+    assert {p.name for p in provider.providers} == {"dfir_report", "triage", "vulncheck"}

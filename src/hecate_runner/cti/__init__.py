@@ -7,6 +7,7 @@ from hecate_runner.cti.abuse_ch import AbuseChProvider
 from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
 from hecate_runner.cti.certstream import CertStreamProvider
 from hecate_runner.cti.cisa_kev import CisaKevProvider
+from hecate_runner.cti.dfir_report import DfirReportProvider
 from hecate_runner.cti.file_queue import FileQueueProvider
 from hecate_runner.cti.github_poc import GitHubPocProvider
 from hecate_runner.cti.malwarebazaar import MalwareBazaarProvider
@@ -14,6 +15,8 @@ from hecate_runner.cti.misp import MispProvider
 from hecate_runner.cti.multi import MultiProvider
 from hecate_runner.cti.otx import OtxProvider
 from hecate_runner.cti.rss import RssProvider
+from hecate_runner.cti.triage import TriageProvider
+from hecate_runner.cti.vulncheck import VulnCheckProvider
 from hecate_runner.cti.vxunderground import VxUndergroundProvider
 
 __all__ = [
@@ -23,6 +26,7 @@ __all__ = [
     "CTIProvider",
     "CertStreamProvider",
     "CisaKevProvider",
+    "DfirReportProvider",
     "FileQueueProvider",
     "GitHubPocProvider",
     "MalwareBazaarProvider",
@@ -30,6 +34,8 @@ __all__ = [
     "MultiProvider",
     "OtxProvider",
     "RssProvider",
+    "TriageProvider",
+    "VulnCheckProvider",
     "VxUndergroundProvider",
     "get_provider",
 ]
@@ -105,6 +111,27 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             github_token=settings.github_token,
             cursor_file=settings.vxunderground_cursor_file,
             request_timeout_sec=settings.vxunderground_request_timeout_sec,
+        )
+    if name == "dfir_report":
+        return DfirReportProvider(
+            cursor_file=settings.dfir_report_cursor_file,
+            feed_url=settings.dfir_report_feed_url,
+            max_entry_age_days=settings.dfir_report_max_entry_age_days,
+            request_timeout_sec=settings.dfir_report_request_timeout_sec,
+        )
+    if name == "triage":
+        return TriageProvider(
+            cursor_file=settings.triage_cursor_file,
+            api_key=settings.triage_api_key,
+            search_query=settings.triage_search_query,
+            request_timeout_sec=settings.triage_request_timeout_sec,
+        )
+    if name == "vulncheck":
+        return VulnCheckProvider(
+            cursor_file=settings.vulncheck_cursor_file,
+            api_key=settings.vulncheck_api_key,
+            max_age_days=settings.vulncheck_max_age_days,
+            request_timeout_sec=settings.vulncheck_request_timeout_sec,
         )
     if name == "multi":
         sub_names = settings.cti_multi_provider_names

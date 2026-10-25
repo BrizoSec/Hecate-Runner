@@ -155,6 +155,9 @@ class Settings(BaseSettings):
         "github_poc",
         "malwarebazaar",
         "vxunderground",
+        "dfir_report",
+        "triage",
+        "vulncheck",
         "multi",
     ] = Field(
         default="file",
@@ -602,6 +605,64 @@ class Settings(BaseSettings):
         description="Timeout for VX-Underground requests.",
     )
 
+    # --- The DFIR Report provider ------------------------------------------
+    dfir_report_feed_url: str = Field(
+        default="https://thedfirreport.com/feed/",
+        alias="HECATE_RUNNER_DFIR_REPORT_FEED_URL",
+        description="Feed URL for The DFIR Report intrusion walkthroughs.",
+    )
+    dfir_report_max_entry_age_days: int = Field(
+        default=90,
+        ge=1,
+        le=365,
+        alias="HECATE_RUNNER_DFIR_REPORT_MAX_ENTRY_AGE_DAYS",
+        description="Ignore DFIR Report entries published before this many days ago.",
+    )
+    dfir_report_request_timeout_sec: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=120.0,
+        alias="HECATE_RUNNER_DFIR_REPORT_TIMEOUT_SEC",
+    )
+
+    # --- Hatching Triage dynamic sandbox provider --------------------------
+    triage_api_key: str | None = Field(
+        default=None,
+        alias="TRIAGE_API_KEY",
+        description="Hatching Triage (tria.ge) API key for dynamic detonation telemetry.",
+    )
+    triage_search_query: str = Field(
+        default="tag:malware",
+        alias="HECATE_RUNNER_TRIAGE_QUERY",
+        description="Search query for recently detonated samples on Tria.ge.",
+    )
+    triage_request_timeout_sec: float = Field(
+        default=20.0,
+        ge=5.0,
+        le=120.0,
+        alias="HECATE_RUNNER_TRIAGE_TIMEOUT_SEC",
+    )
+
+    # --- VulnCheck KEV CTI provider ----------------------------------------
+    vulncheck_api_key: str | None = Field(
+        default=None,
+        alias="VULNCHECK_API_KEY",
+        description="VulnCheck API key for real-time weaponized exploitation intelligence.",
+    )
+    vulncheck_max_age_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        alias="HECATE_RUNNER_VULNCHECK_MAX_AGE_DAYS",
+        description="Maximum age in days for newly cataloged exploited vulnerabilities.",
+    )
+    vulncheck_request_timeout_sec: float = Field(
+        default=20.0,
+        ge=5.0,
+        le=120.0,
+        alias="HECATE_RUNNER_VULNCHECK_TIMEOUT_SEC",
+    )
+
     # Field names whose values must never appear in `hecate-runner config` output —
     # anyone holding the raw webhook URL can post into the channel, same as
     # an API key.
@@ -618,6 +679,8 @@ class Settings(BaseSettings):
         "github_installation_id",
         "github_app_private_key_path",
         "abusech_api_key",
+        "triage_api_key",
+        "vulncheck_api_key",
     }
 
     # --- CTI intake triage ----------------------------------------------------
@@ -744,6 +807,18 @@ class Settings(BaseSettings):
     @property
     def vxunderground_cursor_file(self) -> Path:
         return self.hecate_workspace / ".cursors" / "vxunderground_cursor.json"
+
+    @property
+    def dfir_report_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "dfir_report_cursor.json"
+
+    @property
+    def triage_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "triage_cursor.json"
+
+    @property
+    def vulncheck_cursor_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "vulncheck_cursor.json"
 
     @property
     def certstream_brand_patterns(self) -> list[str]:
