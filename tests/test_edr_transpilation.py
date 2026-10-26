@@ -139,3 +139,26 @@ publisher_login: hecate-publisher[bot]
     assert "queries/H-9999/process__rule.s1ql" in bundle_files
     assert "queries/H-9999/process__rule.spl" in bundle_files
     assert "queries/H-9999/process__rule.eql" in bundle_files
+
+
+def test_transpiled_query_validation_integration():
+    from hecate_agent.api import transpile_sigma_rule, validate_transpiled_query
+
+    rule = """title: Process Execution Test
+id: 99999999-0000-1111-2222-333333333333
+status: experimental
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith: '\\malware.exe'
+  condition: selection
+"""
+    results = transpile_sigma_rule(rule)
+    for target, query_res in results.items():
+        if query_res.success:
+            val = validate_transpiled_query(target, query_res.query)
+            assert val["is_valid"] is True
+            assert val["sanity_score"] >= 0.8
+            assert val["error_messages"] == []
