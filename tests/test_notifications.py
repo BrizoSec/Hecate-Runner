@@ -419,7 +419,9 @@ def test_notify_threat_intake_deduplication(
     )
     dispatched = []
 
-    def fake_post(self: SlackNotificationRouter, channel: str, text: str, **kw: object) -> tuple[bool, str]:
+    def fake_post(
+        self: SlackNotificationRouter, channel: str, text: str, **kw: object
+    ) -> tuple[bool, str]:
         dispatched.append((channel, text, kw.get("attachments")))
         return True, "ok"
 
@@ -453,7 +455,9 @@ def test_notify_threat_intake_fallback_text_is_concise(
     )
     captured = []
 
-    def fake_post(self: SlackNotificationRouter, channel: str, text: str, **kw: object) -> tuple[bool, str]:
+    def fake_post(
+        self: SlackNotificationRouter, channel: str, text: str, **kw: object
+    ) -> tuple[bool, str]:
         captured.append((channel, text, kw.get("attachments")))
         return True, "ok"
 

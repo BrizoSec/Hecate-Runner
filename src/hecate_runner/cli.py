@@ -1506,7 +1506,9 @@ def setup_slack_channels() -> None:
 
     if needs_manual_creation:
         console.print()
-        console.print("[bold yellow]To activate specialized channel feeds, choose either option:[/bold yellow]")
+        console.print(
+            "[bold yellow]To activate specialized channel feeds, choose either option:[/bold yellow]"
+        )
         console.print(
             "  [bold cyan]Option A (Quickest):[/bold cyan] In your Slack desktop or web client, create public channels:"
         )

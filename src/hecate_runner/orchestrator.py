@@ -2440,7 +2440,9 @@ class Orchestrator:
         # Enforce platform inheritance: Containers inherit Linux OS primitives
         if "Containers" in claimed and "Linux" not in claimed:
             claimed.append("Linux")
-            self.trail.step("scope", "Containers scope automatically inherits Linux platform telemetry")
+            self.trail.step(
+                "scope", "Containers scope automatically inherits Linux platform telemetry"
+            )
 
         if specimen and "Containers" in specimen and "Linux" not in specimen:
             specimen.append("Linux")

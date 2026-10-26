@@ -78,10 +78,21 @@ _COMMENTARY_TITLE_PATTERNS = (
         r"^\d{1,2}\s+\w+.{0,30}\b(?:standouts?|takeaways?|predictions?|trends)\b", re.IGNORECASE
     ),
     re.compile(r"^what is\b|^how to choose\b|\bbuyer'?s guide\b", re.IGNORECASE),
-    re.compile(r"\b(?:whitepaper|e-?book|webinar|infographic|datasheet|case study)\b", re.IGNORECASE),
-    re.compile(r"\b(?:announcing|introducing|what's new in|product release|feature spotlight)\b", re.IGNORECASE),
-    re.compile(r"\b(?:best practices for|top \d+ (?:tips|ways|strategies)|security checklist)\b", re.IGNORECASE),
-    re.compile(r"\b(?:in the ai era|ai-driven security|embracing ai|transforming security)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:whitepaper|e-?book|webinar|infographic|datasheet|case study)\b", re.IGNORECASE
+    ),
+    re.compile(
+        r"\b(?:announcing|introducing|what's new in|product release|feature spotlight)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:best practices for|top \d+ (?:tips|ways|strategies)|security checklist)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:in the ai era|ai-driven security|embracing ai|transforming security)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"^(?:overview of|introduction to|understanding the basics of)\b", re.IGNORECASE),
 )
 
