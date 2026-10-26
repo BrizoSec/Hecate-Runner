@@ -222,12 +222,17 @@ class SlackBotService:
         self.settings = settings or Settings()
         self._app = app
         self._handler: Any = None
+        self._thread_hunt_map: dict[str, str] = {}
 
         if self._app is None and self.is_configured:
             self._init_app()
 
         if self._app is not None:
             self._register_handlers()
+
+    def register_thread_hunt(self, thread_ts: str, hunt_id: str) -> None:
+        """Register a notification thread timestamp to its associated hunt ID."""
+        self._thread_hunt_map[thread_ts] = hunt_id
 
     @property
     def is_configured(self) -> bool:
@@ -507,6 +512,68 @@ class SlackBotService:
             respond(
                 text=f"❓ Unknown command `/hecate {subcmd}`. Type `/hecate help` for available commands."
             )
+
+        @self._app.event("message")
+        def handle_thread_message(body: dict[str, Any], say: Any, client: Any = None) -> None:
+            event = body.get("event", {})
+            if event.get("subtype") or event.get("bot_id"):
+                return
+            thread_ts = event.get("thread_ts")
+            if not thread_ts:
+                return
+
+            text = str(event.get("text") or "").strip()
+            if not text:
+                return
+
+            user_id = str(event.get("user") or "analyst")
+
+            # Resolve hunt ID
+            hunt_id = self._thread_hunt_map.get(thread_ts)
+            if not hunt_id:
+                h_match = re.search(r"\b(H-\d{4})\b", text)
+                if h_match:
+                    hunt_id = h_match.group(1).upper()
+
+            if not hunt_id and client:
+                try:
+                    channel = event.get("channel")
+                    resp = client.conversations_replies(channel=channel, ts=thread_ts, limit=1)
+                    messages = resp.get("messages", [])
+                    if messages:
+                        parent_text = messages[0].get("text", "")
+                        h_match = re.search(r"\b(H-\d{4})\b", parent_text)
+                        if h_match:
+                            hunt_id = h_match.group(1).upper()
+                            self._thread_hunt_map[thread_ts] = hunt_id
+                except Exception as c_err:
+                    log.debug("Thread parent lookup failed: %s", c_err)
+
+            if not hunt_id:
+                return
+
+            log.info("Conversational HITL rule tuning for %s from %s: '%s'", hunt_id, user_id, text)
+            from hecate_runner.rule_tuner import RuleTuner
+
+            tuner = RuleTuner(self.settings.hecate_workspace)
+            res = tuner.tune_hunt_rule(hunt_id, text)
+
+            if res.ok:
+                targets_str = ", ".join(f"`{t}`" for t in res.transpiled_targets) or "None"
+                msg = (
+                    f"🛠️ *Sigma Rule Tuned & Re-Transpiled for `{hunt_id}`*\n"
+                    f"• *Analyst Instruction:* _{text}_\n"
+                    f"• *Action Taken:* {res.action_summary}\n"
+                    f"• *Updated Telemetry Targets:* {targets_str}\n\n"
+                    f"```diff\n{res.diff}\n```"
+                )
+            else:
+                msg = (
+                    f"⚠️ *Rule Tuning Note for `{hunt_id}`:* {res.error}\n"
+                    f"_Try instructions like 'Exclude svchost.exe', 'Filter out CommandLine /update', or 'Add Image pwsh.exe'._"
+                )
+
+            say(text=msg, thread_ts=thread_ts)
 
     def start(self) -> None:
         """Start the Socket Mode handler loop."""
