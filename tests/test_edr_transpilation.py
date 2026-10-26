@@ -77,11 +77,28 @@ def test_github_publisher_allows_edr_query_extensions(tmp_path: Path):
     queries_dir = workspace / "queries" / "H-9999"
     queries_dir.mkdir(parents=True)
 
-    # Copy full promotion policy
-    policy_content = Path("/home/chemch/betas/Hecate-Workspace/promotion-policy.yaml").read_text(
-        encoding="utf-8"
-    )
-    (workspace / "promotion-policy.yaml").write_text(policy_content, encoding="utf-8")
+    # Create valid promotion policy
+    policy_yaml = """version: 1
+target_visibility: private
+auto_merge:
+  enabled: true
+  merge_method: squash
+risk:
+  missing_cti: review
+  missing_research: review
+  missing_sigma: review
+  incomplete_metadata: review
+  low_confidence_source: review
+  unsupported_claims: review
+  tlp_amber: review
+  unknown_tlp: allow_private
+review:
+  minimum_approvals: 1
+  allowed_associations:
+    - OWNER
+publisher_login: hecate-publisher[bot]
+"""
+    (workspace / "promotion-policy.yaml").write_text(policy_yaml, encoding="utf-8")
 
     # Create hunt draft with frontmatter
     (hunts_dir / "H-9999.md").write_text(
