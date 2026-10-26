@@ -156,11 +156,14 @@ def test_simulator_execute_sim_line_and_tuning(tmp_path: Path):
 
 
 def test_cli_slack_bot_help():
+    import re
+
     res = runner.invoke(app, ["slack-bot", "--help"])
     assert res.exit_code == 0
-    assert "Start the Slack Socket Mode interactive bot daemon" in res.stdout
-    assert "--simulate" in res.stdout
-    assert "--execute-sim" in res.stdout
+    clean_stdout = re.sub(r"\x1b\[[0-9;]*m", "", res.stdout)
+    assert "Start the Slack Socket Mode interactive bot daemon" in clean_stdout
+    assert "--simulate" in clean_stdout
+    assert "--execute-sim" in clean_stdout
 
 
 def test_cli_slack_bot_execute_sim(tmp_path: Path):
