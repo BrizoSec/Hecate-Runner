@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import os
 import re
 from collections import Counter
 from collections.abc import Callable
@@ -2437,7 +2438,13 @@ class Orchestrator:
             if is_actionable(item.content):
                 quality_verdict = source_quality_verdict(item)
                 verdict = quality_verdict or (
-                    triage(item) if self.settings.cti_triage == "park" else None
+                    triage(
+                        item,
+                        greynoise_api_key=self.settings.greynoise_api_key,
+                        anti_noise_enabled=self.settings.anti_noise_triage,
+                    )
+                    if self.settings.cti_triage == "park"
+                    else None
                 )
                 if verdict is not None and verdict.park:
                     reason = verdict.reason
@@ -2732,6 +2739,84 @@ class Orchestrator:
         self._enriched_context = (
             "" if source_is_indicator_only else generate_enrichment_summary(item.content)
         )
+
+        # Tier 5: VirusTotal v3 Behavioral Graph expansion
+        vt_behavior_blocks: list[str] = []
+        if (
+            self.settings.vt_behavior_enrichment
+            and (self.settings.vt_api_key or os.environ.get("VT_API_KEY"))
+            and total_obs
+        ):
+            try:
+                from hecate_agent.api import extract_vt_behavior_graph
+
+                candidate_hashes = (
+                    norm.get("sha256", []) + norm.get("md5", []) + norm.get("sha1", [])
+                )[:2]
+                for chash in candidate_hashes:
+                    bg = extract_vt_behavior_graph(chash)
+                    if bg:
+                        techs = [t["id"] for t in bg.get("mitre_techniques", [])]
+                        c2_ips = bg.get("contacted_ips", [])
+                        c2_domains = bg.get("contacted_domains", [])
+                        tags = bg.get("tags", [])
+                        dropped = bg.get("dropped_files", [])
+
+                        if techs or c2_ips or c2_domains or tags:
+                            self.trail.step(
+                                "enrichment",
+                                "VT behavior graph (%s...): %d technique(s), %d C2 IP(s), %d domain(s), %d tag(s)",
+                                chash[:10],
+                                len(techs),
+                                len(c2_ips),
+                                len(c2_domains),
+                                len(tags),
+                            )
+                            # Merge discovered C2 infrastructure into item indicators
+                            for ip in c2_ips:
+                                if ip not in item_inds.setdefault("ipv4", []):
+                                    item_inds["ipv4"].append(ip)
+                            for dom in c2_domains:
+                                if dom not in item_inds.setdefault("domain", []):
+                                    item_inds["domain"].append(dom)
+
+                            # Merge discovered MITRE techniques
+                            item_techs = item.metadata.setdefault("techniques", [])
+                            for t in techs:
+                                if t not in item_techs:
+                                    item_techs.append(t)
+
+                            # Build human-readable behavioral graph block
+                            bg_lines = [f"#### 🧬 VirusTotal Behavioral Graph ({chash[:12]}...)"]
+                            if techs:
+                                bg_lines.append(
+                                    f"- **Observed ATT&CK Techniques:** {', '.join(techs[:6])}"
+                                )
+                            if tags:
+                                bg_lines.append(f"- **Capability Tags:** {', '.join(tags[:6])}")
+                            if c2_ips:
+                                bg_lines.append(
+                                    f"- **Contacted C2 Traffic:** {', '.join(c2_ips[:5])}"
+                                )
+                            if c2_domains:
+                                bg_lines.append(
+                                    f"- **Resolved Hostnames:** {', '.join(c2_domains[:5])}"
+                                )
+                            if dropped:
+                                bg_lines.append(
+                                    f"- **Dropped Artifacts:** {', '.join(Path(p).name for p in dropped[:4])}"
+                                )
+                            vt_behavior_blocks.append("\n".join(bg_lines))
+            except Exception as exc:
+                log.debug("VT behavior graph extraction omitted (%s)", exc)
+
+        if vt_behavior_blocks:
+            vt_section = "\n\n### 🧬 VirusTotal Sandbox Execution Graph\n" + "\n\n".join(
+                vt_behavior_blocks
+            )
+            self._enriched_context = (
+                (self._enriched_context + vt_section) if self._enriched_context else vt_section
+            )
 
         # Keep the evidence-bearing text distinct from enrichment. The
         # research agent may use enrichment as a lead, but the hypothesis

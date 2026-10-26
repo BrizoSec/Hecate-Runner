@@ -930,6 +930,8 @@ class Settings(BaseSettings):
         "shadowserver_api_secret",
         "anyrun_api_key",
         "opencti_token",
+        "vt_api_key",
+        "greynoise_api_key",
     }
 
     # --- CTI intake triage ----------------------------------------------------
@@ -946,6 +948,29 @@ class Settings(BaseSettings):
             "acceptable. 'off' drafts from everything, the behaviour before "
             "this existed."
         ),
+    )
+    anti_noise_triage: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_ANTI_NOISE_TRIAGE",
+        description=(
+            "Park items whose IP observables are confirmed benign enterprise "
+            "services (RIOT) or known benign scanners."
+        ),
+    )
+    vt_api_key: str | None = Field(
+        default=None,
+        alias="VT_API_KEY",
+        description="VirusTotal API v3 key for hash and behavioral graph enrichment.",
+    )
+    greynoise_api_key: str | None = Field(
+        default=None,
+        alias="GREYNOISE_API_KEY",
+        description="GreyNoise API key for mass-scanner and RIOT anti-noise triage.",
+    )
+    vt_behavior_enrichment: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_VT_BEHAVIOR",
+        description="Enrich sample hashes with VirusTotal sandbox execution graphs and MITRE techniques.",
     )
 
     # --- Query execution ("propose, don't run") --------------------------------

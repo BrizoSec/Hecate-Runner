@@ -86,12 +86,90 @@ def _categories(item: CTIItem) -> list[str]:
     return [str(t).strip().lower() for t in raw if str(t).strip()]
 
 
-def triage(item: CTIItem) -> TriageVerdict:
-    """Park commentary; let everything else through.
+def anti_noise_verdict(
+    item: CTIItem, *, greynoise_api_key: str | None = None
+) -> TriageVerdict | None:
+    """Evaluate observable IP indicators against GreyNoise & RIOT anti-noise intelligence.
+
+    Parks items whose IP observables are confirmed benign enterprise services (RIOT)
+    or known benign internet scanners (Censys, Shodan, ShadowServer, Qualys).
+    For active malicious mass scanners (e.g. Mirai botnet), tags item metadata as
+    opportunistic scanner noise without parking.
+    """
+    import os
+
+    if greynoise_api_key and not os.environ.get("GREYNOISE_API_KEY"):
+        os.environ["GREYNOISE_API_KEY"] = greynoise_api_key
+
+    try:
+        from hecate_agent.api import extract_greynoise_context
+        from hecate_agent.core.provenance import is_valid_ipv4
+    except ImportError:
+        return None
+
+    # Extract IP observables
+    indicators = item.metadata.get("indicators") or {}
+    ips: list[str] = []
+    if isinstance(indicators, dict):
+        for k in ("ipv4", "ips", "ip"):
+            raw_vals = indicators.get(k, [])
+            vals = raw_vals if isinstance(raw_vals, list) else [raw_vals]
+            for val in vals:
+                clean_ip = str(val).split(":")[0].strip()
+                if clean_ip and is_valid_ipv4(clean_ip) and clean_ip not in ips:
+                    ips.append(clean_ip)
+
+    if not ips:
+        raw_ip = str(item.metadata.get("ip") or "").split(":")[0].strip()
+        if raw_ip and is_valid_ipv4(raw_ip):
+            ips.append(raw_ip)
+
+    if not ips and item.content:
+        raw_ips = re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", item.content)
+        for rip in raw_ips:
+            if is_valid_ipv4(rip) and rip not in ips:
+                ips.append(rip)
+            if len(ips) >= 3:
+                break
+
+    if not ips:
+        return None
+
+    for ip in ips[:3]:
+        ctx = extract_greynoise_context(ip)
+        if ctx.get("riot"):
+            actor = ctx.get("actor") or "Enterprise Service"
+            return TriageVerdict(
+                True,
+                f"observable IP {ip} is verified benign enterprise infrastructure ({actor} / GreyNoise RIOT)",
+            )
+        if ctx.get("noise") and ctx.get("classification") == "benign":
+            actor = ctx.get("actor") or "Internet Scanner"
+            return TriageVerdict(
+                True,
+                f"observable IP {ip} is a known benign scanner ({actor}) - not an intrusion",
+            )
+        if ctx.get("noise") and ctx.get("classification") == "malicious":
+            item.metadata["noise_classification"] = "mass_scanner"
+            item.metadata["scanner_actor"] = ctx.get("actor", "")
+            item.metadata["scanner_tags"] = ctx.get("tags", [])
+        elif ctx.get("classification") == "unseen":
+            item.metadata.setdefault("noise_classification", "targeted")
+
+    return None
+
+
+def triage(
+    item: CTIItem,
+    *,
+    greynoise_api_key: str | None = None,
+    anti_noise_enabled: bool = True,
+) -> TriageVerdict:
+    """Park commentary or benign scanner noise; let everything else through.
 
     Errs toward drafting. An item is parked only on a positive signal -- a
-    publisher category naming a commentary series, or a title in a recurring
-    non-technical shape -- never on the absence of one.
+    publisher category naming a commentary series, a title in a recurring
+    non-technical shape, or an observable confirmed as benign infrastructure.
     """
     # A provider flags intel that expired while it waited for a draft slot.
     # Parking it is the point: silently skipping it is how OTX lost 23
@@ -112,6 +190,11 @@ def triage(item: CTIItem) -> TriageVerdict:
             return TriageVerdict(
                 True, f"title matches a recurring commentary shape ({pattern.pattern[:44]}...)"
             )
+
+    if anti_noise_enabled:
+        an_verdict = anti_noise_verdict(item, greynoise_api_key=greynoise_api_key)
+        if an_verdict is not None and an_verdict.park:
+            return an_verdict
 
     return TriageVerdict(False)
 
