@@ -1102,7 +1102,10 @@ all = [
     { name = "mitreattack-python" },
     { name = "pysigma" },
     { name = "pysigma-backend-crowdstrike" },
+    { name = "pysigma-backend-elasticsearch" },
     { name = "pysigma-backend-kusto" },
+    { name = "pysigma-backend-sentinelone" },
+    { name = "pysigma-backend-splunk" },
     { name = "requests" },
     { name = "scikit-learn" },
     { name = "tavily-python" },
@@ -1142,9 +1145,18 @@ requires-dist = [
     { name = "pysigma-backend-crowdstrike", marker = "extra == 'all'", specifier = ">=3.0.0" },
     { name = "pysigma-backend-crowdstrike", marker = "extra == 'dev'", specifier = ">=3.0.0" },
     { name = "pysigma-backend-crowdstrike", marker = "extra == 'sigma'", specifier = ">=3.0.0" },
+    { name = "pysigma-backend-elasticsearch", marker = "extra == 'all'", specifier = ">=2.1.0" },
+    { name = "pysigma-backend-elasticsearch", marker = "extra == 'dev'", specifier = ">=2.1.0" },
+    { name = "pysigma-backend-elasticsearch", marker = "extra == 'sigma'", specifier = ">=2.1.0" },
     { name = "pysigma-backend-kusto", marker = "extra == 'all'", specifier = ">=1.0.0" },
     { name = "pysigma-backend-kusto", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "pysigma-backend-kusto", marker = "extra == 'sigma'", specifier = ">=1.0.0" },
+    { name = "pysigma-backend-sentinelone", marker = "extra == 'all'", specifier = ">=0.1.3" },
+    { name = "pysigma-backend-sentinelone", marker = "extra == 'dev'", specifier = ">=0.1.3" },
+    { name = "pysigma-backend-sentinelone", marker = "extra == 'sigma'", specifier = ">=0.1.3" },
+    { name = "pysigma-backend-splunk", marker = "extra == 'all'", specifier = ">=2.1.0" },
+    { name = "pysigma-backend-splunk", marker = "extra == 'dev'", specifier = ">=2.1.0" },
+    { name = "pysigma-backend-splunk", marker = "extra == 'sigma'", specifier = ">=2.1.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "python-dotenv", specifier = ">=0.19.0" },
@@ -2986,6 +2998,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pysigma-backend-elasticsearch"
+version = "2.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pysigma" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3e/12/b38da5ea8877210ccbf1d6748bf243961274219e879a37fdbccb3ca46067/pysigma_backend_elasticsearch-2.1.1.tar.gz", hash = "sha256:0cfb6b8e7892591c3bc83ef4dea4c4ef5cf8fe9e53e27dc3b0e9112bb3427fa6", size = 35302, upload-time = "2026-08-10T09:37:35.197Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/91/8cfc1d040a206c9f9c30b6d1322c0cb2cb44fb6e986659c777fa1345ae24/pysigma_backend_elasticsearch-2.1.1-py3-none-any.whl", hash = "sha256:0bb514ae02445d2053d530bd732c8747ffac9184246d45f3fa2669d0862a5af4", size = 42529, upload-time = "2026-08-10T09:37:33.939Z" },
+]
+
+[[package]]
 name = "pysigma-backend-kusto"
 version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2996,6 +3020,30 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8a/12/5bcf011fdd97e3ec95198c5db1f11a5a1d3594fabdac55b8b15c58c0f7a7/pysigma_backend_kusto-1.0.1.tar.gz", hash = "sha256:4c7d50bc230c82cc30cf35cdea1c381ca744b3194107e6419d0ba0cd8bfd1224", size = 299611, upload-time = "2025-11-28T18:36:04.505Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/14/fd/14bea67bbb6f97c2bcbedea283d784fc478946db8bc76d8c407e61219298/pysigma_backend_kusto-1.0.1-py3-none-any.whl", hash = "sha256:8b6a6763a2839b8bc75e333ea2bcb2f3bb07d98b46072a1bef602c1e9b504799", size = 314985, upload-time = "2025-11-28T18:36:03.468Z" },
+]
+
+[[package]]
+name = "pysigma-backend-sentinelone"
+version = "0.1.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pysigma" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/53/ea/0f7ec16861396fbd63bdbab78941cdd62479186c98ffda28f1787050db81/pysigma_backend_sentinelone-0.1.3.tar.gz", hash = "sha256:06f72af3eba3bede57f795f98cf35be9efd498553535feb7f2ec0de061d40dda", size = 6009, upload-time = "2023-11-10T02:26:49.79Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ae/b5/32bed9e77fcf9345d1dfa7116cce519a75774f19c118cdacddd3f6e80a24/pysigma_backend_sentinelone-0.1.3-py3-none-any.whl", hash = "sha256:308556bdc0af5e74868f93d64784db2b0e29f8c75c98b4b348be751351cfc35f", size = 7444, upload-time = "2023-11-10T02:26:48.425Z" },
+]
+
+[[package]]
+name = "pysigma-backend-splunk"
+version = "2.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pysigma" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/57/f2/a7bd243d9d597b52658cfb1c7bea415ffe7cb864cd12c5630e13f026781b/pysigma_backend_splunk-2.1.0.tar.gz", hash = "sha256:ca4d2d0e4c7f766a4daf551489ab20366578163e6ac838fc59bb6d3f2a1423e9", size = 18736, upload-time = "2026-03-22T22:46:44.002Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/41/38/a2c7d959abcd6690f10d430707be1ed60de3ca406e0bd6af8f59e0a72439/pysigma_backend_splunk-2.1.0-py3-none-any.whl", hash = "sha256:90da654b17c7a396ba23af14a29ed559c562ae5bb60c4ceda47cd9744dd3581c", size = 21094, upload-time = "2026-03-22T22:46:42.687Z" },
 ]
 
 [[package]]

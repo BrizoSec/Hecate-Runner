@@ -67,6 +67,10 @@ def test_hunt_writer_renders_native_edr_queries(sample_request: DraftHuntRequest
     assert "CrowdStrike Falcon (LogScale / Raptor) (CQL):" in content
     assert "Rapid7 InsightIDR (LEQL):" in content
     assert "where(process.exe_path=" in content
+    assert "SentinelOne (S1QL / Deep Visibility) (S1QL):" in content
+    assert "Splunk Enterprise / Cloud (SPL) (SPL):" in content
+    assert "Elastic Security (EQL) (EQL):" in content
+    assert "process.executable.caseless" in content
 
 
 def test_github_publisher_allows_edr_query_extensions(tmp_path: Path):
@@ -116,6 +120,13 @@ publisher_login: hecate-publisher[bot]
     (queries_dir / "process__rule.leql").write_text(
         "where(process.name=test.exe)", encoding="utf-8"
     )
+    (queries_dir / "process__rule.s1ql").write_text(
+        'EventType = "Process Creation"', encoding="utf-8"
+    )
+    (queries_dir / "process__rule.spl").write_text('Image="*\\test.exe"', encoding="utf-8")
+    (queries_dir / "process__rule.eql").write_text(
+        'any where process.name == "test.exe"', encoding="utf-8"
+    )
 
     settings = Settings(hecate_workspace=workspace)
     bundle_files, _ = _snapshot_bundle(settings, "H-9999")
@@ -125,3 +136,6 @@ publisher_login: hecate-publisher[bot]
     assert "queries/H-9999/process__rule.kql" in bundle_files
     assert "queries/H-9999/process__rule.cql" in bundle_files
     assert "queries/H-9999/process__rule.leql" in bundle_files
+    assert "queries/H-9999/process__rule.s1ql" in bundle_files
+    assert "queries/H-9999/process__rule.spl" in bundle_files
+    assert "queries/H-9999/process__rule.eql" in bundle_files

@@ -317,7 +317,7 @@ def _render_sigma_section(req: DraftHuntRequest) -> str:
                         code_lang = (
                             "kql"
                             if t_item.dialect == "kql"
-                            else ("text" if t_item.dialect == "leql" else t_item.dialect)
+                            else ("text" if t_item.dialect in {"leql", "s1ql"} else t_item.dialect)
                         )
                         parts.append(f"**{t_item.platform_name} ({t_item.dialect.upper()}):**")
                         parts.append(f"```{code_lang}")
