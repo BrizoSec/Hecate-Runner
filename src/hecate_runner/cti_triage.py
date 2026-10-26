@@ -78,6 +78,11 @@ _COMMENTARY_TITLE_PATTERNS = (
         r"^\d{1,2}\s+\w+.{0,30}\b(?:standouts?|takeaways?|predictions?|trends)\b", re.IGNORECASE
     ),
     re.compile(r"^what is\b|^how to choose\b|\bbuyer'?s guide\b", re.IGNORECASE),
+    re.compile(r"\b(?:whitepaper|e-?book|webinar|infographic|datasheet|case study)\b", re.IGNORECASE),
+    re.compile(r"\b(?:announcing|introducing|what's new in|product release|feature spotlight)\b", re.IGNORECASE),
+    re.compile(r"\b(?:best practices for|top \d+ (?:tips|ways|strategies)|security checklist)\b", re.IGNORECASE),
+    re.compile(r"\b(?:in the ai era|ai-driven security|embracing ai|transforming security)\b", re.IGNORECASE),
+    re.compile(r"^(?:overview of|introduction to|understanding the basics of)\b", re.IGNORECASE),
 )
 
 
@@ -189,6 +194,23 @@ def triage(
         if pattern.search(title):
             return TriageVerdict(
                 True, f"title matches a recurring commentary shape ({pattern.pattern[:44]}...)"
+            )
+
+    # Fast-filter actionability pre-triage: park marketing, webinars, or whitepapers that carry no observables
+    indicators = item.metadata.get("indicators") or {}
+    has_indicators = (
+        any(bool(values) for values in indicators.values())
+        if isinstance(indicators, dict)
+        else bool(indicators)
+    )
+    if not has_indicators:
+        text_sample = ((item.title or "") + " " + item.content[:400]).lower()
+        if re.search(
+            r"\b(?:whitepaper|e-?book|webinar|datasheet|case study|buyer'?s guide|sponsored by|schedule a demo|request a demo)\b",
+            text_sample,
+        ):
+            return TriageVerdict(
+                True, "marketing / whitepaper content without active adversary observables"
             )
 
     if anti_noise_enabled:

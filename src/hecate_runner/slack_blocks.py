@@ -6,6 +6,7 @@ MITRE ATT&CK badges, MISP links, and multi-column telemetry summaries.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -19,6 +20,51 @@ COLOR_INFO = "#3AA3E3"  # Cerulean blue (Metrics, telemetry, digest)
 COLOR_WARNING = "#ECB22E"  # Amber yellow (Planning draft, review required, telemetry gap)
 COLOR_CRITICAL = "#E01E5A"  # Crimson red (Critical exploit spike, weaponization alert)
 COLOR_PURPLE = "#7928CA"  # Aubergine / Purple (Purple team, threat hunting)
+
+_TLD_PATTERN = (
+    r"\b(?<!\[|\/)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)\.(com|org|net|edu|gov|io|ir|ru|cn|info|biz|xyz|top|"
+    r"site|online|live|club|vip|cc|co|me|tv|us|uk|de|eu|nl|fr|it|es|pl|br|in|au|jp|kr|"
+    r"cloud|shop|store|app|dev|tech|pro|space|fun|icu|link|click|work|mobi|asia|pw|tk|"
+    r"ml|ga|cf|gq|onion|su|to|is|ws)\b"
+)
+
+
+def defang_ioc(text: str) -> str:
+    """Defang IOCs (URLs, IPv4, domains, email addresses) so they cannot be accidentally clicked in Slack."""
+    if not text:
+        return text
+
+    def _defang_url(m: re.Match[str]) -> str:
+        scheme = "hxxps://" if m.group(1).lower() == "https" else "hxxp://"
+        rest = m.group(2)
+        parts = rest.split("/", 1)
+        host = parts[0].replace(".", "[.]")
+        path = "/" + parts[1] if len(parts) > 1 else ""
+        return scheme + host + path
+
+    out = re.sub(r"\b(https?)://([^\s\'\"<>]+)", _defang_url, text, flags=re.IGNORECASE)
+    out = re.sub(r"\bftp://", "fxp://", out, flags=re.IGNORECASE)
+
+    # Defang IPv4 addresses (excluding already bracketed dots)
+    out = re.sub(
+        r"\b(?<!\[)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?!\])\b",
+        r"\1[.]\2[.]\3[.]\4",
+        out,
+    )
+
+    # Defang email addresses
+    out = re.sub(
+        r"\b([a-zA-Z0-9_.+-]+)@([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)\b",
+        lambda m: m.group(1) + "[@]" + m.group(2).replace(".", "[.]"),
+        out,
+    )
+
+    def _defang_domain(m: re.Match[str]) -> str:
+        domain = m.group(1) + "." + m.group(2)
+        return domain.replace(".", "[.]")
+
+    out = re.sub(_TLD_PATTERN, _defang_domain, out, flags=re.IGNORECASE)
+    return out
 
 
 def build_draft_card(result: RunResult, *, interactive: bool = False) -> list[dict[str, Any]]:
@@ -362,12 +408,16 @@ def build_threat_intake_card(item: CTIItem) -> list[dict[str, Any]]:
         else "Recent"
     )
 
+    clean_title = defang_ioc(item.title[:75])
+    clean_identifier = defang_ioc(item.identifier)
+    clean_summary = defang_ioc(item.content[:350])
+
     blocks: list[dict[str, Any]] = [
         {
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"🚨 Threat Intel Intake: {item.title[:75]}",
+                "text": f"🚨 Threat Intel Intake: {clean_title}",
                 "emoji": True,
             },
         },
@@ -384,7 +434,7 @@ def build_threat_intake_card(item: CTIItem) -> list[dict[str, Any]]:
                 },
                 {
                     "type": "mrkdwn",
-                    "text": f"*Identifier:*\n`{item.identifier}`",
+                    "text": f"*Identifier:*\n`{clean_identifier}`",
                 },
                 {
                     "type": "mrkdwn",
@@ -396,7 +446,7 @@ def build_threat_intake_card(item: CTIItem) -> list[dict[str, Any]]:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*Intelligence Summary & Telemetry:*\n```{item.content[:350]}...```",
+                "text": f"*Intelligence Summary & Telemetry:*\n```{clean_summary}...```",
             },
         },
     ]

@@ -8,7 +8,12 @@ import httpx
 import pytest
 
 from hecate_runner.config import Settings
-from hecate_runner.notifications import notify_draft_created
+from hecate_runner.cti.base import CTIItem
+from hecate_runner.notifications import (
+    SlackNotificationRouter,
+    notify_draft_created,
+    notify_threat_intake,
+)
 from hecate_runner.orchestrator import RunResult
 
 
@@ -401,3 +406,73 @@ def test_specialized_daily_digests_dispatch(
     assert ok3 is True
     assert dispatched[-1][0] == settings.slack_channel_threat_hunting
     assert "Threat Hunting" in dispatched[-1][1]
+
+
+def test_notify_threat_intake_deduplication(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = settings.model_copy(
+        update={
+            "slack_bot_token": "xoxb-fake",
+            "hecate_workspace": tmp_path,
+        }
+    )
+    dispatched = []
+
+    def fake_post(self: SlackNotificationRouter, channel: str, text: str, **kw: object) -> tuple[bool, str]:
+        dispatched.append((channel, text, kw.get("attachments")))
+        return True, "ok"
+
+    monkeypatch.setattr(SlackNotificationRouter, "post_message", fake_post)
+
+    item = CTIItem(
+        source="abuse_ch",
+        title="ThreatFox Indicator: IClickFix",
+        identifier="1988783",
+        content="Malware: IClickFix kojur.ir",
+    )
+
+    # First call delivers and records to cache
+    notify_threat_intake(settings, item)
+    assert len(dispatched) == 1
+    assert "Threat Intel Intake" in dispatched[0][1]
+
+    # Second call detects duplicate key in cache and skips
+    notify_threat_intake(settings, item)
+    assert len(dispatched) == 1  # No duplicate message!
+
+
+def test_notify_threat_intake_fallback_text_is_concise(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = settings.model_copy(
+        update={
+            "slack_bot_token": "xoxb-fake",
+            "hecate_workspace": tmp_path,
+        }
+    )
+    captured = []
+
+    def fake_post(self: SlackNotificationRouter, channel: str, text: str, **kw: object) -> tuple[bool, str]:
+        captured.append((channel, text, kw.get("attachments")))
+        return True, "ok"
+
+    monkeypatch.setattr(SlackNotificationRouter, "post_message", fake_post)
+
+    item = CTIItem(
+        source="abuse_ch",
+        title="ThreatFox Indicator: IClickFix",
+        identifier="1988783",
+        content="Long detailed telemetry snippet that should not be printed twice in chat",
+    )
+    notify_threat_intake(settings, item)
+
+    assert len(captured) == 1
+    text = captured[0][1]
+    # The top-level text is a clean 1-line fallback banner, NOT the duplicated 280-char content snippet
+    assert "Long detailed telemetry snippet" not in text
+    assert "ThreatFox Indicator: IClickFix" in text
+    # The card in attachments contains the rich details
+    attachments = captured[0][2]
+    assert attachments is not None
+    assert len(attachments) == 1

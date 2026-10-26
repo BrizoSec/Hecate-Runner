@@ -252,3 +252,36 @@ def test_anti_noise_tags_targeted_infrastructure(monkeypatch):
         verdict = anti_noise_verdict(item)
         assert verdict is None
         assert item.metadata["noise_classification"] == "targeted"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Wiz ASPM in the AI Era",
+        "Whitepaper: Cloud Security Posture Management",
+        "Top 10 Security Strategies for 2026",
+        "Announcing our New Container Security Suite",
+        "Buyer's Guide to Managed Detection and Response",
+    ],
+)
+def test_marketing_and_whitepaper_without_observables_is_parked(title: str) -> None:
+    item = CTIItem(
+        content=f"Download our latest e-book and whitepaper on {title}. Schedule a demo today.",
+        source="rss",
+        title=title,
+        metadata={"indicators": {}},
+    )
+    verdict = triage(item)
+    assert verdict.park is True
+    assert "commentary" in verdict.reason or "marketing" in verdict.reason
+
+
+def test_technical_report_with_whitepaper_keyword_but_real_indicators_passes() -> None:
+    item = CTIItem(
+        content="Adversaries deployed a custom backdoor hash 0123456789abcdef0123456789abcdef",
+        source="rss",
+        title="Technical Analysis of APT41 Malware",
+        metadata={"indicators": {"hash": ["0123456789abcdef0123456789abcdef"]}},
+    )
+    verdict = triage(item)
+    assert verdict.park is False

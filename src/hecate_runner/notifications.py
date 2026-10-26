@@ -10,7 +10,9 @@ catches its own errors and logs a warning instead of raising.
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -25,6 +27,7 @@ from hecate_runner.slack_blocks import (
     build_threat_hunting_digest_card,
     build_threat_intake_card,
     build_threat_intel_digest_card,
+    defang_ioc,
 )
 
 if TYPE_CHECKING:
@@ -49,6 +52,41 @@ class SlackNotificationRouter:
     def close(self) -> None:
         if self._client:
             self._client.close()
+
+    @property
+    def _notified_cache_path(self) -> Path:
+        return self.settings.hecate_workspace / ".cursors" / "slack_notified_cti.json"
+
+    def is_already_notified(self, item_key: str) -> bool:
+        """Return True if item_key was already notified to Slack to prevent duplicates."""
+        cache_file = self._notified_cache_path
+        if not cache_file.exists():
+            return False
+        try:
+            data = json.loads(cache_file.read_text(encoding="utf-8"))
+            return item_key in data.get("notified_keys", [])
+        except Exception:
+            return False
+
+    def record_notified(self, item_key: str) -> None:
+        """Record that item_key has been notified to Slack."""
+        cache_file = self._notified_cache_path
+        notified: list[str] = []
+        if cache_file.exists():
+            try:
+                data = json.loads(cache_file.read_text(encoding="utf-8"))
+                notified = data.get("notified_keys", [])
+            except Exception:
+                notified = []
+        if item_key not in notified:
+            notified.append(item_key)
+            if len(notified) > 1000:
+                notified = notified[-1000:]
+            try:
+                cache_file.parent.mkdir(parents=True, exist_ok=True)
+                cache_file.write_text(json.dumps({"notified_keys": notified}), encoding="utf-8")
+            except Exception as exc:
+                log.warning("Could not persist slack_notified_cti.json: %s", exc)
 
     @property
     def is_configured(self) -> bool:
@@ -288,18 +326,22 @@ def notify_threat_intake(settings: Settings, item: CTIItem) -> None:
     if not router.is_configured:
         return
 
+    # Check deduplication cache to prevent duplicate postings
+    item_id = f"{item.source}:{item.identifier or item.source_url or item.title}"
+    if router.is_already_notified(item_id):
+        log.info("Threat intake notification for %s already sent; skipping duplicate.", item_id)
+        return
+
     profile = str(item.metadata.get("evidence_profile") or "")
     target_channel = router.resolve_threat_channel(profile, item.source)
 
-    text = (
-        f":rotating_light: *Threat Intelligence Intake: {item.title}*\n"
-        f"*Source:* `{item.source}` | *Evidence Profile:* `{profile}`\n"
-        f"*Identifier:* `{item.identifier}`\n"
-        f"```{item.content[:280]}...```"
-    )
+    clean_title = defang_ioc(item.title or item.identifier or "Incoming CTI")
+    fallback_text = f":rotating_light: Threat Intel Intake: {clean_title} ({item.source})"
 
     attachments = build_threat_intake_card(item)
-    router.post_message(target_channel, text, attachments=attachments)
+    success, _ = router.post_message(target_channel, fallback_text, attachments=attachments)
+    if success:
+        router.record_notified(item_id)
 
 
 def notify_ops_metrics(

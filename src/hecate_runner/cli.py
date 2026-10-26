@@ -1430,12 +1430,21 @@ def setup_slack_channels() -> None:
         raise typer.Exit(code=1)
 
     target_channels = [
+        # Specialized Threat Feeds
+        ("Threat C2 Infrastructure", settings.slack_channel_c2),
+        ("Threat Sandbox Malware", settings.slack_channel_sandbox),
+        ("Threat APT Campaigns", settings.slack_channel_apt),
+        ("Threat Cloud & Identity", settings.slack_channel_cloud),
+        ("Threat Exploits & EPSS", settings.slack_channel_exploits),
+        # Daily Digests & Engineering
         ("Detection Engineering", settings.slack_channel_detection_engineering),
-        ("Threat Intel", settings.slack_channel_threat_intel),
-        ("Threat Hunting", settings.slack_channel_threat_hunting),
-        ("Ops Metrics", settings.slack_channel_ops_metrics),
+        ("Threat Intel Digest", settings.slack_channel_threat_intel),
+        ("Threat Hunting Digest", settings.slack_channel_threat_hunting),
+        # Operations, Validation & Fallback
         ("Executive Hunts", settings.slack_channel_hunts_exec),
-        ("Purple Team", settings.slack_channel_purple_team),
+        ("Ops & Cost Metrics", settings.slack_channel_ops_metrics),
+        ("Purple Team Feed", settings.slack_channel_purple_team),
+        ("Global Fallback Feed", "#all-hecate-hunt"),
     ]
 
     console.print("[dim]Querying workspace public channels...[/dim]")
@@ -1497,12 +1506,20 @@ def setup_slack_channels() -> None:
 
     if needs_manual_creation:
         console.print()
-        console.print("[bold yellow]To activate these channels:[/bold yellow]")
+        console.print("[bold yellow]To activate specialized channel feeds, choose either option:[/bold yellow]")
         console.print(
-            f"1. In your Slack app or web client, create public channels: [bold]{', '.join(needs_manual_creation)}[/bold]"
+            "  [bold cyan]Option A (Quickest):[/bold cyan] In your Slack desktop or web client, create public channels:"
+        )
+        console.print(f"  [bold green]{', '.join(needs_manual_creation)}[/bold green]")
+        console.print(
+            "  [dim](Because the Bot Token has `chat:write.public`, it will immediately post to them without needing an invite).[/dim]"
+        )
+        console.print()
+        console.print(
+            "  [bold cyan]Option B (Automated via API):[/bold cyan] In your Slack App Settings (api.slack.com/apps):"
         )
         console.print(
-            "[dim]Because the bot has `chat:write.public`, it can immediately post to them without needing an invitation.[/dim]"
+            "  Add the [bold]channels:write[/bold] scope under Bot Token Scopes, reinstall the app to workspace, and re-run this command."
         )
 
 

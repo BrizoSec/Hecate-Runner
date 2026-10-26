@@ -215,3 +215,18 @@ def test_an_appliance_report_scopes_to_the_appliance(orch: Orchestrator) -> None
     )
     assert platforms == ["Network Devices"]
     assert not orch._platform_dropped
+
+
+def test_containers_scope_automatically_inherits_linux(orch: Orchestrator) -> None:
+    """Fix 1: Containers platform scope must inherit Linux OS log sources and techniques.
+    A hunt scoped to Containers must not drop Linux process/network techniques."""
+    facts: dict[str, TechniqueFact] = {}
+    _, platforms = orch._resolve_ttps(
+        ["T1059.004"],  # Unix Shell (runs on Linux, macOS, Network Devices)
+        scope_text="cloud container workloads running Docker and Kubernetes",
+        facts=facts,
+    )
+    # Platforms should include both Containers and Linux via inheritance
+    assert "Containers" in platforms
+    assert "Linux" in platforms
+    assert "T1059.004" not in orch._platform_dropped

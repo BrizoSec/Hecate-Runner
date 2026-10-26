@@ -2398,6 +2398,24 @@ class Orchestrator:
                         else tuple(_PLATFORM_LABELS.get(pf, pf) for pf in meta.platforms)
                     ),
                 )
+                if meta.superseded_from and meta.technique_id:
+                    facts[meta.technique_id.upper()] = TechniqueFact(
+                        valid=True,
+                        superseded_by="",
+                        names=tuple(n for n in (meta.name, meta.parent_name) if n),
+                        platforms=(
+                            ()
+                            if len(meta.platforms) >= _NON_SCOPING_PLATFORM_THRESHOLD
+                            else tuple(_PLATFORM_LABELS.get(pf, pf) for pf in meta.platforms)
+                        ),
+                    )
+            if (
+                meta.superseded_from
+                and asserted is not None
+                and meta.superseded_from.upper() in {t.upper() for t in asserted}
+                and meta.technique_id.upper() not in {t.upper() for t in asserted}
+            ):
+                asserted.append(meta.technique_id)
             for tactic in meta.tactics:
                 if tactic not in tactics:
                     tactics.append(tactic)
@@ -2418,6 +2436,15 @@ class Orchestrator:
         claimant = "the hypothesis"
         self._platform_dropped = set()
         shielded = {t.upper() for t in (protected or [])}
+
+        # Enforce platform inheritance: Containers inherit Linux OS primitives
+        if "Containers" in claimed and "Linux" not in claimed:
+            claimed.append("Linux")
+            self.trail.step("scope", "Containers scope automatically inherits Linux platform telemetry")
+
+        if specimen and "Containers" in specimen and "Linux" not in specimen:
+            specimen.append("Linux")
+
         self.trail.step(
             "scope",
             "techniques run on %s; hypothesis names %s",
@@ -2454,6 +2481,10 @@ class Orchestrator:
             # (e.g. LLM suggested T1207 Windows for a macOS hunt), the technique
             # is hallucinated. The claimed text is the source of truth.
             final_platforms = scoped if scoped else claimed
+            if "Containers" in claimed and "Containers" not in final_platforms:
+                final_platforms.append("Containers")
+            if "Containers" in final_platforms and "Linux" not in final_platforms:
+                final_platforms.append("Linux")
             if not scoped:
                 self.trail.step(
                     "scope",
@@ -2639,12 +2670,6 @@ class Orchestrator:
                             if verdict is None
                             else "no commentary category or title shape",
                         )
-                        try:
-                            from hecate_runner.notifications import notify_threat_intake
-
-                            notify_threat_intake(self.settings, item)
-                        except Exception as exc:
-                            log.warning("Threat-intake Slack notification failed (%s)", exc)
                         return item, skipped, parked_count
                     reason = (
                         f"already drafted as {earlier} from the same source ({item.source_url})"
@@ -2761,6 +2786,14 @@ class Orchestrator:
             return RunResult(
                 outcome="dry_run", detail=item.content[:100], parked_count=parked_count
             )
+
+        # Notify Slack only when the draft slot has actually been reserved and not dry run!
+        try:
+            from hecate_runner.notifications import notify_threat_intake
+
+            notify_threat_intake(self.settings, item)
+        except Exception as exc:
+            log.warning("Threat-intake Slack notification failed (%s)", exc)
 
         # Computed once for the whole cycle: the same "is there any prose
         # here?" answer gates web search during research (nothing real to

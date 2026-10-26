@@ -21,6 +21,7 @@ from hecate_runner.slack_blocks import (
     build_threat_hunting_digest_card,
     build_threat_intake_card,
     build_threat_intel_digest_card,
+    defang_ioc,
 )
 
 
@@ -211,3 +212,41 @@ def test_build_threat_hunting_digest_card() -> None:
     fields = cards[0]["blocks"][1]["fields"]
     assert "4 runs" in fields[0]["text"]
     assert "$1.50" in fields[2]["text"]
+
+
+def test_defang_ioc_neutralizes_malicious_indicators() -> None:
+    sample = (
+        "Adversary C2: https://kojur.ir/payload.exe on 185.220.101.5:8080.\n"
+        "Contact: evil-actor@phish.xyz.\n"
+        "Safe files: report.md and parser.py.\n"
+        "Already defanged: evil[.]com and 10[.]0[.]0[.]1."
+    )
+    defanged = defang_ioc(sample)
+    assert "https://" not in defanged
+    assert "hxxps://" in defanged
+    assert "kojur[.]ir" in defanged
+    assert "185[.]220[.]101[.]5" in defanged
+    assert "evil-actor[@]phish[.]xyz" in defanged
+    # Preserves filenames and markdown extensions
+    assert "report.md" in defanged
+    assert "parser.py" in defanged
+    # Idempotent (does not produce [[.]] or [[[.]])
+    assert "evil[.]com" in defanged
+    assert "[[.]]" not in defanged
+
+
+def test_build_threat_intake_card_defangs_content() -> None:
+    item = CTIItem(
+        source="abuse_ch",
+        title="ThreatFox Indicator: kojur.ir",
+        identifier="1988783",
+        content="Malware distribution server at https://kojur.ir/dl.php with IP 185.220.101.5",
+        source_url="https://threatfox.abuse.ch/ioc/1988783/",
+    )
+    cards = build_threat_intake_card(item)
+    header_text = cards[0]["blocks"][0]["text"]["text"]
+    assert "kojur[.]ir" in header_text
+
+    summary_text = cards[0]["blocks"][2]["text"]["text"]
+    assert "hxxps://kojur[.]ir/dl.php" in summary_text
+    assert "185[.]220[.]101[.]5" in summary_text
