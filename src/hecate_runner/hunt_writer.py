@@ -299,6 +299,32 @@ def _render_sigma_section(req: DraftHuntRequest) -> str:
         parts.append("```")
         parts.append("")
 
+        ryaml = str(rule.get("rule_yaml", "")).strip()
+        if ryaml:
+            try:
+                from hecate_agent.api import transpile_sigma_rule
+
+                t_queries = transpile_sigma_rule(ryaml)
+                successful_t = [
+                    t for t in t_queries.values() if getattr(t, "success", False) and getattr(t, "query", None)
+                ]
+                if successful_t:
+                    parts.append("##### Native EDR & SIEM Queries")
+                    parts.append("")
+                    for t_item in successful_t:
+                        code_lang = (
+                            "kql"
+                            if t_item.dialect == "kql"
+                            else ("text" if t_item.dialect == "leql" else t_item.dialect)
+                        )
+                        parts.append(f"**{t_item.platform_name} ({t_item.dialect.upper()}):**")
+                        parts.append(f"```{code_lang}")
+                        parts.append(t_item.query.strip())
+                        parts.append("```")
+                        parts.append("")
+            except Exception:
+                pass
+
     return "\n".join(parts)
 
 

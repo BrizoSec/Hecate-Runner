@@ -106,7 +106,7 @@ def _snapshot_bundle(settings: Settings, hunt_id: str) -> tuple[dict[str, str], 
         ):
             raise PublisherError("Refusing to publish a query directory outside queries/")
         for path in sorted(query_dir.iterdir()):
-            if path.suffix.lower() not in {".yml", ".yaml"}:
+            if path.suffix.lower() not in {".yml", ".yaml", ".kql", ".cql", ".leql"}:
                 continue
             if path.is_dir():
                 raise PublisherError("Nested query directories are not publishable")

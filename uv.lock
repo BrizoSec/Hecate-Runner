@@ -1101,6 +1101,8 @@ all = [
     { name = "mcp", extra = ["cli"] },
     { name = "mitreattack-python" },
     { name = "pysigma" },
+    { name = "pysigma-backend-crowdstrike" },
+    { name = "pysigma-backend-kusto" },
     { name = "requests" },
     { name = "scikit-learn" },
     { name = "tavily-python" },
@@ -1134,9 +1136,15 @@ requires-dist = [
     { name = "ollama", marker = "extra == 'ollama'", specifier = ">=0.3.0" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0.0" },
-    { name = "pysigma", marker = "extra == 'all'", specifier = ">=0.11" },
-    { name = "pysigma", marker = "extra == 'dev'", specifier = ">=0.11" },
-    { name = "pysigma", marker = "extra == 'sigma'", specifier = ">=0.11" },
+    { name = "pysigma", marker = "extra == 'all'", specifier = ">=1.0.1,<2.0.0" },
+    { name = "pysigma", marker = "extra == 'dev'", specifier = ">=1.0.1,<2.0.0" },
+    { name = "pysigma", marker = "extra == 'sigma'", specifier = ">=1.0.1,<2.0.0" },
+    { name = "pysigma-backend-crowdstrike", marker = "extra == 'all'", specifier = ">=3.0.0" },
+    { name = "pysigma-backend-crowdstrike", marker = "extra == 'dev'", specifier = ">=3.0.0" },
+    { name = "pysigma-backend-crowdstrike", marker = "extra == 'sigma'", specifier = ">=3.0.0" },
+    { name = "pysigma-backend-kusto", marker = "extra == 'all'", specifier = ">=1.0.0" },
+    { name = "pysigma-backend-kusto", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "pysigma-backend-kusto", marker = "extra == 'sigma'", specifier = ">=1.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "python-dotenv", specifier = ">=0.19.0" },
@@ -2963,6 +2971,31 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/92/e6/1b200cea322b987cc1e7150acec33158c51fedc60bc2ad5363e3e96d3f51/pysigma-1.4.0.tar.gz", hash = "sha256:0a9cc76f76470e8097543b653aecf91e59f7de1199c67e36fc57f2831b35eed7", size = 138090, upload-time = "2026-06-27T22:59:32.962Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/6b/15f51ff44a3e2e60c0ed04fcfa5c209278182d87276f0ef914ed66147e38/pysigma-1.4.0-py3-none-any.whl", hash = "sha256:e04db8cce4f0fd7dc8a3a64bc6d3ecaa49b7939d55ee42b12c7152d143eced47", size = 167270, upload-time = "2026-06-27T22:59:31.534Z" },
+]
+
+[[package]]
+name = "pysigma-backend-crowdstrike"
+version = "3.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pysigma" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fd/b7/04ed715c5f64ab44f3b62bf5485faff23ecedc5ee487f2ed55a85eebd1c9/pysigma_backend_crowdstrike-3.0.0.tar.gz", hash = "sha256:7e3edd5119cf334cc7bd9e9bc9051969dcb559ee65985f6cbaf99af1a2648467", size = 19311, upload-time = "2025-11-30T01:45:54.005Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a3/43/6c2fe0b39a12bbddac7592833a8d0cbf7e7521f319840351cad6d5d9866d/pysigma_backend_crowdstrike-3.0.0-py3-none-any.whl", hash = "sha256:be875a79f4677e8b200a55a19de4f2d9e70af8622fc4265658395c8de87a62f6", size = 19880, upload-time = "2025-11-30T01:45:51.979Z" },
+]
+
+[[package]]
+name = "pysigma-backend-kusto"
+version = "1.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "pysigma" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8a/12/5bcf011fdd97e3ec95198c5db1f11a5a1d3594fabdac55b8b15c58c0f7a7/pysigma_backend_kusto-1.0.1.tar.gz", hash = "sha256:4c7d50bc230c82cc30cf35cdea1c381ca744b3194107e6419d0ba0cd8bfd1224", size = 299611, upload-time = "2025-11-28T18:36:04.505Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/fd/14bea67bbb6f97c2bcbedea283d784fc478946db8bc76d8c407e61219298/pysigma_backend_kusto-1.0.1-py3-none-any.whl", hash = "sha256:8b6a6763a2839b8bc75e333ea2bcb2f3bb07d98b46072a1bef602c1e9b504799", size = 314985, upload-time = "2025-11-28T18:36:03.468Z" },
 ]
 
 [[package]]

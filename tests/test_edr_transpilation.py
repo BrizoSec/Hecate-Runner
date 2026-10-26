@@ -1,0 +1,103 @@
+"""Tests for native EDR query transpilation and publication (Milestone 1)."""
+
+from datetime import UTC, datetime
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+from hecate_runner.config import Settings
+from hecate_runner.github_publisher import _snapshot_bundle
+from hecate_runner.hecate_client import HypothesisResult
+from hecate_runner.hunt_writer import DraftHuntRequest, write_draft
+
+
+@pytest.fixture
+def sample_request(tmp_path: Path) -> DraftHuntRequest:
+    hyp = HypothesisResult(
+        hypothesis="Adversaries execute DTHelper.exe to establish persistence.",
+        justification="Common persistence technique.",
+        techniques=["T1543.003"],
+        data_sources=["process_creation"],
+        observables=["DTHelper.exe"],
+        false_positives=["Legitimate administration"],
+        raw_output="raw",
+    )
+    rule_yaml = """title: Detection of DTHelper.exe Execution
+id: 11111111-2222-3333-4444-555555555555
+status: experimental
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith: '\\DTHelper.exe'
+  condition: selection
+level: high
+"""
+    return DraftHuntRequest(
+        hunt_id="H-9999",
+        threat_intel="Test Hunt with Transpiled Queries",
+        hypothesis=hyp,
+        sigma_rules=[
+            {
+                "logsource_category": "process_creation",
+                "title": "Detection of DTHelper.exe Execution",
+                "level": "high",
+                "techniques": ["T1543.003"],
+                "rule_yaml": rule_yaml,
+            }
+        ],
+        generated_at=datetime.now(UTC),
+        platforms=["Windows"],
+        sigma_rule_dir="queries/H-9999",
+    )
+
+
+def test_hunt_writer_renders_native_edr_queries(sample_request: DraftHuntRequest, tmp_path: Path):
+    hunts_root = tmp_path / "hunts"
+    draft_path = write_draft(sample_request, hunts_root)
+
+    assert draft_path.exists()
+    content = draft_path.read_text(encoding="utf-8")
+
+    # Verify native EDR query section is rendered in Markdown
+    assert "##### Native EDR & SIEM Queries" in content
+    assert "Microsoft Defender / Microsoft Sentinel (KQL):" in content
+    assert "DeviceProcessEvents" in content
+    assert "CrowdStrike Falcon (LogScale / Raptor) (CQL):" in content
+    assert "Rapid7 InsightIDR (LEQL):" in content
+    assert "where(process.exe_path=" in content
+
+
+def test_github_publisher_allows_edr_query_extensions(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    hunts_dir = workspace / "hunts" / "2026" / "Q4"
+    hunts_dir.mkdir(parents=True)
+    queries_dir = workspace / "queries" / "H-9999"
+    queries_dir.mkdir(parents=True)
+
+    # Copy full promotion policy
+    policy_content = Path("/home/chemch/betas/Hecate-Workspace/promotion-policy.yaml").read_text(encoding="utf-8")
+    (workspace / "promotion-policy.yaml").write_text(policy_content, encoding="utf-8")
+
+    # Create hunt draft with frontmatter
+    (hunts_dir / "H-9999.md").write_text(
+        "---\nhunt_id: H-9999\ntitle: Test Hunt\n---\n# H-9999 Test Hunt", encoding="utf-8"
+    )
+
+    # Create canonical YAML and transpiled query files
+    (queries_dir / "process__rule.yml").write_text("title: Test Sigma Rule", encoding="utf-8")
+    (queries_dir / "process__rule.kql").write_text("DeviceProcessEvents | where FileName == 'test.exe'", encoding="utf-8")
+    (queries_dir / "process__rule.cql").write_text("#event_simpleName=ProcessRollup2 ImageFileName=/test\\.exe/", encoding="utf-8")
+    (queries_dir / "process__rule.leql").write_text("where(process.name=test.exe)", encoding="utf-8")
+
+    settings = Settings(hecate_workspace=workspace)
+    bundle_files, digest = _snapshot_bundle(settings, "H-9999")
+
+    assert "hunts/2026/Q4/H-9999.md" in bundle_files
+    assert "queries/H-9999/process__rule.yml" in bundle_files
+    assert "queries/H-9999/process__rule.kql" in bundle_files
+    assert "queries/H-9999/process__rule.cql" in bundle_files
+    assert "queries/H-9999/process__rule.leql" in bundle_files
