@@ -20,7 +20,7 @@ COLOR_CRITICAL = "#E01E5A"  # Crimson red (Critical exploit spike, weaponization
 COLOR_PURPLE = "#7928CA"  # Aubergine / Purple (Purple team, threat hunting)
 
 
-def build_draft_card(result: RunResult) -> list[dict[str, Any]]:
+def build_draft_card(result: RunResult, *, interactive: bool = False) -> list[dict[str, Any]]:
     """Build a rich Slack card for a newly created draft hunt."""
     research_ctx = (
         f"Linked to research context `{result.research_id}`"
@@ -66,6 +66,53 @@ def build_draft_card(result: RunResult) -> list[dict[str, Any]]:
                 },
             ],
         },
+    ]
+
+    if interactive:
+        blocks.append(
+            {
+                "type": "actions",
+                "block_id": f"hunt_actions_{result.hunt_id}",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "🚀 Approve & Promote",
+                            "emoji": True,
+                        },
+                        "style": "primary",
+                        "action_id": "hecate_approve_hunt",
+                        "value": result.hunt_id,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "🔍 Deploy Queries", "emoji": True},
+                        "action_id": "hecate_deploy_queries",
+                        "value": result.hunt_id,
+                    },
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "🧪 Purple Team Replay",
+                            "emoji": True,
+                        },
+                        "action_id": "hecate_rerun_purple",
+                        "value": result.hunt_id,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "⏸️ Park / Suppress", "emoji": True},
+                        "style": "danger",
+                        "action_id": "hecate_park_hunt",
+                        "value": result.hunt_id,
+                    },
+                ],
+            }
+        )
+
+    blocks.append(
         {
             "type": "context",
             "elements": [
@@ -74,8 +121,8 @@ def build_draft_card(result: RunResult) -> list[dict[str, Any]]:
                     "text": "🤖 *Hecate Autonomous Runner* | Run `hecate-runner watch` to observe execution",
                 }
             ],
-        },
-    ]
+        }
+    )
 
     return [{"color": COLOR_WARNING, "blocks": blocks}]
 
@@ -90,6 +137,7 @@ def build_hunt_completed_card(
     misp_event_id: str = "",
     misp_url: str = "https://localhost:8443",
     content_repo_url: str = "https://github.com/BrizoSec/Hecate-Content",
+    interactive: bool = False,
 ) -> list[dict[str, Any]]:
     """Build an executive completion card for a validated hunt."""
     tech_formatted = ", ".join(f"`{t}`" for t in techniques[:6]) or "Unspecified"
@@ -172,6 +220,50 @@ def build_hunt_completed_card(
 
     if action_elements:
         blocks.append({"type": "actions", "elements": action_elements})
+
+    if interactive:
+        blocks.append(
+            {
+                "type": "actions",
+                "block_id": f"hunt_actions_{hunt_id}",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "🚀 Approve & Promote",
+                            "emoji": True,
+                        },
+                        "style": "primary",
+                        "action_id": "hecate_approve_hunt",
+                        "value": hunt_id,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "🔍 Deploy Queries", "emoji": True},
+                        "action_id": "hecate_deploy_queries",
+                        "value": hunt_id,
+                    },
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "🧪 Purple Team Replay",
+                            "emoji": True,
+                        },
+                        "action_id": "hecate_rerun_purple",
+                        "value": hunt_id,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "⏸️ Park / Suppress", "emoji": True},
+                        "style": "danger",
+                        "action_id": "hecate_park_hunt",
+                        "value": hunt_id,
+                    },
+                ],
+            }
+        )
 
     blocks.append(
         {

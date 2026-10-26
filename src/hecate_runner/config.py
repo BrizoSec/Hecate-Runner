@@ -552,6 +552,16 @@ class Settings(BaseSettings):
         alias="SLACK_BOT_TOKEN",
         description="Slack Bot OAuth token (xoxb-...) for multi-channel chat:write delivery.",
     )
+    slack_app_token: str | None = Field(
+        default=None,
+        alias="SLACK_APP_TOKEN",
+        description="Slack App-level token (xapp-...) for Socket Mode interactive bot connection.",
+    )
+    slack_interactive_enabled: bool = Field(
+        default=False,
+        alias="HECATE_RUNNER_SLACK_INTERACTIVE_ENABLED",
+        description="Enable interactive Slack Block Kit action buttons and Socket Mode bot.",
+    )
     slack_channel_ops_metrics: str = Field(
         default="#hecate-ops-metrics",
         alias="SLACK_CHANNEL_OPS_METRICS",
@@ -942,6 +952,7 @@ class Settings(BaseSettings):
         "otx_api_key",
         "slack_webhook_url",
         "slack_bot_token",
+        "slack_app_token",
         "misp_api_key",
         "urlscan_api_key",
         "spur_api_key",

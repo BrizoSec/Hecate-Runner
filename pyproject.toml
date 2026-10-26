@@ -36,6 +36,7 @@ dependencies = [
     # in the workspace venv, so technique lookup, similarity, research
     # grounding and Sigma validation were all silently inert.
     "hecate-agent[all]",
+    "slack-bolt>=1.20.0",
 ]
 
 [project.optional-dependencies]
@@ -139,6 +140,14 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["tiktoken", "tiktoken.*"]
 follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = ["slack_bolt", "slack_bolt.*", "slack_sdk", "slack_sdk.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "hecate_runner.slack_bot"
+disallow_untyped_decorators = false
 
 # --- pytest --------------------------------------------------------------
 [tool.pytest.ini_options]

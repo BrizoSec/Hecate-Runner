@@ -631,16 +631,7 @@ def deploy_queries_cmd(
         console.print(f"[red]Query directory not found:[/red] {query_dir}")
         raise typer.Exit(code=1)
 
-    from hecate_agent.api import deploy_transpiled_query
-
-    query_exts = {
-        ".kql": "sentinel_kql",
-        ".cql": "crowdstrike_cql",
-        ".leql": "rapid7_leql",
-        ".s1ql": "sentinelone_s1ql",
-        ".spl": "splunk_spl",
-        ".eql": "elastic_eql",
-    }
+    from hecate_runner.slack_bot import deploy_queries_for_hunt
 
     table = Table(
         title=f"SIEM & EDR Query Deployment for {hunt_id}",
@@ -653,27 +644,18 @@ def deploy_queries_cmd(
     table.add_column("Remote ID")
     table.add_column("Detail")
 
+    deployments = deploy_queries_for_hunt(
+        settings.hecate_workspace,
+        hunt_id,
+        dry_run=dry_run,
+        target=target,
+    )
     deployed_count = 0
-    for q_file in sorted(query_dir.iterdir()):
-        tgt = query_exts.get(q_file.suffix.lower())
-        if not tgt:
-            continue
-        if target and target.lower() != tgt.lower():
-            continue
-
-        q_text = q_file.read_text(encoding="utf-8").strip()
-        title = q_file.stem.replace("__", " - ").replace("_", " ").title()
-        res = deploy_transpiled_query(
-            target=tgt,
-            query=q_text,
-            hunt_id=hunt_id,
-            title=title,
-            dry_run=dry_run,
-        )
+    for res in deployments:
         status_color = "green" if res.get("ok") else "red"
         table.add_row(
-            q_file.name,
-            tgt,
+            str(res.get("file", "")),
+            str(res.get("target", "")),
             f"[{status_color}]{res.get('status')}[/{status_color}]",
             str(res.get("remote_id") or ""),
             str(res.get("detail", "")),

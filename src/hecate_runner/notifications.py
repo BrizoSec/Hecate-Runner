@@ -204,7 +204,7 @@ def notify_draft_created(settings: Settings, result: RunResult) -> None:
         f"Status: `planning` — human review required before execution.{parked_note}"
     )
 
-    attachments = build_draft_card(result)
+    attachments = build_draft_card(result, interactive=settings.slack_interactive_enabled)
     router.post_message(settings.slack_channel_hunts_exec, text, attachments=attachments)
 
 
@@ -242,6 +242,7 @@ def notify_hunt_completed(
         sigma_count=sigma_count,
         pr_url=pr_url,
         misp_event_id=misp_event_id,
+        interactive=settings.slack_interactive_enabled,
     )
     router.post_message(settings.slack_channel_hunts_exec, text, attachments=attachments)
 
