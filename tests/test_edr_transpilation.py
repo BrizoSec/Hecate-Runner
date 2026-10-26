@@ -2,7 +2,6 @@
 
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -94,7 +93,7 @@ def test_github_publisher_allows_edr_query_extensions(tmp_path: Path):
     (queries_dir / "process__rule.leql").write_text("where(process.name=test.exe)", encoding="utf-8")
 
     settings = Settings(hecate_workspace=workspace)
-    bundle_files, digest = _snapshot_bundle(settings, "H-9999")
+    bundle_files, _ = _snapshot_bundle(settings, "H-9999")
 
     assert "hunts/2026/Q4/H-9999.md" in bundle_files
     assert "queries/H-9999/process__rule.yml" in bundle_files
