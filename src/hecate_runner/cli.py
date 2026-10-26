@@ -7,6 +7,7 @@ Commands:
     hecate-runner metrics       Summarize stage latency and LLM usage
     hecate-runner config        Dump effective config (redacts secrets)
     hecate-runner doctor        Sanity-check the deployment
+    hecate-runner slack-bot     Start Slack Socket Mode interactive bot or offline simulation harness
     hecate-runner otx-poll      Route one high-signal OTX pulse into the CTI queue
     hecate-runner rss-poll      Route one high-signal RSS/Atom entry into the CTI queue
     hecate-runner misp-poll     Route one high-signal MISP event into the CTI queue
@@ -35,6 +36,7 @@ from dotenv import dotenv_values
 from hecate_agent.core.grounding import TechniqueFact, render_grounding_section
 from rich import box
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 
 from hecate_runner import __version__
@@ -1621,6 +1623,103 @@ def daily_digest(
                 console.print(f"[green]✓ Threat Hunting digest delivered. ({msg})[/green]")
             else:
                 console.print(f"[yellow]⚠️ Threat Hunting digest post note: {msg}[/yellow]")
+
+
+@app.command(name="slack-bot")
+def slack_bot_cmd(
+    simulate: Annotated[
+        bool,
+        typer.Option(
+            "--simulate",
+            "-s",
+            help="Run interactive offline simulation harness without Slack connection.",
+        ),
+    ] = False,
+    execute_sim: Annotated[
+        str | None,
+        typer.Option(
+            "--execute-sim",
+            "-e",
+            help="Execute a single simulation command headlessly and print output.",
+        ),
+    ] = None,
+) -> None:
+    """Start the Slack Socket Mode interactive bot daemon or offline simulation harness."""
+    settings = Settings()
+
+    if execute_sim:
+        from hecate_runner.slack_sim import SlackBotSimulator
+
+        sim = SlackBotSimulator(settings=settings)
+        out = sim.execute_sim_line(execute_sim)
+        console.print(out)
+        return
+
+    if simulate:
+        from hecate_runner.slack_sim import SlackBotSimulator
+
+        sim = SlackBotSimulator(settings=settings)
+        sim.run_repl(console=console)
+        return
+
+    # Check configuration
+    if not (settings.slack_bot_token and settings.slack_app_token):
+        console.print(
+            Panel(
+                "[bold red]Slack Interactive Socket Mode Bot is not fully configured.[/bold red]\n\n"
+                "Missing required tokens in your environment or `.env`:\n"
+                f"• `SLACK_BOT_TOKEN`: {'[green]Configured[/green]' if settings.slack_bot_token else '[red]Missing (xoxb-...)[/red]'}\n"
+                f"• `SLACK_APP_TOKEN`: {'[green]Configured[/green]' if settings.slack_app_token else '[red]Missing (xapp-...)[/red]'}\n\n"
+                "[bold yellow]How to set up:[/bold yellow]\n"
+                "1. Go to your Slack App Settings -> Basic Information -> App-Level Tokens.\n"
+                "2. Generate a token named `SocketMode` with scope [cyan]connections:write[/cyan].\n"
+                "3. Set `SLACK_APP_TOKEN=xapp-...` in `Hecate-Workspace/.env`.\n"
+                "4. Under Socket Mode in your app settings, toggle [bold]Enable Socket Mode[/bold] to ON.\n"
+                "5. Ensure `SLACK_BOT_TOKEN=xoxb-...` has `chat:write` and `commands` scopes.\n\n"
+                "[dim]Tip: You can test all bot functionality offline using:[/dim]\n"
+                "[bold cyan]hecate-runner slack-bot --simulate[/bold cyan]",
+                title="❌ Configuration Error",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    from hecate_runner.slack_bot import SlackBotService
+
+    service = SlackBotService(settings=settings)
+    if not service.is_configured:
+        console.print("[red]Slack Bot initialization failed.[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(
+        Panel(
+            "[bold green]Starting Hecate Interactive Slack Bot (Socket Mode)...[/bold green]\n"
+            f"• Workspace: [cyan]{settings.hecate_workspace}[/cyan]\n"
+            f"• Threat Hunting: [cyan]{settings.slack_channel_threat_hunting}[/cyan]\n"
+            f"• Detection Eng: [cyan]{settings.slack_channel_detection_engineering}[/cyan]\n"
+            f"• Interactive HITL: [green]Enabled[/green]\n"
+            f"• Slash Commands: [cyan]/hecate status, /hecate hunt, /hecate deploy, /hecate rerun[/cyan]\n\n"
+            "[dim]Press Ctrl+C to stop.[/dim]",
+            title="🤖 Hecate SecOps Bot",
+            border_style="green",
+        )
+    )
+
+    import signal
+
+    def _sig_handler(sig: int, frame: Any) -> None:
+        console.print("\n[dim]Received shutdown signal, terminating Socket Mode...[/dim]")
+        service.close()
+        raise typer.Exit(0)
+
+    signal.signal(signal.SIGINT, _sig_handler)
+    signal.signal(signal.SIGTERM, _sig_handler)
+
+    try:
+        service.start()
+    except Exception as exc:
+        console.print(f"[red]Slack Bot stopped with error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
 
 @app.command()

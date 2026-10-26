@@ -1,0 +1,33 @@
+[Unit]
+Description=hecate-runner-slack-bot - Hecate interactive Slack bot daemon
+Documentation=https://github.com/BrizoSec/Hecate-Runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chemch
+Group=chemch
+WorkingDirectory=/home/chemch/betas/Hecate-Runner
+
+# Read env from the workspace .env (single canonical source of truth), with optional runner-local override.
+# Prefix with '-' so missing files are ignored instead of causing a fatal unit failure.
+EnvironmentFile=-/home/chemch/betas/Hecate-Workspace/.env
+EnvironmentFile=-/home/chemch/betas/Hecate-Runner/.env
+
+# Run via uv so we always execute inside the project venv.
+ExecStart=/home/chemch/.local/bin/uv run hecate-runner slack-bot
+
+Restart=always
+RestartSec=10s
+StandardOutput=append:/home/chemch/betas/Hecate-Core/logs/slack_bot.log
+StandardError=append:/home/chemch/betas/Hecate-Core/logs/slack_bot.log
+
+# Light hardening — bot needs to read/write the Hecate workspace for queries & rules
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/chemch/betas/Hecate-Core /home/chemch/betas/Hecate-Runner /home/chemch/betas/Hecate-Workspace
+
+[Install]
+WantedBy=multi-user.target
