@@ -610,6 +610,82 @@ def publish_sync(
         console.print(table)
 
 
+@app.command("deploy-queries")
+def deploy_queries_cmd(
+    hunt_id: Annotated[str, typer.Argument(help="Hunt ID (e.g. H-0868) to deploy queries for.")],
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run/--live", help="Simulate deployment (default) or push live via API."
+        ),
+    ] = True,
+    target: Annotated[
+        str | None,
+        typer.Option("--target", help="Specific target platform (e.g. sentinel_kql, splunk_spl)."),
+    ] = None,
+) -> None:
+    """Deploy or simulate deployment of hunt queries to target SIEM and EDR platforms."""
+    settings = Settings()
+    query_dir = settings.hecate_workspace / "queries" / hunt_id
+    if not query_dir.exists():
+        console.print(f"[red]Query directory not found:[/red] {query_dir}")
+        raise typer.Exit(code=1)
+
+    from hecate_agent.api import deploy_transpiled_query
+
+    query_exts = {
+        ".kql": "sentinel_kql",
+        ".cql": "crowdstrike_cql",
+        ".leql": "rapid7_leql",
+        ".s1ql": "sentinelone_s1ql",
+        ".spl": "splunk_spl",
+        ".eql": "elastic_eql",
+    }
+
+    table = Table(
+        title=f"SIEM & EDR Query Deployment for {hunt_id}",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("File")
+    table.add_column("Target")
+    table.add_column("Status")
+    table.add_column("Remote ID")
+    table.add_column("Detail")
+
+    deployed_count = 0
+    for q_file in sorted(query_dir.iterdir()):
+        tgt = query_exts.get(q_file.suffix.lower())
+        if not tgt:
+            continue
+        if target and target.lower() != tgt.lower():
+            continue
+
+        q_text = q_file.read_text(encoding="utf-8").strip()
+        title = q_file.stem.replace("__", " - ").replace("_", " ").title()
+        res = deploy_transpiled_query(
+            target=tgt,
+            query=q_text,
+            hunt_id=hunt_id,
+            title=title,
+            dry_run=dry_run,
+        )
+        status_color = "green" if res.get("ok") else "red"
+        table.add_row(
+            q_file.name,
+            tgt,
+            f"[{status_color}]{res.get('status')}[/{status_color}]",
+            str(res.get("remote_id") or ""),
+            str(res.get("detail", "")),
+        )
+        if res.get("ok"):
+            deployed_count += 1
+
+    console.print(table)
+    mode_str = "simulated (dry-run)" if dry_run else "live"
+    console.print(f"[bold]{deployed_count}[/bold] query(s) processed in {mode_str} mode.")
+
+
 def _hunt_paths(settings: Settings, hunt_ids: list[str] | None) -> list[Path]:
     """Resolve hunt IDs to files, or every hunt when none are named."""
     root = settings.hunts_root

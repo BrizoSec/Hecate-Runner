@@ -2068,6 +2068,9 @@ class Orchestrator:
                             q_file.write_text(t_res.query.strip() + "\n", encoding="utf-8")
                 except Exception as t_err:
                     log.debug("Native EDR query generation for %s skipped (%s)", r_path.name, t_err)
+
+        if getattr(self.settings, "siem_deploy_enabled", False):
+            self._deploy_native_queries(req, result.rules, out_dir)
         try:
             req.sigma_rule_dir = str(out_dir.relative_to(self.settings.hecate_workspace))
         except ValueError:  # out_dir outside the workspace -- show it whole
@@ -2096,6 +2099,52 @@ class Orchestrator:
             req.hunt_id,
             ", ".join(sorted({str(r.get("logsource_category")) for r in result.rules})),
         )
+
+    def _deploy_native_queries(
+        self,
+        req: DraftHuntRequest,
+        rules: list[dict[str, Any]],
+        out_dir: Path,
+    ) -> list[dict[str, Any]]:
+        """Deploy or simulate deployment of transpiled queries to target SIEM/EDR platforms."""
+        from hecate_agent.api import deploy_transpiled_query
+
+        deploy_results = []
+        is_dry_run = getattr(self.settings, "siem_deploy_dry_run", True)
+
+        for rule in rules:
+            r_yaml = rule.get("rule_yaml")
+            title = str(rule.get("title") or req.hunt_id)
+            if not r_yaml:
+                continue
+
+            try:
+                from hecate_agent.api import transpile_sigma_rule
+
+                trans_queries = transpile_sigma_rule(r_yaml)
+                for target, t_res in trans_queries.items():
+                    if getattr(t_res, "success", False) and getattr(t_res, "query", None):
+                        res = deploy_transpiled_query(
+                            target=target,
+                            query=t_res.query,
+                            hunt_id=req.hunt_id,
+                            title=title,
+                            description=f"Auto-generated query for {req.hunt_id}",
+                            techniques=rule.get("techniques") or [],
+                            dry_run=is_dry_run,
+                        )
+                        deploy_results.append(res)
+            except Exception as d_err:
+                log.warning("Query deployment skipped for %s (%s)", title, d_err)
+
+        if deploy_results:
+            statuses = [f"{r.get('target')}:{r.get('status')}" for r in deploy_results]
+            self.trail.step(
+                "deploy", "processed %d query(s): %s", len(deploy_results), listing(statuses)
+            )
+            log.info("SIEM/EDR query deployment for %s: %s", req.hunt_id, ", ".join(statuses))
+
+        return deploy_results
 
     def _run_purple_team_validation(
         self,

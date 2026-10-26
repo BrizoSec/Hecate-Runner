@@ -162,3 +162,29 @@ detection:
             assert val["is_valid"] is True
             assert val["sanity_score"] >= 0.8
             assert val["error_messages"] == []
+
+
+def test_cli_deploy_queries_command(tmp_path: Path):
+    from unittest import mock
+
+    from typer.testing import CliRunner
+
+    from hecate_runner.cli import app
+
+    runner = CliRunner()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    queries_dir = workspace / "queries" / "H-9999"
+    queries_dir.mkdir(parents=True)
+    (queries_dir / "process__rule.spl").write_text('Image="*\\cmd.exe"', encoding="utf-8")
+    (queries_dir / "process__rule.kql").write_text(
+        "DeviceProcessEvents | where FileName == 'cmd.exe'", encoding="utf-8"
+    )
+
+    with mock.patch.dict("os.environ", {"HECATE_WORKSPACE": str(workspace)}):
+        result = runner.invoke(app, ["deploy-queries", "H-9999", "--dry-run"])
+        assert result.exit_code == 0
+        assert "SIEM & EDR Query Deployment for H-9999" in result.output
+        assert "splunk_spl" in result.output
+        assert "sentinel_kql" in result.output
+        assert "dry_run" in result.output

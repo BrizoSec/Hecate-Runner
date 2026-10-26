@@ -227,6 +227,18 @@ class Settings(BaseSettings):
         description="Days after which parked CTI items are automatically deleted. 0 to disable.",
     )
 
+    # --- SIEM & EDR Live Query Deployment (Pillar 2, Milestone 4) -------------
+    siem_deploy_enabled: bool = Field(
+        default=False,
+        alias="HECATE_RUNNER_SIEM_DEPLOY_ENABLED",
+        description="Automatically deploy validated hunting queries to target SIEM/EDR platforms via API.",
+    )
+    siem_deploy_dry_run: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_SIEM_DEPLOY_DRY_RUN",
+        description="Simulate query deployment in dry-run mode without mutating remote SIEM/EDR state.",
+    )
+
     # --- Research grounding (Phase 6) ---------------------------------------
     sigma_review_enabled: bool = Field(
         default=True,
