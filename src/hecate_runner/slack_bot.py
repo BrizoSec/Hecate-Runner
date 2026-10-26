@@ -16,6 +16,7 @@ from typing import Any
 
 from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.config import Settings
+from hecate_runner.slack_blocks import build_runner_status_card, build_slash_help_card
 
 log = logging.getLogger(__name__)
 
@@ -187,6 +188,33 @@ def replay_hunt_purple_team(workspace: Path, hunt_id: str) -> dict[str, Any]:
     }
 
 
+def execute_adhoc_hunt(
+    settings: Settings,
+    topic: str,
+    content: str | None = None,
+    dry_run: bool = False,
+) -> Any:
+    """Trigger an immediate ad-hoc hunt cycle for a given topic or CVE."""
+    from datetime import UTC, datetime
+
+    from hecate_runner.cti.base import CTIItem
+    from hecate_runner.orchestrator import build_orchestrator_for_item
+
+    item_content = (
+        content
+        or f"Ad-hoc threat intelligence hunt request for {topic}. Analyze recent exploitation, threat actor tradecraft, TTPs, and detection opportunities."
+    )
+    item = CTIItem(
+        content=item_content,
+        source="slack_command",
+        received_at=datetime.now(UTC),
+        identifier=f"slack_{topic.replace(' ', '_')}",
+        title=topic,
+    )
+    orch = build_orchestrator_for_item(settings, item, ignore_quota=True)
+    return orch.run_once(dry_run=dry_run)
+
+
 class SlackBotService:
     """Manages Slack Socket Mode event handlers, interactive actions, and commands."""
 
@@ -351,6 +379,134 @@ class SlackBotService:
                 msg = f"❌ *Failed to park `{hunt_id}`:* {res.get('error')}"
 
             say(text=msg, thread_ts=thread_ts)
+
+        @self._app.command("/hecate")
+        def handle_hecate_command(ack: Any, body: dict[str, Any], respond: Any) -> None:
+            ack()
+            text = str(body.get("text") or "").strip()
+            tokens = text.split()
+            subcmd = tokens[0].lower() if tokens else "help"
+            user_id = str(body.get("user_id") or "analyst")
+            channel_id = str(body.get("channel_id") or "")
+
+            log.info("Slack slash command /hecate '%s' from %s in %s", text, user_id, channel_id)
+
+            if subcmd in {"help", "-h", "--help"}:
+                card = build_slash_help_card()
+                respond(attachments=card)
+                return
+
+            if subcmd == "status":
+                card = build_runner_status_card(self.settings)
+                respond(attachments=card)
+                return
+
+            if subcmd == "deploy":
+                if len(tokens) < 2:
+                    respond(
+                        text=(
+                            "⚠️ *Usage:* `/hecate deploy <hunt_id> [target]`\n"
+                            "• Example: `/hecate deploy H-0868`\n"
+                            "• Example: `/hecate deploy H-0868 sentinel_kql`"
+                        )
+                    )
+                    return
+
+                hunt_id = tokens[1].upper()
+                target = tokens[2].lower() if len(tokens) > 2 else None
+                is_dry_run = getattr(self.settings, "siem_deploy_dry_run", True)
+                mode_str = "Simulated (Dry-Run)" if is_dry_run else "Live API Push"
+
+                deployments = deploy_queries_for_hunt(
+                    self.settings.hecate_workspace,
+                    hunt_id,
+                    dry_run=is_dry_run,
+                    target=target,
+                )
+                if not deployments:
+                    respond(text=f"⚠️ *No queries found for `{hunt_id}`* under `queries/{hunt_id}`.")
+                    return
+
+                rows = []
+                for d in deployments:
+                    icon = "✅" if d.get("ok") else "❌"
+                    tgt = d.get("target")
+                    st = d.get("status")
+                    rem_id = f" (`{d.get('remote_id')}`)" if d.get("remote_id") else ""
+                    rows.append(f"{icon} *{tgt}:* `{st}`{rem_id}")
+
+                rows_text = "\n".join(rows)
+                msg = (
+                    f"🔍 *SIEM & EDR Query Deployment for `{hunt_id}`*\n"
+                    f"*Mode:* `{mode_str}` | *Initiated by:* <@{user_id}>\n\n"
+                    f"{rows_text}"
+                )
+                respond(text=msg)
+                return
+
+            if subcmd == "rerun":
+                if len(tokens) < 2:
+                    respond(
+                        text="⚠️ *Usage:* `/hecate rerun <hunt_id>` (e.g. `/hecate rerun H-0868`)"
+                    )
+                    return
+
+                hunt_id = tokens[1].upper()
+                res = replay_hunt_purple_team(self.settings.hecate_workspace, hunt_id)
+                if res.get("ok"):
+                    msg = (
+                        f"🧪 *Purple Team Replay for `{hunt_id}` Completed*\n"
+                        f"• *Requested by:* <@{user_id}>\n"
+                        f"• *Rules Tested:* {res.get('total_rules')}\n"
+                        f"• *Rules Validated:* {res.get('passed_rules')}\n"
+                        f"• *Detection Fidelity:* {res.get('fidelity')}\n"
+                        f"• *Sandbox Telemetry:* {res.get('sample_events_count')} events evaluated"
+                    )
+                else:
+                    msg = f"❌ *Purple Team Replay failed for `{hunt_id}`:* {res.get('error')}"
+                respond(text=msg)
+                return
+
+            if subcmd == "hunt":
+                if len(tokens) < 2:
+                    respond(
+                        text=(
+                            "⚠️ *Usage:* `/hecate hunt <topic_or_cve>`\n"
+                            "• Example: `/hecate hunt Akira Ransomware`\n"
+                            "• Example: `/hecate hunt CVE-2024-38077`"
+                        )
+                    )
+                    return
+
+                topic = " ".join(tokens[1:])
+                respond(
+                    text=(
+                        f"🚀 *Ad-hoc Hunt Initiated:* Launching autonomous research & hypothesis pipeline for *{topic}*...\n"
+                        f"_Processing within workspace `{self.settings.hecate_workspace.name}`..._"
+                    )
+                )
+                try:
+                    res = execute_adhoc_hunt(self.settings, topic=topic)
+                    if getattr(res, "ok", False) and getattr(res, "hunt_id", None):
+                        finish_msg = (
+                            f"✅ *Ad-hoc Hunt Completed: `{res.hunt_id}`*\n"
+                            f"• *Topic:* {topic}\n"
+                            f"• *Draft Path:* `{res.draft_path}`\n"
+                            f"• *Research ID:* `{res.research_id or 'none'}`"
+                        )
+                    else:
+                        outcome = getattr(res, "outcome", "error")
+                        detail = getattr(res, "detail", "")
+                        finish_msg = f"⚠️ *Ad-hoc Hunt finished with status `{outcome}`:* {detail}"
+                except Exception as h_err:
+                    finish_msg = f"❌ *Ad-hoc Hunt failed for `{topic}`:* {h_err}"
+
+                respond(text=finish_msg)
+                return
+
+            respond(
+                text=f"❓ Unknown command `/hecate {subcmd}`. Type `/hecate help` for available commands."
+            )
 
     def start(self) -> None:
         """Start the Socket Mode handler loop."""

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from hecate_runner.config import Settings
     from hecate_runner.cti.base import CTIItem
     from hecate_runner.orchestrator import RunResult
 
@@ -690,3 +691,128 @@ def build_threat_hunting_digest_card(
     ]
 
     return [{"color": COLOR_PURPLE, "blocks": blocks}]
+
+
+def build_slash_help_card() -> list[dict[str, Any]]:
+    """Build a help card describing available /hecate slash commands."""
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "🤖 Hecate SecOps Slash Commands",
+                "emoji": True,
+            },
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    "*Autonomous Threat Hunting & Detection Engineering Commands:*\n\n"
+                    "• `/hecate status` — View pipeline status, active hunts, quota & metrics\n"
+                    "• `/hecate hunt <topic_or_cve>` — Launch an immediate ad-hoc hunt cycle (e.g. `/hecate hunt Akira Ransomware`)\n"
+                    "• `/hecate deploy <hunt_id> [target]` — Deploy or simulate queries across SIEM/EDRs (e.g. `/hecate deploy H-0868 sentinel_kql`)\n"
+                    "• `/hecate rerun <hunt_id>` — Replay purple-team adversary emulation and validate Sigma rules\n"
+                    "• `/hecate help` — Show this command reference guide"
+                ),
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "🛡️ *Hecate Autonomous SecOps* | Socket Mode Interactive Engine",
+                }
+            ],
+        },
+    ]
+    return [{"color": COLOR_INFO, "blocks": blocks}]
+
+
+def build_runner_status_card(settings: Settings) -> list[dict[str, Any]]:
+    """Build an operational status card for /hecate status."""
+    from hecate_runner.parked_store import list_parked
+    from hecate_runner.state import OrchestratorState
+
+    state = OrchestratorState.load(settings.state_file)
+    parked_count = len(list_parked(settings.cti_queue_dir_resolved))
+
+    hunts_dir = settings.hecate_workspace / "hunts"
+    hunt_files = sorted(hunts_dir.glob("**/*.md")) if hunts_dir.exists() else []
+    total_hunts = len(hunt_files)
+
+    planning_count = 0
+    active_count = 0
+    for hf in hunt_files:
+        try:
+            txt = hf.read_text(encoding="utf-8")
+            if "status: planning" in txt:
+                planning_count += 1
+            elif any(s in txt for s in ("status: active", "status: promoted", "status: completed")):
+                active_count += 1
+        except Exception:
+            continue
+
+    recent_hunts_lines = []
+    for hf in hunt_files[-4:]:
+        recent_hunts_lines.append(f"• `{hf.stem}`: {hf.name}")
+    recent_text = "\n".join(recent_hunts_lines) or "No hunts recorded yet"
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "📊 Hecate Autonomous Runner Status",
+                "emoji": True,
+            },
+        },
+        {
+            "type": "section",
+            "fields": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Workspace:*\n`{settings.hecate_workspace.name}`",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*CTI Provider:*\n`{settings.cti_provider}`",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Draft Quota (24h):*\n`{state.drafts_today} / {settings.max_drafts_per_day}`",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Research Quota:*\n`{state.research_runs_today} / {settings.max_research_runs_per_day}`",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Hunts in Workspace:*\n`{total_hunts} total` (`{active_count}` active, `{planning_count}` planning)",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Parked Commentary:*\n`{parked_count} item(s)`",
+                },
+            ],
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Recent Hunt Operations:*\n{recent_text}\n*Last Pipeline Run:* `{state.last_run_iso or 'never'}`",
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "🤖 *Hecate Status* | Interactive SecOps Bot Active",
+                }
+            ],
+        },
+    ]
+    return [{"color": COLOR_SUCCESS, "blocks": blocks}]
