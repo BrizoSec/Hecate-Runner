@@ -56,6 +56,9 @@ class CensysCursorState:
             self.seen_endpoints.append(endpoint)
 
 
+PLATFORM_SEARCH_URL = "https://api.platform.censys.io/v3/global/search/query"
+
+
 class CensysC2Provider(CTIProvider):
     """CTI provider consuming adversary C2 listener infrastructure from Censys."""
 
@@ -65,28 +68,34 @@ class CensysC2Provider(CTIProvider):
         self,
         cursor_file: Path,
         api_token: str | None = None,
-        base_url: str = "https://search.censys.io/api/v2/hosts/search",
+        organization_id: str | None = None,
+        base_url: str = PLATFORM_SEARCH_URL,
         query: str = "services.service_name: (COBALT_STRIKE or SLIVER or MYTHIC or HAVOC)",
         request_timeout_sec: float = 20.0,
         client: httpx.Client | None = None,
     ):
         self.cursor_file = cursor_file
         self.api_token = api_token
+        self.organization_id = organization_id
         self.base_url = base_url
         self.query = query
         self.request_timeout_sec = request_timeout_sec
+        headers = {
+            "User-Agent": "Hecate-Runner/1.0",
+            "Accept": "application/json",
+            **({"Authorization": f"Bearer {api_token}"} if api_token else {}),
+            **({"X-Organization-ID": organization_id} if organization_id else {}),
+        }
         if client is not None:
             self._client = client
             if api_token and "Authorization" not in self._client.headers:
                 self._client.headers["Authorization"] = f"Bearer {api_token}"
+            if organization_id and "X-Organization-ID" not in self._client.headers:
+                self._client.headers["X-Organization-ID"] = organization_id
         else:
             self._client = httpx.Client(
                 timeout=request_timeout_sec,
-                headers={
-                    "User-Agent": "Hecate-Runner/1.0",
-                    "Accept": "application/json",
-                    **({"Authorization": f"Bearer {api_token}"} if api_token else {}),
-                },
+                headers=headers,
                 follow_redirects=True,
             )
         self._owns_client = client is None
@@ -135,13 +144,36 @@ class CensysC2Provider(CTIProvider):
         cursor.save(self.cursor_file)
 
     def _search_c2_hosts(self) -> list[dict[str, Any]]:
-        params: dict[str, str | int] = {"q": self.query, "per_page": 20}
+        is_v3_platform = "platform.censys.io" in self.base_url or "/query" in self.base_url
+
         try:
-            resp = self._client.get(self.base_url, params=params)
+            if is_v3_platform:
+                payload: dict[str, Any] = {"query": self.query, "page_size": 20}
+                if self.organization_id:
+                    payload["organization_id"] = self.organization_id
+                resp = self._client.post(self.base_url, json=payload)
+            else:
+                params: dict[str, str | int] = {"q": self.query, "per_page": 20}
+                resp = self._client.get(self.base_url, params=params)
         except httpx.RequestError as exc:
             raise CensysError(f"HTTP request to {self.base_url} failed: {exc}") from exc
 
-        if resp.status_code in (401, 403):
+        if resp.status_code == 403:
+            try:
+                err_body = resp.json()
+                detail = str(err_body.get("detail") or err_body.get("error") or "")
+                if "organization ID" in detail or "decommissioned" in detail:
+                    log.info(
+                        "Censys Platform API search unavailable (%s); skipping Censys C2 provider",
+                        detail,
+                    )
+                    return []
+            except Exception:
+                pass
+            raise CensysError(
+                f"Authentication failure (HTTP {resp.status_code}); check CENSYS_API_TOKEN"
+            )
+        if resp.status_code == 401:
             raise CensysError(
                 f"Authentication failure (HTTP {resp.status_code}); check CENSYS_API_TOKEN"
             )
@@ -153,7 +185,14 @@ class CensysC2Provider(CTIProvider):
             raise CensysError(f"HTTP {resp.status_code} from {self.base_url}")
 
         data = resp.json().get("result") or resp.json()
-        return list(data.get("hits") or [])
+        raw_hits = list(data.get("hits") or [])
+        normalized_hits: list[dict[str, Any]] = []
+        for h in raw_hits:
+            if isinstance(h, dict):
+                host_val = h.get("host")
+                host_data: dict[str, Any] = host_val if isinstance(host_val, dict) else h
+                normalized_hits.append(host_data)
+        return normalized_hits
 
     def _hit_to_cti_item(self, endpoint: str, ip: str, port: str, hit: dict[str, Any]) -> CTIItem:
         services = hit.get("services") or []

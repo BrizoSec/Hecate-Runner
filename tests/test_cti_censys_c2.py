@@ -107,3 +107,73 @@ def test_censys_c2_quota_limit_handled(tmp_path: Path) -> None:
     )
 
     assert provider.next_item() is None
+
+
+def test_censys_c2_free_tier_organization_id_skip(tmp_path: Path) -> None:
+    cursor_file = tmp_path / "censys_c2_cursor.json"
+
+    def free_tier_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "title": "Forbidden",
+                "status": 403,
+                "detail": "This endpoint requires an organization ID for API access. Free users can only access this endpoint through the Platform UI.",
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(free_tier_handler))
+    provider = CensysC2Provider(
+        cursor_file=cursor_file,
+        api_token="personal-access-token",
+        client=client,
+    )
+
+    # Should gracefully skip and return None without raising CensysError
+    assert provider.next_item() is None
+
+
+def test_censys_c2_v3_platform_nested_host(tmp_path: Path) -> None:
+    cursor_file = tmp_path / "censys_c2_cursor.json"
+    v3_response = {
+        "result": {
+            "hits": [
+                {
+                    "host": {
+                        "ip": "203.0.113.55",
+                        "location": {"country": "Germany"},
+                        "autonomous_system": {"asn": 54321, "name": "C2 Hosting AS"},
+                        "services": [
+                            {
+                                "port": 8443,
+                                "service_name": "SLIVER",
+                                "tls": {
+                                    "jarm": "29d29d15d29d29d00042d42d29d29d",
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+    }
+
+    def v3_handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.headers.get("X-Organization-ID") == "my-org-uuid"
+        return httpx.Response(200, json=v3_response)
+
+    client = httpx.Client(transport=httpx.MockTransport(v3_handler))
+    provider = CensysC2Provider(
+        cursor_file=cursor_file,
+        api_token="enterprise-token",
+        organization_id="my-org-uuid",
+        client=client,
+    )
+
+    item = provider.next_item()
+    assert item is not None
+    assert "203.0.113.55:8443" in item.title
+    assert "SLIVER" in item.title
+    assert item.metadata["indicators"]["ipv4"] == ["203.0.113.55"]
+    provider.close()

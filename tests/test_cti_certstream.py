@@ -176,3 +176,76 @@ def test_poll_stream_success_and_error_handling(
     certstream_provider._poll_stream(timeout_sec=0.5)
     # Still retains buffered item
     assert len(certstream_provider._items) == 1
+
+
+def test_certstream_buffer_file_lifecycle(tmp_path: Path):
+    cursor_file = tmp_path / "certstream_cursor.json"
+    buffer_file = tmp_path / "certstream_buffer.json"
+
+    provider = CertStreamProvider(
+        cursor_file=cursor_file,
+        buffer_file=buffer_file,
+        brand_patterns=["apple", "notion"],
+        suspicious_keywords=["login", "download"],
+        poll_timeout_sec=0.1,
+    )
+
+    # Stage an event using buffer_domain
+    provider.buffer_domain(
+        "notion-login-verify.com",
+        brand="notion",
+        keywords=["login"],
+        issuer="Let's Encrypt",
+    )
+    assert buffer_file.exists()
+
+    # next_item should read from buffer_file without opening websocket
+    item = provider.next_item()
+    assert item is not None
+    assert item.identifier == "certstream-notion-login-verify.com"
+    assert item.metadata["domain"] == "notion-login-verify.com"
+    assert item.metadata["matched_brand"] == "notion"
+    assert "login" in item.metadata["matched_keywords"]
+
+    # Acknowledging should prune buffer_file and advance cursor
+    provider.acknowledge(item)
+    assert cursor_file.exists()
+    reloaded_cursor = CertStreamCursorState.from_file(cursor_file)
+    assert "notion-login-verify.com" in reloaded_cursor.seen_domains
+
+    # Buffer file is now empty of this domain
+    assert json.loads(buffer_file.read_text(encoding="utf-8")) == []
+
+    # Subsequent poll returns None
+    with patch.object(provider, "_poll_stream"):
+        assert provider.next_item() is None
+
+
+def test_certstream_buffer_raw_event(tmp_path: Path):
+    cursor_file = tmp_path / "certstream_cursor.json"
+    buffer_file = tmp_path / "certstream_buffer.json"
+
+    provider = CertStreamProvider(
+        cursor_file=cursor_file,
+        buffer_file=buffer_file,
+        brand_patterns=["apple"],
+        suspicious_keywords=["download"],
+        poll_timeout_sec=0.1,
+    )
+
+    raw_event = {
+        "message_type": "certificate_update",
+        "data": {
+            "leaf_cert": {
+                "all_domains": ["apple-download-client.info"],
+                "issuer": {"O": "DigiCert Inc"},
+            }
+        },
+    }
+    provider.buffer_event(raw_event)
+
+    item = provider.next_item()
+    assert item is not None
+    assert item.metadata["domain"] == "apple-download-client.info"
+    assert item.metadata["matched_brand"] == "apple"
+    assert "download" in item.metadata["matched_keywords"]

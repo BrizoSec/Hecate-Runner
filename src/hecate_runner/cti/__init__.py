@@ -93,10 +93,14 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
     if name == "cisa_kev":
         return CisaKevProvider(workspace=settings.hecate_workspace)
     if name == "abuse_ch":
-        return AbuseChProvider(cursor_file=settings.abuse_ch_cursor_file)
+        return AbuseChProvider(
+            cursor_file=settings.abuse_ch_cursor_file,
+            api_key=settings.abusech_api_key,
+        )
     if name == "certstream":
         return CertStreamProvider(
             cursor_file=settings.certstream_cursor_file,
+            buffer_file=settings.certstream_buffer_file,
             stream_url=settings.certstream_stream_url,
             brand_patterns=settings.certstream_brand_patterns,
             suspicious_keywords=settings.certstream_suspicious_keywords,
@@ -151,6 +155,7 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
         return CensysC2Provider(
             cursor_file=settings.censys_c2_cursor_file,
             api_token=settings.censys_api_token,
+            organization_id=settings.censys_organization_id,
             query=settings.censys_c2_query,
             request_timeout_sec=settings.censys_c2_request_timeout_sec,
         )

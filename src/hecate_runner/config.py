@@ -742,6 +742,11 @@ class Settings(BaseSettings):
         alias="CENSYS_API_TOKEN",
         description="Censys API token for C2 infrastructure monitoring.",
     )
+    censys_organization_id: str | None = Field(
+        default=None,
+        alias="CENSYS_ORGANIZATION_ID",
+        description="Censys Organization ID for Platform API v3 access.",
+    )
     censys_c2_query: str = Field(
         default="services.service_name: (COBALT_STRIKE or SLIVER or MYTHIC or HAVOC)",
         alias="HECATE_RUNNER_CENSYS_C2_QUERY",
@@ -1039,6 +1044,10 @@ class Settings(BaseSettings):
     @property
     def certstream_cursor_file(self) -> Path:
         return self.hecate_workspace / ".cursors" / "certstream_cursor.json"
+
+    @property
+    def certstream_buffer_file(self) -> Path:
+        return self.hecate_workspace / ".cursors" / "certstream_buffer.json"
 
     @property
     def github_poc_cursor_file(self) -> Path:

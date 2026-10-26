@@ -95,8 +95,10 @@ class CertStreamProvider(CTIProvider):
         suspicious_keywords: list[str] | None = None,
         poll_timeout_sec: float = 5.0,
         max_buffer_size: int = 100,
+        buffer_file: Path | None = None,
     ) -> None:
         self.cursor_file = cursor_file
+        self.buffer_file = buffer_file or (cursor_file.parent / "certstream_buffer.json")
         self.stream_url = stream_url
         self.brand_patterns = [b.lower() for b in (brand_patterns or []) if b]
         self.suspicious_keywords = [k.lower() for k in (suspicious_keywords or []) if k]
@@ -141,6 +143,47 @@ class CertStreamProvider(CTIProvider):
 
         return False, "", []
 
+    def _create_item(
+        self,
+        domain: str,
+        brand: str,
+        keywords: list[str],
+        issuer: str = "Unknown CA",
+        all_domains: list[str] | None = None,
+    ) -> CTIItem:
+        clean = domain.strip().lower()
+        if clean.startswith("*."):
+            clean = clean[2:]
+        domains = all_domains or [clean]
+        blurb_lines = [
+            "CertStream Alert: Potential Brand Impersonation / Staging Domain",
+            "Indicators (1 total): domain (1)\n",
+            f"Domain: {clean}",
+            f"Subject Alternative Names: {', '.join(str(s) for s in domains[:5])}",
+            f"Issuer: {issuer}",
+            f"Target Brand Match: {brand}",
+            f"Matched Staging Patterns: {', '.join(keywords)}",
+            "Threat Context: Newly issued SSL certificate matches high-value target brand and suspicious staging keywords, indicating adversary infrastructure staging or ClickFix lure setup.",
+            f"Certificate Transparency Query: https://crt.sh/?q={clean}",
+        ]
+        content = "\n".join(blurb_lines)
+        return CTIItem(
+            content=content,
+            source=self.name,
+            identifier=f"certstream-{clean}",
+            title=f"Suspicious Certificate Staged: {clean}",
+            source_url=f"https://crt.sh/?q={clean}",
+            metadata={
+                "domain": clean,
+                "all_domains": domains,
+                "issuer": issuer,
+                "matched_brand": brand,
+                "matched_keywords": keywords,
+                "indicators": {"domain": [clean]},
+                "indicator_only": True,
+            },
+        )
+
     def process_certificate_event(self, event_data: dict[str, Any]) -> list[CTIItem]:
         """Parse CertStream certificate_update event and create CTIItems for matching domains."""
         data = event_data.get("data", {})
@@ -167,35 +210,133 @@ class CertStreamProvider(CTIProvider):
             matched, brand, kws = self.matches_brand_protection(clean)
             if matched:
                 seen_in_event.add(clean)
-                blurb_lines = [
-                    "CertStream Alert: Potential Brand Impersonation / Staging Domain",
-                    "Indicators (1 total): domain (1)\n",
-                    f"Domain: {clean}",
-                    f"Subject Alternative Names: {', '.join(str(s) for s in all_domains[:5])}",
-                    f"Issuer: {issuer}",
-                    f"Target Brand Match: {brand}",
-                    f"Matched Staging Patterns: {', '.join(kws)}",
-                    "Threat Context: Newly issued SSL certificate matches high-value target brand and suspicious staging keywords, indicating adversary infrastructure staging or ClickFix lure setup.",
-                    f"Certificate Transparency Query: https://crt.sh/?q={clean}",
-                ]
-                content = "\n".join(blurb_lines)
-                item = CTIItem(
-                    content=content,
-                    source="certstream",
-                    identifier=f"certstream-{clean}",
-                    title=f"Suspicious Certificate Staged: {clean}",
-                    source_url=f"https://crt.sh/?q={clean}",
-                    metadata={
-                        "domain": clean,
-                        "all_domains": all_domains,
-                        "issuer": issuer,
-                        "matched_brand": brand,
-                        "matched_keywords": kws,
-                    },
-                )
-                items.append(item)
+                items.append(self._create_item(clean, brand, kws, issuer, all_domains))
 
         return items
+
+    def _load_from_buffer(self) -> None:
+        """Load pre-staged CertStream events from disk buffer file."""
+        if not self.buffer_file.exists():
+            return
+        try:
+            raw = self.buffer_file.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("Failed to read CertStream buffer %s: %s", self.buffer_file, exc)
+            return
+
+        if not isinstance(data, list):
+            return
+
+        for entry in data:
+            if len(self._items) >= self.max_buffer_size:
+                break
+            if isinstance(entry, dict) and "data" in entry:
+                new_items = self.process_certificate_event(entry)
+                self._items.extend(new_items)
+            elif isinstance(entry, dict) and "domain" in entry:
+                d = str(entry["domain"]).strip().lower()
+                if d.startswith("*."):
+                    d = d[2:]
+                if d in self._cursor.seen_domains or any(
+                    it.identifier == f"certstream-{d}" for it in self._items
+                ):
+                    continue
+                brand = str(entry.get("matched_brand") or "").strip()
+                kws = list(entry.get("matched_keywords") or [])
+                if not brand or not kws:
+                    matched, auto_brand, auto_kws = self.matches_brand_protection(d)
+                    if not matched:
+                        continue
+                    brand = brand or auto_brand
+                    kws = kws or auto_kws
+                issuer = str(entry.get("issuer") or "Buffered CA")
+                all_d = entry.get("all_domains") or [d]
+                self._items.append(self._create_item(d, brand, kws, issuer, all_d))
+            elif isinstance(entry, str):
+                d = entry.strip().lower()
+                if d.startswith("*."):
+                    d = d[2:]
+                if d in self._cursor.seen_domains or any(
+                    it.identifier == f"certstream-{d}" for it in self._items
+                ):
+                    continue
+                matched, brand, kws = self.matches_brand_protection(d)
+                if matched:
+                    self._items.append(self._create_item(d, brand, kws, "Buffered CA", [d]))
+
+    def _prune_from_buffer(self, domain: str) -> None:
+        """Remove processed domain from buffer file to avoid bloat."""
+        if not self.buffer_file.exists():
+            return
+        clean = domain.strip().lower()
+        try:
+            data = json.loads(self.buffer_file.read_text(encoding="utf-8"))
+            if not isinstance(data, list):
+                return
+            kept: list[Any] = []
+            for entry in data:
+                if isinstance(entry, str) and entry.strip().lower().removeprefix("*.") == clean:
+                    continue
+                if isinstance(entry, dict):
+                    ent_dom = str(entry.get("domain") or "").strip().lower().removeprefix("*.")
+                    if ent_dom == clean:
+                        continue
+                    all_doms = [
+                        str(x).strip().lower().removeprefix("*.")
+                        for x in entry.get("all_domains", [])
+                    ]
+                    if clean in all_doms:
+                        continue
+                kept.append(entry)
+            self.buffer_file.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(self.buffer_file, json.dumps(kept, indent=2))
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("Failed to prune domain %s from CertStream buffer: %s", domain, exc)
+
+    def buffer_domain(
+        self,
+        domain: str,
+        *,
+        brand: str | None = None,
+        keywords: list[str] | None = None,
+        issuer: str = "Buffered CA",
+        all_domains: list[str] | None = None,
+    ) -> None:
+        """Enqueue a domain event directly into the CertStream buffer file."""
+        entries: list[Any] = []
+        if self.buffer_file.exists():
+            try:
+                data = json.loads(self.buffer_file.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    entries = data
+            except Exception:
+                entries = []
+        entries.append(
+            {
+                "domain": domain,
+                "matched_brand": brand,
+                "matched_keywords": keywords,
+                "issuer": issuer,
+                "all_domains": all_domains or [domain],
+            }
+        )
+        self.buffer_file.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(self.buffer_file, json.dumps(entries, indent=2))
+
+    def buffer_event(self, event_data: dict[str, Any]) -> None:
+        """Enqueue a raw CertStream certificate event into the buffer file."""
+        entries: list[Any] = []
+        if self.buffer_file.exists():
+            try:
+                data = json.loads(self.buffer_file.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    entries = data
+            except Exception:
+                entries = []
+        entries.append(event_data)
+        self.buffer_file.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(self.buffer_file, json.dumps(entries, indent=2))
 
     def _poll_stream(self, timeout_sec: float | None = None) -> None:
         """Connect to live CertStream websocket and buffer matching events."""
@@ -234,6 +375,8 @@ class CertStreamProvider(CTIProvider):
 
     def next_item(self) -> CTIItem | None:
         if not self._items:
+            self._load_from_buffer()
+        if not self._items:
             self._poll_stream()
         if not self._items:
             return None
@@ -246,3 +389,4 @@ class CertStreamProvider(CTIProvider):
         domain = item.metadata.get("domain") or item.identifier.removeprefix("certstream-")
         if domain:
             self._cursor.record_domain(domain, self.cursor_file)
+            self._prune_from_buffer(domain)
