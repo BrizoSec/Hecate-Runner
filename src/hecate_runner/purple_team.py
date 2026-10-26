@@ -54,6 +54,16 @@ BENIGN_SAMPLE: list[dict[str, Any]] = [
         "CommandLine": "/pause",
         "Privileged": "false",
     },
+    {
+        "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "CommandLine": "powershell.exe -File C:\\Program Files\\Monitoring\\agent.ps1",
+        "User": "SYSTEM",
+    },
+    {
+        "TargetObject": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Start",
+        "Details": "2",
+        "Image": "services.exe",
+    },
 ]
 
 #: Roles and statuses that are not this intrusion's infrastructure.
@@ -63,13 +73,20 @@ _REGISTRY_CATEGORIES = ("registry_set", "registry_add", "registry_event")
 
 
 def replay_events(
-    records: Iterable[Any], artifacts: Iterable[Any], cti_text: str = ""
+    records: Iterable[Any],
+    artifacts: Iterable[Any],
+    cti_text: str = "",
+    techniques: Iterable[str] = (),
+    enable_atomic: bool = True,
+    platforms: list[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """``{logsource category: [event, ...]}`` from typed indicators and behaviour artifacts.
+    """``{logsource category: [event, ...]}`` from typed indicators, behaviour artifacts,
+    and dynamic Atomic Red Team adversary emulation.
 
     ``records`` are IndicatorRecord-shaped (value, type, role, status, ports);
     ``artifacts`` are SourceArtifact-shaped (value, kind, status).
     ``cti_text`` optionally provides raw source text for contextual cloud and identity telemetry.
+    ``techniques`` optionally provides ATT&CK technique IDs for dynamic Atomic Red Team emulation.
     """
     from hecate_agent.core.provenance import split_host_port, url_parts
 
@@ -284,6 +301,24 @@ def replay_events(
             },
         )
 
+    # Dynamic Adversary Emulation via Atomic Red Team
+    if enable_atomic and techniques:
+        try:
+            from hecate_agent.api import synthesize_atomic_telemetry
+
+            for raw_tid in techniques:
+                tid = str(raw_tid).strip().upper()
+                if not tid:
+                    continue
+                if tid.startswith("ATTACK."):
+                    tid = tid[7:]
+                atomic_by_cat = synthesize_atomic_telemetry(tid, platforms=platforms)
+                for cat, evts in atomic_by_cat.items():
+                    for evt in evts:
+                        add(cat, evt)
+        except Exception:
+            pass
+
     return events
 
 
@@ -296,6 +331,9 @@ class ReplayResult:
     tuned: bool = False
     final_rule: str = ""
     notes: list[str] = field(default_factory=list)
+    emulation_type: str = "static"  # "static" | "atomic_red_team" | "hybrid"
+    emulated_techniques: list[str] = field(default_factory=list)
+    atomic_tests: list[str] = field(default_factory=list)
 
     @property
     def validated(self) -> bool:
@@ -309,13 +347,21 @@ class ReplayResult:
             "replay_events": self.replay_events,
             "tp": self.true_positives,
             "fp": self.false_positives,
+            "emulation_type": self.emulation_type,
+            "emulated_techniques": self.emulated_techniques,
+            "atomic_tests": self.atomic_tests,
         }
 
 
 def replay_rule(
-    rule_yaml: str, events: list[dict[str, Any]], baseline: list[dict[str, Any]], tuner: Any = None
+    rule_yaml: str,
+    events: list[dict[str, Any]],
+    baseline: list[dict[str, Any]],
+    tuner: Any = None,
+    emulated_techniques: list[str] | None = None,
+    atomic_tests: list[str] | None = None,
 ) -> ReplayResult:
-    """Replay one rule. Tuning only ever removes benign-sample matches.
+    """Replay one rule against intrusion telemetry and benign baseline. Tuning only ever removes benign-sample matches.
 
     The tuner's other repair -- appending a missed event's Image/CommandLine to
     the rule -- would fit the rule to the very events grading it, so it is
@@ -323,13 +369,27 @@ def replay_rule(
     """
     from hecate_agent.core.sigma_evaluator import SigmaEvaluator
 
+    em_type = "atomic_red_team" if (emulated_techniques or atomic_tests) else "static"
+
     if not events:
-        return ReplayResult(status="no_replay_events", final_rule=rule_yaml)
+        return ReplayResult(
+            status="no_replay_events",
+            final_rule=rule_yaml,
+            emulation_type=em_type,
+            emulated_techniques=list(emulated_techniques or []),
+            atomic_tests=list(atomic_tests or []),
+        )
     try:
         result = SigmaEvaluator.evaluate_rule(rule_yaml, events, baseline)
     except Exception as exc:  # a rule the evaluator cannot read is a finding, not a crash
         return ReplayResult(
-            status="error", replay_events=len(events), final_rule=rule_yaml, notes=[str(exc)]
+            status="error",
+            replay_events=len(events),
+            final_rule=rule_yaml,
+            notes=[str(exc)],
+            emulation_type=em_type,
+            emulated_techniques=list(emulated_techniques or []),
+            atomic_tests=list(atomic_tests or []),
         )
 
     final_rule, tuned = rule_yaml, False
@@ -359,4 +419,7 @@ def replay_rule(
         false_positives=result.false_positives,
         tuned=tuned,
         final_rule=final_rule,
+        emulation_type=em_type,
+        emulated_techniques=list(emulated_techniques or []),
+        atomic_tests=list(atomic_tests or []),
     )

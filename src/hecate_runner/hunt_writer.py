@@ -69,6 +69,8 @@ class DraftHuntRequest:
     purple_team_rules_validated: int = 0
     purple_team_rules_tuned: int = 0
     purple_team_telemetry_count: int = 0
+    purple_team_atomic_techniques: list[str] = field(default_factory=list)
+    purple_team_atomic_tests: list[dict[str, str]] = field(default_factory=list)
     #: Claim excerpts and exact source passages checked by the Runner.
     claim_evidence: list[dict[str, str]] = field(default_factory=list)
 
@@ -255,17 +257,24 @@ def _render_sigma_section(req: DraftHuntRequest) -> str:
         "one per applicable log source.",
     ]
     if replayed:
-        parts.append(
-            f"> **Purple-team replay:** {validated} of {replayed} replayed rule(s) matched events synthesised "
-            "from the report's own artifacts and none of a small benign sample"
-            + (
-                f"; {len(req.sigma_rules) - replayed} had no source artifact to replay"
-                if replayed < len(req.sigma_rules)
-                else ""
+        if req.purple_team_atomic_techniques:
+            emulated_str = ", ".join(f"`{t}`" for t in req.purple_team_atomic_techniques[:4])
+            parts.append(
+                f"> **Adversary Emulation (Atomic Red Team):** {validated} of {replayed} evaluated rule(s) validated "
+                f"against dynamic adversary emulation telemetry across {emulated_str} and none of the benign baseline."
             )
-            + ". A replay of what the report names, not emulation: it shows a rule can match the "
-            "described activity, not that it is quiet in your environment."
-        )
+        else:
+            parts.append(
+                f"> **Purple-team replay:** {validated} of {replayed} replayed rule(s) matched events synthesised "
+                "from the report's own artifacts and none of a small benign sample"
+                + (
+                    f"; {len(req.sigma_rules) - replayed} had no source artifact to replay"
+                    if replayed < len(req.sigma_rules)
+                    else ""
+                )
+                + ". A replay of what the report names, not emulation: it shows a rule can match the "
+                "described activity, not that it is quiet in your environment."
+            )
     parts.append(
         "> **Unreviewed.** Sigma is platform-neutral: convert with "
         "`sigma convert -t <backend>` once a target is chosen. Field names and "

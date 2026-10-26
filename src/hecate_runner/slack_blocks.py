@@ -196,6 +196,7 @@ def build_purple_team_card(
     telemetry_count: int,
     summary: str,
     log_source: str = "Windows Event Log / Zeek",
+    emulation_mode: str = "Atomic Red Team (Dynamic)",
 ) -> list[dict[str, Any]]:
     """Build a purple-team emulation validation card."""
     color = COLOR_SUCCESS if success else COLOR_WARNING
@@ -229,6 +230,10 @@ def build_purple_team_card(
                 {
                     "type": "mrkdwn",
                     "text": f"*Telemetry Source:*\n`{log_source}`",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Adversary Emulation:*\n`{emulation_mode}`",
                 },
             ],
         },

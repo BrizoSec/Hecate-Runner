@@ -2078,7 +2078,65 @@ class Orchestrator:
         tuner = SigmaSelfTuner(max_iterations=3)
         artifacts = self._source_evidence.artifacts if self._source_evidence is not None else []
         cti_text = self._primary_evidence_text(item)
-        events = replay_events(self._indicator_records, artifacts, cti_text=cti_text)
+
+        # Collect all scoped MITRE ATT&CK techniques
+        techniques: list[str] = []
+        for e in self._technique_evidence or []:
+            tid = str(e.get("technique_id") or "").strip().upper()
+            if tid and tid not in techniques:
+                techniques.append(tid)
+
+        meta_techs = item.metadata.get("techniques") or item.metadata.get("mitre_attack") or []
+        if isinstance(meta_techs, list):
+            for t in meta_techs:
+                clean = str(t).strip().upper()
+                if clean and clean not in techniques:
+                    techniques.append(clean)
+
+        for rule in rules:
+            r_techs = rule.get("techniques") or []
+            if isinstance(r_techs, str):
+                r_techs = [r_techs]
+            for rt in r_techs:
+                clean = str(rt).strip().upper()
+                if clean and clean not in techniques:
+                    techniques.append(clean)
+            ryaml = str(rule.get("rule_yaml", ""))
+            for tag_m in re.findall(r"attack\.(t\d{4}(?:\.\d{3})?)", ryaml, re.IGNORECASE):
+                upper_m = tag_m.upper()
+                if upper_m not in techniques:
+                    techniques.append(upper_m)
+
+        enable_atomic = getattr(self.settings, "purple_team_atomic_emulation", True)
+        platforms = getattr(req, "platforms", None)
+        events = replay_events(
+            self._indicator_records,
+            artifacts,
+            cti_text=cti_text,
+            techniques=techniques,
+            enable_atomic=enable_atomic,
+            platforms=platforms,
+        )
+
+        req.purple_team_atomic_techniques = techniques if enable_atomic else []
+        atomic_test_details: list[dict[str, str]] = []
+        if enable_atomic and techniques:
+            try:
+                from hecate_agent.api import get_atomic_tests
+
+                for tid in techniques:
+                    for t in get_atomic_tests(tid, platforms=platforms):
+                        atomic_test_details.append(
+                            {
+                                "technique_id": tid,
+                                "test_id": t.get("test_id", ""),
+                                "name": t.get("name", ""),
+                                "command": t.get("command", ""),
+                            }
+                        )
+            except Exception:
+                pass
+        req.purple_team_atomic_tests = atomic_test_details
 
         replayed = validated = tuned = baseline_matches = 0
         for rule in rules:
@@ -2090,6 +2148,8 @@ class Orchestrator:
                 events.get(str(rule.get("logsource_category", "")), []),
                 BENIGN_SAMPLE,
                 tuner,
+                emulated_techniques=techniques if enable_atomic else None,
+                atomic_tests=[t["test_id"] for t in atomic_test_details] if enable_atomic else None,
             )
             rule["purple_team"] = outcome.to_dict()
             if outcome.status == "no_replay_events":
@@ -2114,9 +2174,14 @@ class Orchestrator:
         req.purple_team_rules_tuned = tuned
         req.purple_team_telemetry_count = sum(len(v) for v in events.values())
 
+        emulation_desc = (
+            f" ({len(techniques)} technique(s) dynamically emulated via Atomic Red Team)"
+            if (enable_atomic and techniques)
+            else " source-artifact"
+        )
         self.trail.step(
             "purple_team",
-            "replayed %d of %d rule(s) against %d source-artifact event(s) in %.0fs: "
+            f"replayed %d of %d rule(s) against %d{emulation_desc} event(s) in %.0fs: "
             "%d validated, %d matched the benign sample, %d tuned, %d with nothing to replay",
             replayed,
             len(rules),
@@ -2132,11 +2197,16 @@ class Orchestrator:
             from hecate_runner.notifications import notify_purple_team
 
             tech_list = getattr(req, "attack_techniques", []) or []
-            tech_label = str(tech_list[0]) if tech_list else "Adversary TTPs"
+            tech_label = (
+                ", ".join(techniques[:3])
+                if techniques
+                else (str(tech_list[0]) if tech_list else "Adversary TTPs")
+            )
             summary_msg = (
                 f"{validated} of {replayed} evaluated rules validated "
                 f"({baseline_matches} baseline matches, {tuned} tuned) "
-                f"against {req.purple_team_telemetry_count} telemetry events."
+                f"against {req.purple_team_telemetry_count} telemetry events"
+                f"{' (Atomic Red Team dynamic emulation enabled)' if enable_atomic and techniques else ''}."
             )
             notify_purple_team(
                 self.settings,

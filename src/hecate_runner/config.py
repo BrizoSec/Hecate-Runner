@@ -281,6 +281,23 @@ class Settings(BaseSettings):
             "generated Sigma detection rules before finalizing the hunt package."
         ),
     )
+    purple_team_atomic_emulation: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_PURPLE_TEAM_ATOMIC_EMULATION",
+        description=(
+            "Synthesize and execute dynamic adversary emulation via Atomic Red Team "
+            "procedures for scoped MITRE ATT&CK techniques."
+        ),
+    )
+    purple_team_atomic_mode: Literal["simulation", "subprocess", "bwrap"] = Field(
+        default="simulation",
+        alias="HECATE_RUNNER_PURPLE_TEAM_ATOMIC_MODE",
+        description=(
+            "Execution backend for Atomic Red Team adversary emulation: 'simulation' "
+            "(in-memory high-fidelity structured telemetry), 'subprocess' (local sandbox), "
+            "or 'bwrap' (rootless Linux container)."
+        ),
+    )
     sigma_timeout_sec: int = Field(
         default=1800,
         ge=30,
