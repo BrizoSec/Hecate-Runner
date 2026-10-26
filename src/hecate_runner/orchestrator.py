@@ -2045,6 +2045,29 @@ class Orchestrator:
 
         req.sigma_rules = result.rules
         req.review_gaps = result.review_gaps
+
+        # Ensure native EDR and SIEM query files (.kql, .cql, .leql) are generated
+        for r_entry in result.rules:
+            r_yaml = r_entry.get("rule_yaml")
+            r_path_str = r_entry.get("path")
+            r_path = Path(r_path_str) if r_path_str else None
+            if not r_path or not r_path.is_file():
+                cat = str(r_entry.get("logsource_category", "rule"))
+                title = str(r_entry.get("title", "rule"))
+                slug = "".join(c if c.isalnum() else "_" for c in title.lower())
+                slug = "_".join(part for part in slug.split("_") if part)[:60]
+                r_path = out_dir / f"{cat}__{slug or 'rule'}.yml"
+            if r_yaml and r_path.parent.exists():
+                try:
+                    from hecate_agent.api import transpile_sigma_rule
+
+                    trans_queries = transpile_sigma_rule(r_yaml)
+                    for t_res in trans_queries.values():
+                        if getattr(t_res, "success", False) and getattr(t_res, "query", None):
+                            q_file = r_path.with_suffix(t_res.file_extension)
+                            q_file.write_text(t_res.query.strip() + "\n", encoding="utf-8")
+                except Exception as t_err:
+                    log.debug("Native EDR query generation for %s skipped (%s)", r_path.name, t_err)
         try:
             req.sigma_rule_dir = str(out_dir.relative_to(self.settings.hecate_workspace))
         except ValueError:  # out_dir outside the workspace -- show it whole
@@ -2192,6 +2215,17 @@ class Orchestrator:
                 if outcome.tuned:
                     text += "x_hecate_tuned: true\n"
                 path.write_text(text, encoding="utf-8")
+                try:
+                    from hecate_agent.api import transpile_sigma_rule
+
+                    trans_queries = transpile_sigma_rule(text)
+                    for t_res in trans_queries.values():
+                        if getattr(t_res, "success", False) and getattr(t_res, "query", None):
+                            path.with_suffix(t_res.file_extension).write_text(
+                                t_res.query.strip() + "\n", encoding="utf-8"
+                            )
+                except Exception:
+                    pass
 
         req.purple_team_rules_evaluated = replayed
         req.purple_team_rules_validated = validated
