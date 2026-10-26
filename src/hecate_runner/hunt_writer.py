@@ -306,7 +306,9 @@ def _render_sigma_section(req: DraftHuntRequest) -> str:
 
                 t_queries = transpile_sigma_rule(ryaml)
                 successful_t = [
-                    t for t in t_queries.values() if getattr(t, "success", False) and getattr(t, "query", None)
+                    t
+                    for t in t_queries.values()
+                    if getattr(t, "success", False) and getattr(t, "query", None)
                 ]
                 if successful_t:
                     parts.append("##### Native EDR & SIEM Queries")

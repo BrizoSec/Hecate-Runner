@@ -78,7 +78,9 @@ def test_github_publisher_allows_edr_query_extensions(tmp_path: Path):
     queries_dir.mkdir(parents=True)
 
     # Copy full promotion policy
-    policy_content = Path("/home/chemch/betas/Hecate-Workspace/promotion-policy.yaml").read_text(encoding="utf-8")
+    policy_content = Path("/home/chemch/betas/Hecate-Workspace/promotion-policy.yaml").read_text(
+        encoding="utf-8"
+    )
     (workspace / "promotion-policy.yaml").write_text(policy_content, encoding="utf-8")
 
     # Create hunt draft with frontmatter
@@ -88,9 +90,15 @@ def test_github_publisher_allows_edr_query_extensions(tmp_path: Path):
 
     # Create canonical YAML and transpiled query files
     (queries_dir / "process__rule.yml").write_text("title: Test Sigma Rule", encoding="utf-8")
-    (queries_dir / "process__rule.kql").write_text("DeviceProcessEvents | where FileName == 'test.exe'", encoding="utf-8")
-    (queries_dir / "process__rule.cql").write_text("#event_simpleName=ProcessRollup2 ImageFileName=/test\\.exe/", encoding="utf-8")
-    (queries_dir / "process__rule.leql").write_text("where(process.name=test.exe)", encoding="utf-8")
+    (queries_dir / "process__rule.kql").write_text(
+        "DeviceProcessEvents | where FileName == 'test.exe'", encoding="utf-8"
+    )
+    (queries_dir / "process__rule.cql").write_text(
+        "#event_simpleName=ProcessRollup2 ImageFileName=/test\\.exe/", encoding="utf-8"
+    )
+    (queries_dir / "process__rule.leql").write_text(
+        "where(process.name=test.exe)", encoding="utf-8"
+    )
 
     settings = Settings(hecate_workspace=workspace)
     bundle_files, _ = _snapshot_bundle(settings, "H-9999")

@@ -1683,6 +1683,7 @@ class Orchestrator:
                 rule_path.write_text(rule_yaml, encoding="utf-8")
                 try:
                     from hecate_agent.api import transpile_sigma_rule
+
                     trans_queries = transpile_sigma_rule(rule_yaml)
                     for t_res in trans_queries.values():
                         if getattr(t_res, "success", False) and getattr(t_res, "query", None):
@@ -1857,6 +1858,7 @@ class Orchestrator:
                     rule_path.write_text(rule_yaml, encoding="utf-8")
                     try:
                         from hecate_agent.api import transpile_sigma_rule
+
                         trans_queries = transpile_sigma_rule(rule_yaml)
                         for t_res in trans_queries.values():
                             if getattr(t_res, "success", False) and getattr(t_res, "query", None):
@@ -1864,7 +1866,9 @@ class Orchestrator:
                                     t_res.query.strip() + "\n", encoding="utf-8"
                                 )
                     except Exception as t_err:
-                        log.debug("Native EDR transpilation of %s skipped (%s)", rule_path.name, t_err)
+                        log.debug(
+                            "Native EDR transpilation of %s skipped (%s)", rule_path.name, t_err
+                        )
                 except OSError as exc:
                     log.warning("Failed to write Pass 2 rule to %s: %s", rule_path, exc)
                     continue
