@@ -94,12 +94,37 @@ class MockBASProvider(BASProvider):
         cleanup_error = "Mock cleanup failure simulated" if self.simulate_cleanup_failure else None
 
         # Synthesize realistic telemetry metadata
+        is_psh = "powershell" in ability_id
+        is_cloud = any(c in ability_id.lower() for c in ("aws", "gcp", "azure", "cloudtrail"))
+        if is_cloud:
+            category = "cloud"
+            product = (
+                "aws"
+                if "aws" in ability_id.lower()
+                else ("azure" if "azure" in ability_id.lower() else "gcp")
+            )
+        else:
+            category = "process_creation"
+            product = "windows" if is_psh else "linux"
+
         telemetry = [
             {
-                "data_source": "process_creation",
+                "category": category,
+                "product": product,
+                "data_source": category,
                 "technique_id": request.technique_id,
-                "event_type": "Sysmon Event ID 1",
-                "process_name": "powershell.exe" if "powershell" in ability_id else "bash",
+                "event_type": "Sysmon Event ID 1" if not is_cloud else "CloudTrail",
+                "process_name": "powershell.exe" if is_psh else "bash",
+                "Image": (
+                    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+                    if is_psh
+                    else "/bin/bash"
+                ),
+                "CommandLine": (
+                    f"powershell.exe -ExecutionPolicy Bypass -Command mock_detonation --technique {request.technique_id}"
+                    if is_psh
+                    else f"/bin/bash -c mock_detonation --technique {request.technique_id}"
+                ),
                 "command_line": f"mock_detonation --technique {request.technique_id}",
                 "timestamp_utc": start_time.isoformat(),
             }

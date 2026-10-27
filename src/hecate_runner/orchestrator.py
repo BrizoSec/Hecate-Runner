@@ -2037,6 +2037,9 @@ class Orchestrator:
         if self.settings.purple_team_validation_enabled:
             self._run_purple_team_validation(req, result.rules, out_dir, item)
 
+        if getattr(self.settings, "bas_enabled", False):
+            self._run_bas_validation(req, result.rules, out_dir, item)
+
         for warning in result.warnings:
             if "no rule returned" in warning or "unsupported" in warning:
                 log.debug("Sigma drafting note for %s: %s", req.hunt_id, warning)
@@ -2325,6 +2328,111 @@ class Orchestrator:
             )
         except Exception as exc:
             log.warning("Purple-team Slack notification failed (%s)", exc)
+
+    def _run_bas_validation(
+        self,
+        req: DraftHuntRequest,
+        rules: list[dict[str, Any]],
+        out_dir: Path,
+        item: CTIItem,
+    ) -> None:
+        """Execute closed-loop live adversary emulation & breach simulation (BAS) validation.
+
+        Targets lab/staging environments via MITRE CALDERA, Stratus Red Team, or Mock,
+        and verifies telemetry arrival and detection rule triggering via DetectionVerifier.
+        """
+        if not rules:
+            return
+
+        from hecate_runner.bas import (
+            DetonationRequest,
+            DetonationTarget,
+            get_bas_provider,
+            normalize_platform,
+        )
+        from hecate_runner.bas.verifier import DetectionVerifier
+
+        started = self.trail.elapsed
+        provider_name = getattr(self.settings, "bas_mode", "mock")
+        try:
+            provider = get_bas_provider(provider_name, self.settings)
+        except Exception as exc:
+            log.warning("BAS provider initialization failed (%s): %s", provider_name, exc)
+            return
+
+        # Determine target technique(s) from hypothesis or rules
+        technique = ""
+        if req.hypothesis.techniques:
+            technique = req.hypothesis.techniques[0]
+        elif rules:
+            rule_techs = rules[0].get("techniques") or []
+            if rule_techs:
+                technique = rule_techs[0]
+
+        if not technique:
+            log.debug("No ATT&CK technique identified for BAS validation on %s", req.hunt_id)
+            return
+
+        # Determine target environment, platform, host, and cloud account
+        platforms_lower = {p.strip().lower() for p in req.platforms if p.strip()}
+        is_cloud = any(
+            p in ("cloud", "aws", "gcp", "azure", "k8s", "iaas") for p in platforms_lower
+        )
+        target_platform = (
+            "aws" if is_cloud else (next(iter(platforms_lower)) if platforms_lower else "linux")
+        )
+        norm_platform = normalize_platform(target_platform)
+
+        allowed_hosts = getattr(self.settings, "bas_allowed_hosts", [])
+        allowed_accounts = getattr(self.settings, "bas_allowed_accounts", [])
+        target_host = allowed_hosts[0] if allowed_hosts else "lab-agent-01"
+        target_account = allowed_accounts[0] if (allowed_accounts and is_cloud) else None
+
+        target = DetonationTarget(
+            environment="lab",
+            platform=norm_platform,
+            host=target_host if not is_cloud else None,
+            cloud_account=target_account if is_cloud else None,
+        )
+
+        det_req = DetonationRequest(
+            hunt_id=req.hunt_id,
+            technique_id=technique,
+            platform=norm_platform,
+            target=target,
+            timeout_sec=60,
+        )
+
+        rule_yaml = rules[0].get("rule_yaml", "")
+
+        try:
+            det_result = provider.detonate(det_req)
+            verifier = DetectionVerifier()
+            ver_result = verifier.verify_detonation(
+                detonation=det_result,
+                rule_yaml=rule_yaml,
+            )
+            ver_dict = ver_result.to_dict()
+            ver_dict["duration_seconds"] = det_result.duration_seconds
+            req.bas_verification = ver_dict
+
+            self.trail.step(
+                "bas",
+                "validated %s against %s (%s on %s) in %.0fs: status=%s, telemetry=%s, detection=%s (%d hits)",
+                technique,
+                provider_name.upper(),
+                target.environment,
+                target.host or target.cloud_account or "local",
+                self.trail.elapsed - started,
+                ver_result.status.value,
+                "yes" if ver_result.telemetry_arrived else "no",
+                "yes" if ver_result.rule_triggered else "no",
+                ver_result.matched_events_count,
+            )
+            log.info("BAS validation completed for %s: %s", req.hunt_id, ver_result.summary())
+        except Exception as exc:
+            log.warning("BAS validation failed for %s (%s)", req.hunt_id, exc)
+            self.trail.step("bas", "failed for %s: %s", technique, exc)
 
     def _resolve_ttps(
         self,

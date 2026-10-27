@@ -11,12 +11,14 @@ from typing import TYPE_CHECKING, Literal
 
 from hecate_runner.bas.base import (
     BASExecutionError,
+    BASPlatform,
     BASProvider,
     DetonationRequest,
     DetonationResult,
     DetonationStage,
     DetonationTarget,
     SafetyViolationError,
+    normalize_platform,
 )
 from hecate_runner.bas.caldera import CalderaConnector
 from hecate_runner.bas.mock import MockBASProvider
@@ -34,6 +36,7 @@ log = logging.getLogger(__name__)
 
 __all__ = [
     "BASExecutionError",
+    "BASPlatform",
     "BASProvider",
     "CalderaConnector",
     "DetectionVerifier",
@@ -47,6 +50,7 @@ __all__ = [
     "VerificationResult",
     "VerificationStatus",
     "get_bas_provider",
+    "normalize_platform",
 ]
 
 

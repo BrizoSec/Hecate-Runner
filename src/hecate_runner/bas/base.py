@@ -36,11 +36,32 @@ class DetonationStage(StrEnum):
     FAILED = "failed"
 
 
+BASPlatform = Literal["windows", "linux", "darwin", "aws", "azure", "gcp", "k8s"]
+
+
+def normalize_platform(platform: str) -> BASPlatform:
+    """Normalize a platform string to a supported BAS platform literal."""
+    p = platform.strip().lower()
+    if p in ("windows", "win"):
+        return "windows"
+    if p in ("darwin", "macos", "osx"):
+        return "darwin"
+    if p in ("aws", "amazon"):
+        return "aws"
+    if p in ("azure", "entra", "m365"):
+        return "azure"
+    if p in ("gcp", "google"):
+        return "gcp"
+    if p in ("k8s", "kubernetes"):
+        return "k8s"
+    return "linux"
+
+
 @dataclass
 class DetonationTarget:
     """Target destination for an adversary emulation detonation."""
 
-    platform: Literal["windows", "linux", "darwin", "aws", "azure", "gcp", "k8s"] = "linux"
+    platform: BASPlatform = "linux"
     host: str | None = None
     cloud_account: str | None = None
     agent_id: str | None = None
@@ -88,7 +109,7 @@ class DetonationRequest:
     hunt_id: str
     technique_id: str
     ability_id: str | None = None
-    platform: Literal["windows", "linux", "darwin", "aws", "azure", "gcp", "k8s"] = "linux"
+    platform: BASPlatform = "linux"
     target: DetonationTarget = field(default_factory=DetonationTarget)
     timeout_sec: int = 120
     cleanup_on_finish: bool = True

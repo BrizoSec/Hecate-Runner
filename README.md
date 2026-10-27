@@ -185,6 +185,17 @@ uv run hecate-runner draft \
   --source-url "https://news.sophos.com/akira-perflogs"
 ```
 
+### Live Adversary Emulation & Breach Simulation (BAS)
+Execute on-demand adversary emulation or run closed-loop detection verification:
+
+```bash
+# Detonate an ATT&CK technique via Mock, CALDERA, or Stratus Red Team
+uv run hecate-runner bas-detonate T1059.001 --provider mock --env lab
+
+# Run closed-loop detection verification against a hunt draft and update frontmatter
+uv run hecate-runner bas-verify H-0886 --provider mock --write-back
+```
+
 ---
 
 ## 💬 ChatOps & Slack Bot

@@ -208,6 +208,23 @@ print(f'Generated {len(events)} synthetic telemetry events')
 "
 ```
 
+### 5.3 Live Adversary Emulation & Breach Simulation (BAS)
+Execute on-demand adversary emulation or run closed-loop detection verification against any hunt:
+
+```bash
+cd ~/betas/Hecate-Runner
+
+# 1. On-demand adversary detonation via Mock, CALDERA, or Stratus
+uv run hecate-runner bas-detonate T1059.001 --provider mock --env lab
+uv run hecate-runner bas-detonate T1562.008 --provider stratus --platform aws --env staging --account-id 123456789012
+
+# 2. Closed-loop detection verification against a hunt draft
+uv run hecate-runner bas-verify H-0886 --provider mock --write-back
+
+# 3. Environment safety enforcement: production targets are strictly rejected
+uv run hecate-runner bas-detonate T1059.001 --env production  # Rejection error exit 1
+```
+
 ---
 
 ## Recipe 6: Operating the Autonomous Perpetual Daemon

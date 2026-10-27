@@ -71,6 +71,8 @@ class DraftHuntRequest:
     purple_team_telemetry_count: int = 0
     purple_team_atomic_techniques: list[str] = field(default_factory=list)
     purple_team_atomic_tests: list[dict[str, str]] = field(default_factory=list)
+    #: Closed-loop live adversary emulation & breach simulation (BAS) verification results
+    bas_verification: dict[str, Any] | None = None
     #: Claim excerpts and exact source passages checked by the Runner.
     claim_evidence: list[dict[str, str]] = field(default_factory=list)
 
@@ -583,6 +585,46 @@ def _render_atomic_tests(techniques: list[str], platforms: list[str] | None = No
         return ""
 
 
+def _render_bas_verification(req: DraftHuntRequest) -> str:
+    """Render closed-loop adversary emulation & breach simulation (BAS) validation findings."""
+    if not req.bas_verification:
+        return ""
+    bas = req.bas_verification
+    status = bas.get("status", "unknown")
+    status_badge = {
+        "verified_true_positive": "✅ **VERIFIED TRUE POSITIVE**",
+        "detection_miss": "⚠️ **DETECTION MISS (Telemetry arrived, rule missed)**",
+        "telemetry_missing": "❌ **TELEMETRY MISSING (Sensor blind spot - no events observed)**",
+        "detonation_failed": "⚠️ **DETONATION FAILED**",
+        "error": "❌ **EXECUTION ERROR**",
+    }.get(status, f"`{status}`")
+
+    provider = str(bas.get("provider", "unknown")).upper()
+    technique = bas.get("technique_id", "unspecified")
+    hits = bas.get("matched_events_count", 0)
+    duration = bas.get("duration_seconds", 0.0)
+    notes = bas.get("notes") or []
+    notes_str = "; ".join(notes) if notes else ""
+
+    lines = [
+        "",
+        "### Live Adversary Emulation & Breach Simulation (BAS)",
+        "",
+        f"> **Closed-Loop Validation Result:** {status_badge}",
+        "> ",
+        f"> - **Provider:** `{provider}`",
+        f"> - **Target Technique:** `{technique}` ({bas.get('ability_id', '')})",
+        f"> - **Telemetry Observed:** {'Yes' if bas.get('telemetry_arrived') else 'No'}",
+        f"> - **Detection Triggered:** {'Yes' if bas.get('rule_triggered') else 'No'} ({hits} hit(s))",
+    ]
+    if duration > 0:
+        lines.append(f"> - **Duration:** {duration:.2f}s")
+    if notes_str:
+        lines.append(f"> - **Notes:** `{notes_str}`")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _render_soc_triage_playbook(req: DraftHuntRequest) -> str:
     """Render SOC Responder Triage Playbook (ADS-Lite) to guide analysts when alerts fire."""
     if req.hypothesis.is_indicator_only:
@@ -786,6 +828,14 @@ def render_draft(req: DraftHuntRequest) -> str:
             if req.purple_team_rules_evaluated > 0
             else ""
         )
+        + (
+            f"bas_verified: {str(req.bas_verification.get('status') == 'verified_true_positive').lower()}\n"
+            f"bas_provider: {json.dumps(req.bas_verification.get('provider', ''))}\n"
+            f"bas_status: {json.dumps(req.bas_verification.get('status', ''))}\n"
+            f"bas_detection_triggered: {str(bool(req.bas_verification.get('rule_triggered'))).lower()}\n"
+            if req.bas_verification
+            else ""
+        )
         + "---\n\n"
     )
 
@@ -898,6 +948,7 @@ Source CTI:
 
 {_render_sigma_section(req)}{_render_review_gaps(req)}
 {_render_atomic_tests(techniques, platforms=req.platforms)}
+{_render_bas_verification(req)}
 ---
 
 ## KEEP: Findings & Response

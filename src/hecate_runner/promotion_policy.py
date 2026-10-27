@@ -97,6 +97,8 @@ def load_policy(workspace: Path) -> dict[str, Any]:
     ):
         if risks.get(key) not in _ACTIONS:
             raise ValueError(f"promotion policy has an invalid action for risk.{key}")
+    if "bas_failed" in risks and risks["bas_failed"] not in _ACTIONS:
+        raise ValueError("promotion policy has an invalid action for risk.bas_failed")
     return policy
 
 
@@ -164,6 +166,12 @@ def evaluate_promotion(workspace: Path, hunt_id: str) -> PromotionDecision:
         apply(
             str(risk["unsupported_claims"]),
             f"grounding audit found {unsupported} unsupported claim(s)",
+        )
+    if "bas_failed" in risk and metadata.get("bas_verified") is False:
+        status_note = metadata.get("bas_status") or "unverified"
+        apply(
+            str(risk["bas_failed"]),
+            f"live adversary emulation verification failed ({status_note})",
         )
 
     matches_tlp = _TLP_RE.findall("\n".join((facts.cti_text, research)))

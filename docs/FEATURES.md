@@ -19,6 +19,7 @@ A complete reference of capabilities across the Hecate threat hunting and detect
 | **Detection** | Sigma Rule Synthesis | Synthesizes standard Sigma detection rules with precise logsource categorization and selection filters. | [`hecate_agent.agents.llm.sigma_generator`](file:///home/chemch/betas/Hecate-Core/hecate_agent/agents/llm/sigma_generator.py) |
 | **Detection** | Reviewer Self-Remediation | AST validation and automated remediation feedback loop that corrects logsource and field discrepancies in real time. | [`hecate_runner.rule_tuner`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/rule_tuner.py) |
 | **Validation** | Purple Team Emulation | Executes synthetic attack replay (Sysmon, WAF, Linux auditd, Zeek) using Atomic Red Team mappings to evaluate true positives. | [`hecate_runner.purple_team`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/purple_team.py) |
+| **Validation** | Live BAS & Breach Simulation | Automated Level 4 Purple Teaming connecting to MITRE CALDERA and Stratus Red Team for live execution and closed-loop SIEM verification. | [`hecate_runner.bas`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/bas) |
 | **Transpilation** | Multi-Backend Export | Compiles Sigma rules to 5+ production SIEM/EDR query languages via pySigma (Splunk, Sentinel, CrowdStrike, Elastic, QRadar). | [`hecate_agent.core.sigma_transpiler`](file:///home/chemch/betas/Hecate-Core/hecate_agent/core/sigma_transpiler.py) |
 | **Lifecycle** | Promotion Gate Enforcement | Validates formatting, grounding confidence, credential safety, and tests against promotion policies before merge. | [`promotion_gate.py`](file:///home/chemch/betas/Hecate-Workspace/scripts/promotion_gate.py) |
 | **Operations** | Terminal Monitor TUI | Live terminal dashboard displaying active cycles, queue depths, quota usage, and decision trails. | [`hecate_agent.commands.monitor`](file:///home/chemch/betas/Hecate-Core/hecate_agent/commands/monitor.py) |
@@ -52,7 +53,15 @@ Rather than assuming a generated detection rule works, Hecate tests it against s
 - **Multi-Source Event Modeling:** Synthesizes realistic events for Windows Process Creation (Sysmon 1 / 4688), File Events (Sysmon 11), Network Connections (Sysmon 3 / Zeek), and Web/WAF events (Nginx / ModSecurity).
 - **Rule Verification:** Evaluates candidate Sigma rules against the synthetic event log to verify that the query fires on malicious patterns and rejects normal baseline activity.
 
-### 2.5 Multi-Engine Query Transpilation
+### 2.5 Live Adversary Emulation & Breach Simulation (BAS)
+Level 4 Purple Teaming extends beyond synthetic replay into live autonomous adversary execution:
+- **MITRE CALDERA Integration:** Connects via REST API to find abilities matching the hunt's MITRE Technique ID (e.g. `T1059.001`), creates ephemeral operations against allowlisted lab hosts, monitors step outputs, and triggers automatic cleanup.
+- **Stratus Red Team Integration:** CLI wrapper executing attack procedures across AWS, Azure, GCP, and Kubernetes (e.g. `T1562.008` CloudTrail stop, `T1098.001` IAM access key creation, `T1530` S3 exfiltration, `T1610` privileged pod). Enforces a 3-stage lifecycle (`warmup` → `detonate` → `cleanup`) with guaranteed teardown.
+- **Closed-Loop SIEM Verification:** Computes execution windows with clock drift and ingestion slack, verifies telemetry arrival in the SIEM, evaluates whether transpiled detection queries trigger True Positives, and surfaces blind spots or false negatives before PR promotion.
+- **Deterministic Mock Provider:** Built-in in-memory simulator providing offline CI/CD and unit testing without cloud credentials or running CALDERA servers.
+- **Strict Production Isolation:** Enforces host and account whitelisting, strictly rejecting execution against production environments.
+
+### 2.6 Multi-Engine Query Transpilation
 Hecate translates generic Sigma detection rules into native, optimized query languages:
 - **Splunk:** Search Processing Language (SPL).
 - **Microsoft Sentinel:** Kusto Query Language (KQL).
