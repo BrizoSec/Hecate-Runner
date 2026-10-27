@@ -257,3 +257,18 @@ def test_factory_builds_phase_3_subproviders(
     provider = get_provider("multi", settings=multi_settings)
     assert isinstance(provider, MultiProvider)
     assert {p.name for p in provider.providers} == {"msrc", "cloud_threat"}
+
+
+def test_tiered_priority_picks_tier_1_before_tier_3(tmp_path: Path) -> None:
+    # rss is in tier 3, cisa_kev is in tier 1
+    rss = _FakeProvider("rss", [_item("rss", "rss-item")])
+    cisa = _FakeProvider("cisa_kev", [_item("cisa_kev", "cisa-item")])
+
+    # Passing [rss, cisa_kev] with priority_tiers=True must pick cisa_kev first
+    provider = MultiProvider(
+        providers=[rss, cisa],
+        cursor_file=tmp_path / "cursor.json",
+        priority_tiers=True,
+    )
+    picked = provider.next_item()
+    assert picked is not None and picked.source == "cisa_kev"

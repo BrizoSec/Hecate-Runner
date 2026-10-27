@@ -1991,6 +1991,36 @@ def test_an_item_from_a_new_source_is_not_held_back_by_other_drafts(
     assert result.outcome == "draft_created"
 
 
+def test_cve_deduplication_window_parks_duplicate_campaign(
+    settings: Settings, mock_hecate: MagicMock
+) -> None:
+    earlier = settings.hunts_root / "2026" / "Q4" / "H-0878.md"
+    earlier.parent.mkdir(parents=True, exist_ok=True)
+    earlier.write_text(
+        "# Hunt H-0878\n\nAdversary leverages CVE-2026-114625 for remote exploitation.\n"
+    )
+
+    provider = MagicMock()
+    provider.next_item.side_effect = [
+        CTIItem(
+            content="VulnCheck advisory for CVE-2026-114625 affecting VeloCloud Orchestrator.",
+            source="vulncheck",
+            source_url="https://vulncheck.com/advisories/cve-2026-114625",
+            metadata={"indicators": {"cve": ["CVE-2026-114625"]}},
+            title="CVE-2026-114625 VeloCloud",
+        ),
+        None,
+    ]
+
+    result = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
+    assert result.outcome == "no_actionable_cti"
+    mock_hecate.research_new.assert_not_called()
+    parked = list_parked(settings.cti_queue_dir_resolved)
+    assert len(parked) == 1
+    assert "already drafted as H-0878" in parked[0].reason
+    assert "CVE-2026-114625" in parked[0].reason
+
+
 @pytest.mark.parametrize(
     ("content", "expected"),
     [

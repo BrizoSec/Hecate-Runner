@@ -1060,6 +1060,11 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_MAX_QUERY_LIMIT",
         description="Hard ceiling on a proposed query's result limit. Matches AGENTS.md's Query Guardrails.",
     )
+    cti_priority_tiers: bool = Field(
+        default=True,
+        validation_alias="HECATE_RUNNER_CTI_PRIORITY_TIERS",
+        description="Whether Multi CTI provider prioritizes KEV and PoCs before general feeds.",
+    )
 
     # --- Derived paths ------------------------------------------------------
 

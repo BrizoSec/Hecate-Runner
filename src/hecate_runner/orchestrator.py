@@ -2590,7 +2590,7 @@ class Orchestrator:
         return True
 
     def _drafted_from_same_source(self, item: CTIItem) -> str | None:
-        """The hunt already drafted from this item's source link, if any.
+        """The hunt already drafted from this item's source link, or same CVE within 72h.
 
         H-0011 and H-0017 were both drafted from one MISP event (Kunai, open
         recursive DNS), a day apart, when the event reappeared on the feed.
@@ -2598,14 +2598,34 @@ class Orchestrator:
         first did not already say. Matched on the rendered references link,
         which every draft writes, so no separate index has to be kept in step.
         """
+        import datetime
+        import re
+
         url = item.source_url.strip()
-        if not url:
-            return None
-        needle = f"]({url})"
-        for path in sorted(self.settings.hunts_root.rglob("H-*.md")):
+        needle = f"]({url})" if url else None
+
+        cves: set[str] = set()
+        for c in (item.metadata.get("indicators") or {}).get("cve", []):
+            if isinstance(c, str) and c.strip():
+                cves.add(c.strip().upper())
+        for m in re.finditer(r"\bCVE-\d{4}-\d{4,7}\b", item.title or "", re.IGNORECASE):
+            cves.add(m.group(0).upper())
+
+        now = datetime.datetime.now(datetime.UTC)
+        max_cve_age_sec = 3 * 86400  # 72 hours deduplication window
+
+        for path in sorted(self.settings.hunts_root.rglob("H-*.md"), reverse=True):
             try:
-                if needle in path.read_text(encoding="utf-8"):
+                text = path.read_text(encoding="utf-8")
+                if needle and needle in text:
                     return path.stem
+
+                if cves:
+                    mtime = datetime.datetime.fromtimestamp(path.stat().st_mtime, tz=datetime.UTC)
+                    if (now - mtime).total_seconds() <= max_cve_age_sec:
+                        for cve in cves:
+                            if cve in text:
+                                return f"{path.stem} covering {cve} within 72h window"
             except OSError:
                 continue
         return None
@@ -2674,7 +2694,9 @@ class Orchestrator:
                         )
                         return item, skipped, parked_count
                     reason = (
-                        f"already drafted as {earlier} from the same source ({item.source_url})"
+                        f"already drafted as {earlier}"
+                        if "(" in earlier
+                        else f"already drafted as {earlier} from the same source ({item.source_url})"
                     )
                 self.trail.step("triage", "park: %s", reason)
                 # Held back, not dropped: the cursor has already moved past

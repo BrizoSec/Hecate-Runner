@@ -54,12 +54,33 @@ class MultiCursorState:
         atomic_write_text(path, json.dumps({"next_index": self.next_index}))
 
 
+TIER_1_CRITICAL: frozenset[str] = frozenset({"cisa_kev", "vulncheck", "github_poc"})
+TIER_2_THREAT_FEEDS: frozenset[str] = frozenset(
+    {
+        "otx",
+        "misp",
+        "malwarebazaar",
+        "abuse_ch",
+        "msrc",
+        "cloud_threat",
+        "dfir_report",
+        "anyrun",
+        "vxunderground",
+    }
+)
+
+
 class MultiProvider(CTIProvider):
     """Fans out ``next_item``/``acknowledge`` across multiple sub-providers."""
 
     name = "multi"
 
-    def __init__(self, providers: list[CTIProvider], cursor_file: Path):
+    def __init__(
+        self,
+        providers: list[CTIProvider],
+        cursor_file: Path,
+        priority_tiers: bool = False,
+    ):
         if not providers:
             raise MultiProviderError(
                 "At least one sub-provider is required to use the multi CTI provider"
@@ -71,43 +92,50 @@ class MultiProvider(CTIProvider):
             )
         self.providers = providers
         self.cursor_file = cursor_file
+        self.priority_tiers = priority_tiers
         self._by_name = {p.name: p for p in providers}
 
     # --- CTIProvider interface -----------------------------------------------
 
     def next_item(self) -> CTIItem | None:
         cursor = MultiCursorState.load(self.cursor_file)
-        count = len(self.providers)
-        start = cursor.next_index % count
 
-        for offset in range(count):
-            idx = (start + offset) % count
-            provider = self.providers[idx]
-            try:
-                item = provider.next_item()
-            except Exception as exc:  # one bad source shouldn't sink the cycle
-                log.warning(
-                    "CTI sub-provider %r failed (%s); trying the next configured source",
-                    provider.name,
-                    exc,
-                )
-                continue
-            if item is not None:
-                # The rotation advances in acknowledge(), not here. Every
-                # sub-provider already works that way -- RSS and OTX move their
-                # own cursors on acknowledge -- and doing it at pick time made
-                # `--dry-run` consume a slot in the rotation, so the next real
-                # cycle silently started at a different source. It also means
-                # a cycle that dies mid-draft re-offers the same item from the
-                # same source, which is the contract the orchestrator already
-                # relies on for retries.
-                log.info(
-                    "Multi CTI: picked %s (rotation advances once the item is acknowledged)",
-                    provider.name,
-                )
-                return item
+        if self.priority_tiers:
+            # Priority tiers ensure high-signal KEV & PoCs are evaluated before general feeds
+            tier1 = [p for p in self.providers if p.name in TIER_1_CRITICAL]
+            tier2 = [p for p in self.providers if p.name in TIER_2_THREAT_FEEDS]
+            tier3 = [
+                p
+                for p in self.providers
+                if p.name not in TIER_1_CRITICAL and p.name not in TIER_2_THREAT_FEEDS
+            ]
+            tiers = [t for t in (tier1, tier2, tier3) if t]
+        else:
+            tiers = [self.providers]
 
-        log.debug("No new entries across %d configured CTI sources", count)
+        for tier in tiers:
+            t_count = len(tier)
+            t_start = cursor.next_index % t_count
+            for offset in range(t_count):
+                idx = (t_start + offset) % t_count
+                provider = tier[idx]
+                try:
+                    item = provider.next_item()
+                except Exception as exc:  # one bad source shouldn't sink the cycle
+                    log.warning(
+                        "CTI sub-provider %r failed (%s); trying the next configured source",
+                        provider.name,
+                        exc,
+                    )
+                    continue
+                if item is not None:
+                    log.info(
+                        "Multi CTI: picked %s (rotation advances once the item is acknowledged)",
+                        provider.name,
+                    )
+                    return item
+
+        log.debug("No new entries across %d configured CTI sources", len(self.providers))
         return None
 
     def acknowledge(self, item: CTIItem) -> None:
