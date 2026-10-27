@@ -42,6 +42,7 @@ class CalderaConnector(BASProvider):
         allowed_hosts: list[str] | None = None,
         allowed_accounts: list[str] | None = None,
         client: httpx.Client | None = None,
+        fallback_to_mock: bool = False,
     ):
         super().__init__(allowed_hosts=allowed_hosts, allowed_accounts=allowed_accounts)
         self.base_url = base_url.rstrip("/")
@@ -49,6 +50,7 @@ class CalderaConnector(BASProvider):
         self.agent_group = agent_group
         self.timeout_sec = timeout_sec
         self._client = client
+        self.fallback_to_mock = fallback_to_mock
 
     def _get_client(self) -> httpx.Client:
         if self._client is not None:
@@ -115,8 +117,8 @@ class CalderaConnector(BASProvider):
                 return []
 
             abilities = resp.json()
-            matched = []
-            platform_matched = []
+            matched: list[str] = []
+            platform_matched: list[str] = []
             tid_upper = technique_id.upper()
             plat_lower = platform.lower().strip() if platform else None
             for ab in abilities:
@@ -151,7 +153,46 @@ class CalderaConnector(BASProvider):
         # 1. Enforce safety checks
         self.check_safety(request.target)
 
-        # 2. Resolve ability ID
+        # 2. Check if an active agent exists for target platform (fallback to mock if enabled)
+        if self.fallback_to_mock:
+            try:
+                client = self._get_client()
+                agents_resp = client.get("/api/v2/agents")
+                if agents_resp.status_code == 404:
+                    agents_resp = client.get("/api/agents")
+                agents = agents_resp.json() if agents_resp.status_code == 200 else []
+                plat_lower = request.platform.lower().strip()
+                has_agent_for_platform = any(
+                    str(a.get("platform", "")).lower() == plat_lower
+                    and a.get("group") == self.agent_group
+                    for a in agents
+                )
+                if not has_agent_for_platform:
+                    log.info(
+                        "No active CALDERA agent in group '%s' for platform '%s'; falling back to MockBASProvider.",
+                        self.agent_group,
+                        request.platform,
+                    )
+                    from hecate_runner.bas.mock import MockBASProvider
+
+                    mock_provider = MockBASProvider(
+                        allowed_hosts=self.allowed_hosts,
+                        allowed_accounts=self.allowed_accounts,
+                    )
+                    mock_res = mock_provider.detonate(request)
+                    mock_res.provider = self.name
+                    mock_res.stdout = (
+                        f"[Mock Fallback: No active CALDERA agent in group '{self.agent_group}' for platform '{request.platform}']\n"
+                        f"{mock_res.stdout}"
+                    )
+                    return mock_res
+            except Exception as exc:
+                log.warning(
+                    "CALDERA agent platform check failed, proceeding with direct detonation: %s",
+                    exc,
+                )
+
+        # 3. Resolve ability ID
         ability_id = request.ability_id
         if not ability_id:
             abilities = self.lookup_technique(request.technique_id, platform=request.platform)

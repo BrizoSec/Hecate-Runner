@@ -292,6 +292,11 @@ class Settings(BaseSettings):
         alias="CALDERA_TIMEOUT_SEC",
         description="Timeout in seconds for CALDERA operation execution.",
     )
+    bas_fallback_to_mock: bool = Field(
+        default=True,
+        alias="HECATE_BAS_FALLBACK_TO_MOCK",
+        description="Fall back to mock provider if no active agent exists for target platform.",
+    )
     stratus_binary: str = Field(
         default="stratus-red-team",
         alias="STRATUS_BINARY_PATH",

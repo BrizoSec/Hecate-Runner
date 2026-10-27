@@ -62,9 +62,10 @@ def create_mock_caldera_client(
                         {
                             "id": "link-1",
                             "paw": "agent-01",
-                            "status": 0,
+                            "status": 0 if state == "finished" else -3,
                             "command": "powershell.exe -enc ...",
                             "collect": "2026-10-27T00:00:00Z",
+                            "finish": "2026-10-27T00:00:05Z" if state == "finished" else None,
                         }
                     ],
                 },
@@ -170,3 +171,20 @@ def test_caldera_detonation_safety_violation():
     )
     with pytest.raises(SafetyViolationError):
         connector.detonate(request)
+
+
+def test_caldera_detonation_fallback_to_mock():
+    # Only linux agent exists in mock client, request is windows
+    client = create_mock_caldera_client()
+    connector = CalderaConnector(client=client, fallback_to_mock=True)
+    request = DetonationRequest(
+        hunt_id="H-0885",
+        technique_id="T1059.001",
+        platform="windows",
+        target=DetonationTarget(environment="staging", platform="windows"),
+    )
+    result = connector.detonate(request)
+    assert result.success is True
+    assert "Mock Fallback" in result.stdout
+    assert len(result.telemetry_signatures) > 0
+    assert result.telemetry_signatures[0]["product"] == "windows"

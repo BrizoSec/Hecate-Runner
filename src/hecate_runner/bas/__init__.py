@@ -71,6 +71,7 @@ def get_bas_provider(
         api_key = settings.caldera_api_key if settings else None
         group = settings.caldera_agent_group if settings else "staging"
         timeout = settings.caldera_timeout_sec if settings else 120
+        fallback = getattr(settings, "bas_fallback_to_mock", True) if settings else True
         return CalderaConnector(
             base_url=url,
             api_key=api_key,
@@ -78,6 +79,7 @@ def get_bas_provider(
             timeout_sec=timeout,
             allowed_hosts=hosts,
             allowed_accounts=accounts,
+            fallback_to_mock=fallback,
         )
 
     if name_lower == "stratus":
