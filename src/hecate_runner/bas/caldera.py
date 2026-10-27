@@ -183,7 +183,7 @@ class CalderaConnector(BASProvider):
 
         try:
             op_resp = client.post("/api/v2/operations", json=op_payload)
-            if op_resp.status_code == 404:
+            if op_resp.status_code in (404, 405):
                 is_v2 = False
                 adv_id = f"hecate-{int(time.time())}"
                 client.put(
