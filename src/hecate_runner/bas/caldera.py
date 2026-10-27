@@ -165,6 +165,7 @@ class CalderaConnector(BASProvider):
                 has_agent_for_platform = any(
                     str(a.get("platform", "")).lower() == plat_lower
                     and a.get("group") == self.agent_group
+                    and a.get("trusted", True) is not False
                     for a in agents
                 )
                 if not has_agent_for_platform:
@@ -188,9 +189,22 @@ class CalderaConnector(BASProvider):
                     return mock_res
             except Exception as exc:
                 log.warning(
-                    "CALDERA agent platform check failed, proceeding with direct detonation: %s",
+                    "CALDERA server unreachable (%s); falling back to MockBASProvider.",
                     exc,
                 )
+                from hecate_runner.bas.mock import MockBASProvider
+
+                mock_provider = MockBASProvider(
+                    allowed_hosts=self.allowed_hosts,
+                    allowed_accounts=self.allowed_accounts,
+                )
+                mock_res = mock_provider.detonate(request)
+                mock_res.provider = self.name
+                mock_res.stdout = (
+                    f"[Mock Fallback: CALDERA server unreachable ({exc})]\n"
+                    f"{mock_res.stdout}"
+                )
+                return mock_res
 
         # 3. Resolve ability ID
         ability_id = request.ability_id

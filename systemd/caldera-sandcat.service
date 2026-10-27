@@ -1,0 +1,14 @@
+[Unit]
+Description=CALDERA Sandcat Agent Daemon
+After=network.target docker.service
+
+[Service]
+Type=simple
+ExecStart=/home/chemch/betas/sandcat -server http://localhost:8888 -group staging
+Restart=always
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
