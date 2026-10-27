@@ -250,6 +250,58 @@ class Settings(BaseSettings):
         description="Simulate query deployment in dry-run mode without mutating remote SIEM/EDR state.",
     )
 
+    # --- Live Adversary Emulation & Breach Simulation (BAS) -----------------
+    bas_enabled: bool = Field(
+        default=False,
+        alias="HECATE_BAS_ENABLED",
+        description="Enable live adversary emulation & breach simulation validation.",
+    )
+    bas_mode: Literal["mock", "local_sandbox", "live_lab"] = Field(
+        default="mock",
+        alias="HECATE_BAS_MODE",
+        description="Operational mode for BAS execution (mock, local_sandbox, live_lab).",
+    )
+    bas_allowed_hosts: list[str] = Field(
+        default_factory=list,
+        alias="HECATE_BAS_ALLOWED_HOSTS",
+        description="Allowlist of hostnames/IPs permitted for live CALDERA execution.",
+    )
+    bas_allowed_accounts: list[str] = Field(
+        default_factory=list,
+        alias="HECATE_BAS_ALLOWED_ACCOUNTS",
+        description="Allowlist of cloud account/subscription IDs permitted for Stratus execution.",
+    )
+    caldera_url: str = Field(
+        default="http://localhost:8888",
+        alias="CALDERA_URL",
+        description="Base URL for MITRE CALDERA server API.",
+    )
+    caldera_api_key: str | None = Field(
+        default=None,
+        alias="CALDERA_API_KEY",
+        description="API key for MITRE CALDERA authentication.",
+    )
+    caldera_agent_group: str = Field(
+        default="staging",
+        alias="CALDERA_AGENT_GROUP",
+        description="Target agent group for CALDERA operations.",
+    )
+    caldera_timeout_sec: int = Field(
+        default=120,
+        alias="CALDERA_TIMEOUT_SEC",
+        description="Timeout in seconds for CALDERA operation execution.",
+    )
+    stratus_binary: str = Field(
+        default="stratus-red-team",
+        alias="STRATUS_BINARY_PATH",
+        description="Path to stratus-red-team CLI binary.",
+    )
+    stratus_timeout_sec: int = Field(
+        default=300,
+        alias="STRATUS_TIMEOUT_SEC",
+        description="Timeout in seconds for Stratus Red Team execution.",
+    )
+
     # --- Research grounding (Phase 6) ---------------------------------------
     sigma_review_enabled: bool = Field(
         default=True,
