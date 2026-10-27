@@ -2766,23 +2766,30 @@ class Orchestrator:
         log.info("Picked up CTI item from %s (%d chars)", item.source, len(item.content))
         self.metrics.set_source(item.source, item.identifier)
 
+        is_sweep = bool(parse_indicator_inventory(item.content)) if not has_narrative(item.content) else False
+        effective_spacing = (
+            self.settings.min_hours_between_sweeps if is_sweep else self.settings.min_hours_between_drafts
+        )
         if not dry_run and self.settings.max_drafts_per_day < 900000:
-            spaced, elapsed = state.check_spacing(self.settings.min_hours_between_drafts)
+            spaced, elapsed = state.check_spacing(effective_spacing)
             if not spaced:
+                track = "indicator sweep" if is_sweep else "narrative research"
                 log.info(
-                    "Spacing cooldown active: last draft was %.1fh ago (min spacing: %.1fh). Leaving CTI in queue.",
+                    "Spacing cooldown active for %s: last draft was %.1fh ago (min spacing: %.1fh). Leaving CTI in queue.",
+                    track,
                     elapsed,
-                    self.settings.min_hours_between_drafts,
+                    effective_spacing,
                 )
                 self.trail.step(
                     "quota",
-                    "spacing cooldown: last draft was %.1fh ago (needs %.1fh); item stays queued",
+                    "spacing cooldown (%s): last draft was %.1fh ago (needs %.1fh); item stays queued",
+                    track,
                     elapsed,
-                    self.settings.min_hours_between_drafts,
+                    effective_spacing,
                 )
                 return RunResult(
                     outcome="spacing_cooldown",
-                    detail=f"{elapsed:.1f}h/{self.settings.min_hours_between_drafts:.1f}h",
+                    detail=f"{elapsed:.1f}h/{effective_spacing:.1f}h",
                     parked_count=parked_count,
                 )
 

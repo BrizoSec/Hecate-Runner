@@ -17,6 +17,7 @@ against attack telemetry" with "0 false positives".
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -63,6 +64,17 @@ BENIGN_SAMPLE: list[dict[str, Any]] = [
         "TargetObject": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Start",
         "Details": "2",
         "Image": "services.exe",
+    },
+    {
+        "cs-method": "GET",
+        "cs-uri-stem": "/index.html",
+        "sc-status": "200",
+        "cs-user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    },
+    {
+        "c-uri": "https://www.google.com/search?q=weather",
+        "cs-host": "www.google.com",
+        "cs-method": "GET",
     },
 ]
 
@@ -123,8 +135,21 @@ def replay_events(
             add("dns_query", {"QueryName": value})
             add("network_connection", {"DestinationHostname": value})
         elif rtype == "url":
-            host, _, _ = url_parts(value)
+            host, path, query = url_parts(value)
             add("proxy", {"c-uri": value, **({"cs-host": host} if host else {})})
+            add(
+                "webserver",
+                {
+                    "cs-method": "POST"
+                    if any(w in value.lower() for w in ("api", "upload", "audit", "login", "auth"))
+                    else "GET",
+                    "cs-uri-stem": path or "/",
+                    **({"cs-uri-query": query} if query else {}),
+                    "c-uri": value,
+                    **({"cs-host": host} if host else {}),
+                    "sc-status": "200",
+                },
+            )
         elif rtype in _HASH_LABELS:
             hashes = f"{_HASH_LABELS[rtype]}={value}"
             add("process_creation", {"Hashes": hashes})
@@ -139,6 +164,40 @@ def replay_events(
             continue
         if kind == "file_path":
             add("file_event", {"TargetFilename": value})
+            if any(
+                ext in value.lower()
+                for ext in (".php", ".jsp", ".action", ".do", ".aspx", "/api/", "/oa_", "/console")
+            ):
+                path = value.split("?")[0]
+                query = value.split("?", 1)[1] if "?" in value else ""
+                add(
+                    "webserver",
+                    {
+                        "cs-method": "POST"
+                        if any(w in value.lower() for w in ("api", "upload", "audit", "login", "auth"))
+                        else "GET",
+                        "cs-uri-stem": path if path.startswith("/") else f"/{path}",
+                        **({"cs-uri-query": query} if query else {}),
+                        "c-uri": value,
+                        "sc-status": "200",
+                    },
+                )
+        elif kind in ("url", "uri_path", "endpoint", "web_path"):
+            path = value.split("?")[0]
+            query = value.split("?", 1)[1] if "?" in value else ""
+            add(
+                "webserver",
+                {
+                    "cs-method": "POST"
+                    if any(w in value.lower() for w in ("api", "upload", "audit", "login", "auth"))
+                    else "GET",
+                    "cs-uri-stem": path if path.startswith("/") else f"/{path}",
+                    **({"cs-uri-query": query} if query else {}),
+                    "c-uri": value,
+                    "sc-status": "200",
+                },
+            )
+            add("proxy", {"c-uri": value})
         elif kind == "command_line":
             add("process_creation", {"CommandLine": value, "Image": value.split()[0]})
         elif kind == "process":
@@ -148,9 +207,13 @@ def replay_events(
                 add(category, {"TargetObject": value})
 
     # Synthesize cloud_audit and identity_audit events when cloud indicators or text are present
-    combined_intel = (
-        (cti_text or "") + "\n" + "\n".join(str(getattr(a, "value", "") or "") for a in artifacts)
+    raw_cti = cti_text if isinstance(cti_text, str) else ""
+    raw_artifacts = "\n".join(
+        str(v)
+        for a in artifacts
+        if (v := getattr(a, "value", "")) and isinstance(v, (str, int, float))
     )
+    combined_intel = f"{raw_cti}\n{raw_artifacts}".strip()
     lowered_intel = combined_intel.lower()
 
     if any(
@@ -300,6 +363,28 @@ def replay_events(
                 "Privileged": "true",
             },
         )
+
+    # Synthesize webserver and proxy events when web endpoints or paths are present in CTI
+    web_endpoints = re.findall(
+        r"/(?:api|v\d+|wp-admin|console|owa|autodiscover|actuator|oa_servlets|OA_HTML|scripts|logon|vpn|nitro|mgmt|rest)/[a-zA-Z0-9_\-./?=&#%]+",
+        combined_intel,
+    )
+    for ep in web_endpoints:
+        path = ep.split("?")[0]
+        query = ep.split("?", 1)[1] if "?" in ep else ""
+        add(
+            "webserver",
+            {
+                "cs-method": "POST"
+                if any(w in ep.lower() for w in ("api", "upload", "audit", "login", "auth", "sqli", "create", "update"))
+                else "GET",
+                "cs-uri-stem": path,
+                **({"cs-uri-query": query} if query else {}),
+                "c-uri": ep,
+                "sc-status": "200",
+            },
+        )
+        add("proxy", {"c-uri": ep})
 
     # Dynamic Adversary Emulation via Atomic Red Team
     if enable_atomic and techniques:

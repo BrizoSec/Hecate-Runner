@@ -272,19 +272,28 @@ def daemon(
                 break
 
             # If an item was successfully drafted, check if there is immediate pending work before sleeping
-            if result.outcome == "drafted":
+            if result.outcome in ("draft_created", "drafted"):
                 log.info(
                     "Cycle completed with draft %s. Pausing 5s before next item...", result.hunt_id
                 )
                 stop_event.wait(5.0)
-            elif result.outcome in ("empty", "queue_empty"):
+            elif result.outcome in ("empty", "queue_empty", "no_cti"):
                 log.info("CTI intake queue is idle. Sleeping for %ds...", effective_interval)
                 stop_event.wait(float(effective_interval))
-            elif result.outcome == "quota_exceeded":
+            elif result.outcome in ("quota_reached", "quota_exceeded"):
                 log.warning(
-                    "Daily quota reached. Waiting for next window (%ds)...", effective_interval
+                    "Daily quota reached (%s). Waiting for next window (%ds)...",
+                    result.detail or "",
+                    effective_interval,
                 )
                 stop_event.wait(float(effective_interval))
+            elif result.outcome == "spacing_cooldown":
+                log.info(
+                    "Spacing cooldown active (%s). Checking again in %ds...",
+                    result.detail or "",
+                    min(effective_interval, 60),
+                )
+                stop_event.wait(float(min(effective_interval, 60)))
             else:
                 log.info(
                     "Cycle completed with status '%s'. Sleeping for %ds...",

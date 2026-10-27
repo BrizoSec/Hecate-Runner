@@ -332,3 +332,24 @@ detection:
     assert outcome.status == "validated"
     assert outcome.true_positives == 1
     assert outcome.false_positives == 0
+
+
+def test_replay_events_synthesises_webserver_and_validates_rule() -> None:
+    cti_text = "Adversaries targeted unauthenticated endpoints at /api/v1/publish/audit using SQL injection payloads."
+    events = replay_events([], [], cti_text=cti_text)
+    assert "webserver" in events
+    web_events = events["webserver"]
+    assert any("/api/v1/publish/audit" in str(e.get("cs-uri-stem")) for e in web_events)
+
+    web_rule = """title: DotCMS SQL Injection Detection
+logsource:
+  category: webserver
+detection:
+  selection:
+    cs-uri-stem|contains: /api/v1/publish/audit
+  condition: selection
+"""
+    outcome = replay_rule(web_rule, web_events, BENIGN_SAMPLE)
+    assert outcome.status == "validated"
+    assert outcome.true_positives >= 1
+    assert outcome.false_positives == 0

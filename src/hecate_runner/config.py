@@ -134,6 +134,17 @@ class Settings(BaseSettings):
             "hours of the day. 0 disables spacing."
         ),
     )
+    min_hours_between_sweeps: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=72.0,
+        alias="HECATE_RUNNER_MIN_HOURS_BETWEEN_SWEEPS",
+        description=(
+            "Minimum spacing in hours between fast indicator sweep draft runs (ThreatFox, "
+            "CertStream, MalwareBazaar). Allows rapid IOC ingestion without waiting for the "
+            "longer narrative research spacing cooldown."
+        ),
+    )
     llm_timeout_sec: int = Field(
         default=1500,
         ge=30,
