@@ -152,6 +152,68 @@ In [`hecate_runner.purple_team`](file:///home/chemch/betas/Hecate-Runner/src/hec
   - **Web Application / WAF:** Apache/Nginx access logs and Cloudflare/ModSecurity WAF events.
 - Evaluates candidate Sigma rules against the synthetic telemetry to verify true-positive detection prior to human submission.
 
+### 4.5 Breach & Attack Simulation (BAS) & Live Adversary Emulation
+
+In [`hecate_runner.bas`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/bas), Hecate implements automated **Level 4 Purple Teaming** by integrating with real-world adversary emulation frameworks:
+
+```mermaid
+flowchart TD
+    subgraph Trigger ["Detonation Trigger"]
+        CLI["CLI: bas-detonate / bas-verify"]
+        ORCH["Orchestrator Pipeline<br/>(_emulate_and_validate_adversary)"]
+    end
+
+    subgraph Factory ["Provider Factory & Safety Boundary"]
+        PROV["get_bas_provider(name)"]
+        SAFETY{"check_safety(target)<br/>Prod Rejection & Allowlists"}
+    end
+
+    subgraph Providers ["BAS Providers"]
+        MOCK["MockBASProvider<br/>In-memory Synthetic Telemetry"]
+        CALDERA["CalderaConnector<br/>REST API v2 / Classic<br/>Dual API & Link Polling"]
+        STRATUS["StratusConnector<br/>CLI Cloud API Detonation<br/>AWS / GCP / Azure"]
+    end
+
+    subgraph HardenedTarget ["Live Endpoint Execution (CALDERA)"]
+        C2["CALDERA Server<br/>(127.0.0.1:8888 Docker)"]
+        AGENT["Sandcat Agent<br/>(caldera-sandcat.service)<br/>NoNewPrivileges, PrivateTmp"]
+    end
+
+    subgraph Verification ["Closed-Loop Detection Verification"]
+        VERIFIER["DetectionVerifier<br/>Correlate Detonation & Telemetry"]
+        SIGMA["In-Process Sigma Evaluator<br/>Rule Query Matching"]
+        RESULT["Verification Classification<br/>TRUE_POSITIVE / DETECTION_MISS / TELEMETRY_MISS"]
+    end
+
+    subgraph Policy ["Promotion & Persistence"]
+        FRONTMATTER["Write-back Hunt Frontmatter<br/>purple_team_validated: true<br/>bas_verified: true"]
+        GATE["Promotion Policy<br/>bas_failed: review / block"]
+    end
+
+    Trigger --> PROV --> SAFETY
+    SAFETY -- "mock" --> MOCK
+    SAFETY -- "caldera" --> CALDERA
+    SAFETY -- "stratus" --> STRATUS
+    CALDERA -. "Missing Platform / Offline" .-> MOCK
+    CALDERA --> C2 --> AGENT
+    MOCK --> VERIFIER
+    CALDERA --> VERIFIER
+    STRATUS --> VERIFIER
+    VERIFIER --> SIGMA --> RESULT
+    RESULT --> FRONTMATTER
+    RESULT --> GATE
+```
+
+#### Core Components & Code Organization
+- **Base Models & Safety Boundary ([`base.py`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/bas/base.py)):** Defines immutable Pydantic models (`DetonationRequest`, `DetonationResult`, `DetonationTarget`, `DetonationStage`, `VerificationStatus`, `DetectionVerificationResult`). Enforces non-negotiable safety guardrails: immediately raises `SafetyViolationError` if the target environment matches `production`, `prod`, or `live`, and verifies host and account allowlists.
+- **MITRE CALDERA Connector ([`caldera.py`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/bas/caldera.py)):** Communicates with CALDERA servers via dual-API REST interaction (REST API v2 with automatic fallback to classic `/api/abilities`, `/api/agents`, and `/api/rest`). Resolves MITRE technique IDs to abilities, schedules autonomous ad-hoc operations, decodes base64 commands and output streams, detects early link completion, and cleans up adversaries and operations upon finish.
+- **Platform-Aware Mock Fallback:** When targeting platforms lacking an active, trusted CALDERA agent (such as Windows PowerShell requests when only a Linux agent is deployed) or when the C2 server is offline, [`CalderaConnector`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/bas/caldera.py) automatically delegates to [`MockBASProvider`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/bas/mock.py). This enables continuous operation without operational failures.
+- **Stratus Red Team Connector ([`stratus.py`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/bas/stratus.py)):** Orchestrates cloud adversary emulation across AWS, GCP, and Azure using the `stratus-red-team` binary. Manages warm-up, detonation, telemetry event collection (CloudTrail, GCP Audit, Azure Activity), and mandatory resource destruction/cleanup.
+- **Mock Provider ([`mock.py`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/bas/mock.py)):** Zero-dependency in-process provider generating deterministic, high-fidelity security telemetry (Sysmon process creation, network connections, file modifications, cloud audit events) for fast unit testing and offline CI/CD pipelines.
+- **Detection Verifier ([`verifier.py`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/bas/verifier.py)):** Executes closed-loop verification by evaluating candidate Sigma detection rules directly against the telemetry generated during detonation. Evaluates true-positive coverage, reports rule hit counts, and updates hunt markdown documents with verification metadata and frontmatter flags.
+- **Hardened Agent Deployment Model ([`systemd/caldera-sandcat.service`](file:///home/chemch/betas/Hecate-Runner/systemd/caldera-sandcat.service)):** Runs the Sandcat agent as a native systemd user service under strict Linux kernel isolation (`NoNewPrivileges=true`, `PrivateTmp=true`, `MemoryDenyWriteExecute=true`, `RestrictSUIDSGID=true`, `LockPersonality=true`) with CALDERA bound strictly to loopback (`127.0.0.1:8888`), preventing privilege escalation and external network exposure.
+
+
 ---
 
 ## 5. Security & Isolation Model

@@ -55,11 +55,14 @@ Rather than assuming a generated detection rule works, Hecate tests it against s
 
 ### 2.5 Live Adversary Emulation & Breach Simulation (BAS)
 Level 4 Purple Teaming extends beyond synthetic replay into live autonomous adversary execution:
-- **MITRE CALDERA Integration:** Connects via REST API to find abilities matching the hunt's MITRE Technique ID (e.g. `T1059.001`), creates ephemeral operations against allowlisted lab hosts, monitors step outputs, and triggers automatic cleanup.
+- **MITRE CALDERA Integration:** Connects via REST API with dual-version compatibility (v2 and classic endpoints) to resolve MITRE Technique IDs (e.g. `T1033`, `T1059.001`), schedules autonomous operations against allowlisted lab hosts, decodes base64 outputs, and triggers automatic cleanup.
+- **Hardened Agent Deployment:** Sandcat agent operates as an isolated systemd user service (`caldera-sandcat.service`) under strict kernel sandboxing (`NoNewPrivileges=true`, `PrivateTmp=true`, `MemoryDenyWriteExecute=true`, `RestrictSUIDSGID=true`), with CALDERA bound exclusively to loopback (`127.0.0.1:8888`).
+- **Platform-Aware Mock Fallback:** When a technique targets a platform lacking an active live agent (such as Windows PowerShell when only a Linux agent is deployed) or when the C2 server is offline, the provider automatically falls back to `MockBASProvider`, generating valid telemetry without pipeline interruptions.
 - **Stratus Red Team Integration:** CLI wrapper executing attack procedures across AWS, Azure, GCP, and Kubernetes (e.g. `T1562.008` CloudTrail stop, `T1098.001` IAM access key creation, `T1530` S3 exfiltration, `T1610` privileged pod). Enforces a 3-stage lifecycle (`warmup` → `detonate` → `cleanup`) with guaranteed teardown.
-- **Closed-Loop SIEM Verification:** Computes execution windows with clock drift and ingestion slack, verifies telemetry arrival in the SIEM, evaluates whether transpiled detection queries trigger True Positives, and surfaces blind spots or false negatives before PR promotion.
+- **Closed-Loop SIEM Verification:** Computes execution windows with clock drift and ingestion slack, verifies telemetry arrival, evaluates candidate Sigma detection queries, and surfaces blind spots (`DETECTION_MISS`, `TELEMETRY_MISS`) before PR promotion.
 - **Deterministic Mock Provider:** Built-in in-memory simulator providing offline CI/CD and unit testing without cloud credentials or running CALDERA servers.
-- **Strict Production Isolation:** Enforces host and account whitelisting, strictly rejecting execution against production environments.
+- **Promotion Policy Gates:** Incorporates BAS results into `promotion-policy.yaml`, enforcing human review or promotion blocking whenever an adversary detonation fails detection.
+- **Strict Production Isolation:** Enforces host and account allowlisting, strictly rejecting execution against production environments (`production`, `prod`, `live`).
 
 ### 2.6 Multi-Engine Query Transpilation
 Hecate translates generic Sigma detection rules into native, optimized query languages:

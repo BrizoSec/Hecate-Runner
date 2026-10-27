@@ -186,14 +186,20 @@ uv run hecate-runner draft \
 ```
 
 ### Live Adversary Emulation & Breach Simulation (BAS)
-Execute on-demand adversary emulation or run closed-loop detection verification:
+Execute on-demand adversary emulation or run closed-loop detection verification across Linux, Windows, or Cloud:
 
 ```bash
-# Detonate an ATT&CK technique via Mock, CALDERA, or Stratus Red Team
-uv run hecate-runner bas-detonate T1059.001 --provider mock --env lab
+# Live Linux detonation via CALDERA on local agent
+uv run hecate-runner bas-detonate T1033 --provider caldera --host k3s-core --platform linux --env lab
+
+# Windows detonation with automatic Mock fallback (when no active Windows agent is connected)
+uv run hecate-runner bas-detonate T1059.001 --provider caldera --host lab-win10 --platform windows --env lab
+
+# Cloud adversary emulation via Stratus Red Team (AWS / GCP / Azure)
+uv run hecate-runner bas-detonate T1562.008 --provider stratus --platform aws --env staging --account-id 123456789012
 
 # Run closed-loop detection verification against a hunt draft and update frontmatter
-uv run hecate-runner bas-verify H-0886 --provider mock --write-back
+uv run hecate-runner bas-verify H-0804 --provider caldera --host lab-win10 --env lab --write-back
 ```
 
 ---

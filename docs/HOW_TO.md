@@ -209,20 +209,99 @@ print(f'Generated {len(events)} synthetic telemetry events')
 ```
 
 ### 5.3 Live Adversary Emulation & Breach Simulation (BAS)
-Execute on-demand adversary emulation or run closed-loop detection verification against any hunt:
+
+Hecate provides automated Level 4 Purple Teaming to detonate adversary techniques and verify detection rules against real or synthetic security telemetry.
+
+#### 5.3.1 Configuration & Environment Setup
+Add the BAS configuration parameters to `Hecate-Workspace/.env`:
 
 ```bash
-cd ~/betas/Hecate-Runner
+# BAS Mode: 'caldera', 'stratus', or 'mock'
+HECATE_BAS_MODE=caldera
 
-# 1. On-demand adversary detonation via Mock, CALDERA, or Stratus
-uv run hecate-runner bas-detonate T1059.001 --provider mock --env lab
-uv run hecate-runner bas-detonate T1562.008 --provider stratus --platform aws --env staging --account-id 123456789012
+# Allowlisted Target Hosts & Cloud Accounts (Safety Guardrail)
+HECATE_BAS_ALLOWED_HOSTS=k3s-core,lab-win10,lab-host-01
+HECATE_BAS_ALLOWED_ACCOUNTS=123456789012,dev-account-01
 
-# 2. Closed-loop detection verification against a hunt draft
-uv run hecate-runner bas-verify H-0886 --provider mock --write-back
+# Automatic Fallback: Route unsupported platforms (e.g. Windows) to mock when no agent is active
+HECATE_BAS_FALLBACK_TO_MOCK=true
 
-# 3. Environment safety enforcement: production targets are strictly rejected
-uv run hecate-runner bas-detonate T1059.001 --env production  # Rejection error exit 1
+# CALDERA Configuration
+CALDERA_BASE_URL=http://127.0.0.1:8888
+CALDERA_API_KEY=ngwe2xEREYwD54UGyefYyhSFNi9A4sVahh7pM5V0x5k
+CALDERA_AGENT_GROUP=staging
+CALDERA_TIMEOUT_SEC=120
+
+# Stratus Red Team Configuration
+STRATUS_BINARY_PATH=stratus-red-team
+STRATUS_CLEANUP_ON_FINISH=true
+```
+
+#### 5.3.2 Setting up the Hardened CALDERA Environment
+For live endpoint adversary emulation on Linux:
+
+1. **Run the CALDERA C2 Server bound strictly to loopback (`127.0.0.1`):**
+   ```bash
+   docker run -d --name caldera --restart unless-stopped -p 127.0.0.1:8888:8888 caldera-local:latest
+   ```
+
+2. **Enable the Sandcat Agent as a Hardened Systemd User Service:**
+   Install [`systemd/caldera-sandcat.service`](file:///home/chemch/betas/Hecate-Runner/systemd/caldera-sandcat.service) to `~/.config/systemd/user/`:
+   ```bash
+   mkdir -p ~/.config/systemd/user
+   cp systemd/caldera-sandcat.service ~/.config/systemd/user/
+   systemctl --user daemon-reload
+   systemctl --user enable --now caldera-sandcat.service
+   ```
+
+   The service applies kernel isolation controls (`NoNewPrivileges=true`, `PrivateTmp=true`, `MemoryDenyWriteExecute=true`, `RestrictSUIDSGID=true`), ensuring commands executed by the agent cannot acquire elevated privileges.
+
+#### 5.3.3 Running On-Demand Adversary Detonations (`bas-detonate`)
+Execute techniques on target systems across Linux, Windows, or Cloud:
+
+```bash
+# 1. Live Linux detonation via CALDERA (executes on k3s-core)
+hecate-runner bas-detonate T1033 -p caldera --host k3s-core --platform linux --env lab
+
+# 2. Windows detonation with automatic Mock fallback (when only Linux agent is connected)
+hecate-runner bas-detonate T1059.001 -p caldera --host lab-win10 --platform windows --env lab
+
+# 3. Cloud adversary emulation via Stratus Red Team (AWS / GCP / Azure)
+hecate-runner bas-detonate T1562.008 -p stratus --platform aws --env staging --account-id 123456789012
+
+# 4. Pure offline mock detonation (fast in-process simulation)
+hecate-runner bas-detonate T1059.001 -p mock --env lab
+```
+
+#### 5.3.4 Running Closed-Loop Detection Verification (`bas-verify`)
+Verify whether candidate Sigma rules fire on real adversary telemetry:
+
+```bash
+# Run verification without modifying files
+hecate-runner bas-verify H-0804 -p caldera --host lab-win10 --env lab --no-write-back
+
+# Run verification and write results back to hunt markdown frontmatter and body
+hecate-runner bas-verify H-0804 -p caldera --host lab-win10 --env lab --write-back
+```
+
+#### 5.3.5 Safety Controls & Production Rejection
+Hecate strictly prohibits running emulation operations against production environments:
+```bash
+# This command is immediately blocked and exits with code 1
+hecate-runner bas-detonate T1033 --env production
+# Output: Configuration / Safety Error: Detonation rejected: Target environment 'production' is strictly prohibited.
+```
+
+#### 5.3.6 Managing and Troubleshooting the Agent
+```bash
+# Check Sandcat systemd service status
+systemctl --user status caldera-sandcat.service
+
+# View live agent logs
+journalctl --user -u caldera-sandcat.service -f
+
+# Check active agents registered with CALDERA
+curl -s -H "KEY: $CALDERA_API_KEY" http://127.0.0.1:8888/api/agents | jq .
 ```
 
 ---
