@@ -7,6 +7,7 @@ monitor execution, and collect telemetry execution traces.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import logging
 import time
@@ -102,7 +103,7 @@ class CalderaConnector(BASProvider):
                 "error": str(exc),
             }
 
-    def lookup_technique(self, technique_id: str) -> list[str]:
+    def lookup_technique(self, technique_id: str, platform: str | None = None) -> list[str]:
         """Query CALDERA for ability IDs associated with a MITRE ATT&CK technique."""
         try:
             client = self._get_client()
@@ -115,7 +116,9 @@ class CalderaConnector(BASProvider):
 
             abilities = resp.json()
             matched = []
+            platform_matched = []
             tid_upper = technique_id.upper()
+            plat_lower = platform.lower().strip() if platform else None
             for ab in abilities:
                 tech = ab.get("technique")
                 ab_tid = (
@@ -126,8 +129,19 @@ class CalderaConnector(BASProvider):
                 if ab_tid == tid_upper:
                     ability_id = ab.get("ability_id")
                     if ability_id:
-                        matched.append(ability_id)
-            return matched
+                        if not ab.get("requirements"):
+                            matched.insert(0, ability_id)
+                        else:
+                            matched.append(ability_id)
+                        if plat_lower and any(
+                            e.get("platform", "").lower() == plat_lower
+                            for e in ab.get("executors", [])
+                        ):
+                            if not ab.get("requirements"):
+                                platform_matched.insert(0, ability_id)
+                            else:
+                                platform_matched.append(ability_id)
+            return platform_matched if platform_matched else matched
         except Exception as exc:
             log.error("Failed to lookup technique %s in CALDERA: %s", technique_id, exc)
             return []
@@ -140,7 +154,7 @@ class CalderaConnector(BASProvider):
         # 2. Resolve ability ID
         ability_id = request.ability_id
         if not ability_id:
-            abilities = self.lookup_technique(request.technique_id)
+            abilities = self.lookup_technique(request.technique_id, platform=request.platform)
             if not abilities:
                 return DetonationResult(
                     success=False,
@@ -265,7 +279,11 @@ class CalderaConnector(BASProvider):
                         )
 
                 state = completed_op.get("state", "").lower()
-                if state in ("finished", "cleanup", "out_of_time"):
+                chain = completed_op.get("chain", [])
+                chain_done = len(chain) > 0 and all(
+                    bool(lnk.get("finish")) or lnk.get("status", -3) >= 0 for lnk in chain
+                )
+                if state in ("finished", "cleanup", "out_of_time") or chain_done:
                     op_finished = True
                     break
                 time.sleep(poll_interval)
@@ -311,6 +329,13 @@ class CalderaConnector(BASProvider):
                 link_id = link.get("id")
                 paw = link.get("paw", "unknown")
 
+                # Decode base64 command if applicable
+                if cmd:
+                    with contextlib.suppress(Exception):
+                        decoded_cmd = base64.b64decode(cmd).decode("utf-8", errors="replace")
+                        if decoded_cmd:
+                            cmd = decoded_cmd.strip()
+
                 # Try fetching output for link
                 output = ""
                 if link_id:
@@ -328,13 +353,19 @@ class CalderaConnector(BASProvider):
                             )
                             if out_resp.status_code == 200:
                                 res_data = out_resp.json()
-                                output = (
-                                    res_data.get("result", "")
-                                    if isinstance(res_data, dict)
-                                    else str(res_data)
-                                )
+                                if isinstance(res_data, dict):
+                                    output = res_data.get("output") or res_data.get("result", "")
+                                else:
+                                    output = str(res_data)
                     except Exception:
                         output = link.get("output", "")
+
+                # Decode base64 output if applicable
+                if output and isinstance(output, str):
+                    with contextlib.suppress(Exception):
+                        decoded_out = base64.b64decode(output).decode("utf-8", errors="replace")
+                        if decoded_out:
+                            output = decoded_out.strip()
 
                 if status != 0:
                     all_succeeded = False
