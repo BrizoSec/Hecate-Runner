@@ -7,6 +7,7 @@ monitor execution, and collect telemetry execution traces.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from datetime import UTC, datetime
@@ -64,16 +65,29 @@ class CalderaConnector(BASProvider):
             resp = client.get("/api/v2/health")
             if resp.status_code == 200:
                 health_data = resp.json()
+            elif resp.status_code == 404:
+                # Fallback to Caldera classic API (/api/plugins or /api/health)
+                plugins_resp = client.get("/api/plugins")
+                if plugins_resp.status_code == 200:
+                    health_data = {
+                        "status": "reachable",
+                        "version": "classic",
+                        "plugins": plugins_resp.json(),
+                    }
+                else:
+                    health_data = {"status": "reachable", "http_status": 200}
             else:
                 health_data = {"status": "reachable", "http_status": resp.status_code}
 
-            # Check active agents
+            # Check active agents (v2 fallback to classic)
             agents_resp = client.get("/api/v2/agents")
+            if agents_resp.status_code == 404:
+                agents_resp = client.get("/api/agents")
             agents = agents_resp.json() if agents_resp.status_code == 200 else []
             staging_agents = [a.get("paw") for a in agents if a.get("group") == self.agent_group]
 
             return {
-                "status": "healthy" if resp.status_code in (200, 204) else "degraded",
+                "status": "healthy" if resp.status_code in (200, 204, 404) else "degraded",
                 "caldera_url": self.base_url,
                 "agent_group": self.agent_group,
                 "active_agents": len(agents),
@@ -93,15 +107,23 @@ class CalderaConnector(BASProvider):
         try:
             client = self._get_client()
             resp = client.get("/api/v2/abilities")
+            if resp.status_code == 404:
+                resp = client.get("/api/abilities")
             if resp.status_code != 200:
-                log.warning("CALDERA /api/v2/abilities returned %d", resp.status_code)
+                log.warning("CALDERA abilities endpoint returned %d", resp.status_code)
                 return []
 
             abilities = resp.json()
             matched = []
             tid_upper = technique_id.upper()
             for ab in abilities:
-                if ab.get("technique_id", "").upper() == tid_upper:
+                tech = ab.get("technique")
+                ab_tid = (
+                    ab.get("technique_id")
+                    or (tech.get("attack_id") if isinstance(tech, dict) else "")
+                    or ""
+                ).upper()
+                if ab_tid == tid_upper:
                     ability_id = ab.get("ability_id")
                     if ability_id:
                         matched.append(ability_id)
@@ -144,7 +166,9 @@ class CalderaConnector(BASProvider):
 
         client = self._get_client()
 
-        # 3. Create the ephemeral operation
+        # 3. Create the ephemeral operation (try /api/v2/operations, fallback to Caldera classic /api/rest)
+        is_v2 = True
+        adv_id = ""
         op_payload = {
             "name": op_name,
             "adversary": {
@@ -159,6 +183,31 @@ class CalderaConnector(BASProvider):
 
         try:
             op_resp = client.post("/api/v2/operations", json=op_payload)
+            if op_resp.status_code == 404:
+                is_v2 = False
+                adv_id = f"hecate-{int(time.time())}"
+                client.put(
+                    "/api/rest",
+                    json={
+                        "index": "adversaries",
+                        "id": adv_id,
+                        "name": f"Hecate Ad-Hoc {request.technique_id}",
+                        "description": "Auto-generated Hecate ad-hoc adversary",
+                        "atomic_ordering": [{"ability_id": ability_id}],
+                    },
+                )
+                op_resp = client.put(
+                    "/api/rest",
+                    json={
+                        "index": "operations",
+                        "name": op_name,
+                        "adversary_id": adv_id,
+                        "group": self.agent_group,
+                        "autonomous": 1,
+                        "auto_close": bool(request.cleanup_on_finish),
+                    },
+                )
+
             if op_resp.status_code not in (200, 201):
                 err_msg = (
                     f"Failed to create CALDERA operation: {op_resp.status_code} - {op_resp.text}"
@@ -181,7 +230,12 @@ class CalderaConnector(BASProvider):
                     error_message=err_msg,
                 )
 
-            operation_data = op_resp.json()
+            raw_op_data = op_resp.json()
+            operation_data = (
+                raw_op_data[0]
+                if isinstance(raw_op_data, list) and raw_op_data
+                else (raw_op_data if isinstance(raw_op_data, dict) else {})
+            )
             op_id = operation_data.get("id") or operation_data.get("operation_id")
             if not op_id:
                 raise BASExecutionError("CALDERA operation created without valid operation ID")
@@ -193,19 +247,40 @@ class CalderaConnector(BASProvider):
             op_finished = False
 
             while (time.time() - poll_start) < request.timeout_sec:
-                status_resp = client.get(f"/api/v2/operations/{op_id}")
-                if status_resp.status_code == 200:
-                    completed_op = status_resp.json()
-                    state = completed_op.get("state", "").lower()
-                    if state in ("finished", "cleanup", "out_of_time"):
-                        op_finished = True
-                        break
+                if is_v2:
+                    status_resp = client.get(f"/api/v2/operations/{op_id}")
+                    if status_resp.status_code == 200:
+                        completed_op = status_resp.json()
+                else:
+                    status_resp = client.post(
+                        "/api/rest",
+                        json={"index": "operations", "id": op_id},
+                    )
+                    if status_resp.status_code == 200:
+                        raw_ops = status_resp.json()
+                        completed_op = (
+                            raw_ops[0]
+                            if isinstance(raw_ops, list) and raw_ops
+                            else (raw_ops if isinstance(raw_ops, dict) else {})
+                        )
+
+                state = completed_op.get("state", "").lower()
+                if state in ("finished", "cleanup", "out_of_time"):
+                    op_finished = True
+                    break
                 time.sleep(poll_interval)
 
             end_time = datetime.now(UTC)
             duration = (end_time - start_time).total_seconds()
 
             if not op_finished:
+                if not is_v2 and adv_id:
+                    with contextlib.suppress(Exception):
+                        client.request(
+                            "DELETE",
+                            "/api/rest",
+                            json={"index": "adversaries", "adversary_id": adv_id},
+                        )
                 return DetonationResult(
                     success=False,
                     hunt_id=request.hunt_id,
@@ -240,9 +315,24 @@ class CalderaConnector(BASProvider):
                 output = ""
                 if link_id:
                     try:
-                        out_resp = client.get(f"/api/v2/operations/{op_id}/links/{link_id}/result")
-                        if out_resp.status_code == 200:
-                            output = out_resp.json().get("result", "")
+                        if is_v2:
+                            out_resp = client.get(
+                                f"/api/v2/operations/{op_id}/links/{link_id}/result"
+                            )
+                            if out_resp.status_code == 200:
+                                output = out_resp.json().get("result", "")
+                        else:
+                            out_resp = client.post(
+                                "/api/rest",
+                                json={"index": "result", "link_id": link_id},
+                            )
+                            if out_resp.status_code == 200:
+                                res_data = out_resp.json()
+                                output = (
+                                    res_data.get("result", "")
+                                    if isinstance(res_data, dict)
+                                    else str(res_data)
+                                )
                     except Exception:
                         output = link.get("output", "")
 
@@ -262,6 +352,18 @@ class CalderaConnector(BASProvider):
                         "timestamp_utc": link.get("collect") or start_time.isoformat(),
                     }
                 )
+
+            if not is_v2 and adv_id:
+                with contextlib.suppress(Exception):
+                    if request.cleanup_on_finish and op_id:
+                        client.request(
+                            "DELETE", "/api/rest", json={"index": "operations", "id": op_id}
+                        )
+                    client.request(
+                        "DELETE",
+                        "/api/rest",
+                        json={"index": "adversaries", "adversary_id": adv_id},
+                    )
 
             return DetonationResult(
                 success=all_succeeded and len(chain) > 0,
