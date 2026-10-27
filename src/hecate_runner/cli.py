@@ -1039,7 +1039,11 @@ def bas_verify_cmd(
         f"using [bold]{resolved_provider.upper()}[/bold] on {target.environment}..."
     )
 
-    det_result = provider.detonate(det_req)
+    try:
+        det_result = provider.detonate(det_req)
+    except Exception as exc:
+        console.print(f"[bold red]Detonation failed with exception:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
     verifier = DetectionVerifier()
     res = verifier.verify_detonation(
         detonation=det_result,
