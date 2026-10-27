@@ -21,6 +21,11 @@ from hecate_runner.bas.base import (
 from hecate_runner.bas.caldera import CalderaConnector
 from hecate_runner.bas.mock import MockBASProvider
 from hecate_runner.bas.stratus import StratusConnector
+from hecate_runner.bas.verifier import (
+    DetectionVerifier,
+    VerificationResult,
+    VerificationStatus,
+)
 
 if TYPE_CHECKING:
     from hecate_runner.config import Settings
@@ -31,6 +36,7 @@ __all__ = [
     "BASExecutionError",
     "BASProvider",
     "CalderaConnector",
+    "DetectionVerifier",
     "DetonationRequest",
     "DetonationResult",
     "DetonationStage",
@@ -38,6 +44,8 @@ __all__ = [
     "MockBASProvider",
     "SafetyViolationError",
     "StratusConnector",
+    "VerificationResult",
+    "VerificationStatus",
     "get_bas_provider",
 ]
 
