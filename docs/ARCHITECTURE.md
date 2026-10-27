@@ -1,460 +1,161 @@
-# Hecate: how it all works
+# Hecate Platform Architecture
 
-How the two repositories fit together, what one orchestrator cycle does, where
-the model is allowed to decide things, and how to see what a running cycle is
-doing.
-
-New to the project? Read the
-[onboarding guide](https://github.com/BrizoSec/Hecate-Core/blob/main/docs/ONBOARDING.md)
-first; it explains the point and gets you to a first run. This document is the
-design reference behind it.
-
-Last revised 2026-10-05.
+An architectural blueprint of the Hecate autonomous detection engineering and threat hunting platform.
 
 ---
 
-## The two repositories
+## 1. Executive Summary
 
-**Hecate-Core** (`hecate_agent`) is the agent library, the `hecate-agent` CLI
-and the workspace. It owns the LLM agents, the ATT&CK matrix, the hunt document
-format, Sigma generation and the research corpus. It knows nothing about
-scheduling or intelligence feeds.
+**Hecate** is an autonomous, agentic detection engineering ecosystem. It bridges the gap between raw Cyber Threat Intelligence (CTI) and production-grade detection content across modern Security Information and Event Management (SIEM) and Endpoint Detection and Response (EDR) platforms.
 
-**Hecate-Runner** (`hecate_runner`) is the autonomous driver. It polls threat
-intelligence, decides what is worth hunting, calls into Core, writes drafts and
-enforces quotas and guardrails.
-
-They are siblings on disk, and the Runner depends on Core as an editable path
-dependency with all extras: `hecate-agent[all]`.
-
-**One thing to understand before anything else.** The Runner calls Core
-**in-process**, importing `hecate_agent.api` directly. It does not shell out to
-the `hecate-agent` CLI, even though `HECATE_BIN` still points at it. This means
-Core's optional capabilities (ATT&CK STIX data, scikit-learn, Tavily, pySigma)
-must be installed in the *Runner's* environment. Installing them in Core's
-virtualenv has no effect on what the pipeline can do.
-
-```mermaid
-flowchart LR
-    subgraph feeds["Threat intelligence"]
-        RSS["RSS / Atom blogs"]
-        OTX["AlienVault OTX"]
-        MISP["MISP"]
-        KEV["CISA KEV"]
-        TFX["abuse.ch ThreatFox"]
-        FILE["File queue"]
-    end
-
-    subgraph runner["Hecate-Runner (hecate_runner)"]
-        ORCH["Orchestrator<br/>triage, quotas, routing,<br/>grounding audit"]
-    end
-
-    subgraph core["Hecate-Core (hecate_agent)"]
-        API["api.py"]
-        AGENTS["Agents: research, hypothesis,<br/>Sigma, rule review"]
-        ATTACK["ATT&CK matrix"]
-        SRC["Source evidence"]
-    end
-
-    subgraph external["External services"]
-        LLM["LLM provider<br/>(Ollama, Anthropic, OpenAI, Bedrock)"]
-        WEB["Tavily web search"]
-        REPORT["The report a CTI item links to"]
-    end
-
-    subgraph ws["Workspace (the Hecate-Core checkout)"]
-        HUNTS["hunts/YYYY/Qn/H-XXXX.md"]
-        RESEARCH["research/R-XXXX.md"]
-        QUERIES["queries/H-XXXX/*.yml"]
-        LOGS["logs/"]
-    end
-
-    feeds -- "poll" --> ORCH
-    ORCH -- "in-process calls" --> API
-    API --> AGENTS
-    API --> ATTACK
-    ORCH --> SRC
-    AGENTS --> LLM
-    AGENTS --> WEB
-    SRC --> REPORT
-    SRC --> LLM
-    ORCH -- "writes" --> HUNTS
-    AGENTS -- "writes" --> RESEARCH
-    ORCH -- "writes" --> QUERIES
-    ORCH -- "writes" --> LOGS
-    HUNTS --> HUMAN(["Analyst reviews the draft"])
-```
+Hecate is designed around a core tenet: **The LLM proposes, deterministic code disposes.** Generative AI models propose hypotheses, extract threat behaviors, and draft candidate detection logic; deterministic static analysis engines, AST validators, MITRE ATT&CK grounders, and telemetry emulators verify, tune, and test every generated artifact before it reaches human review or production promotion.
 
 ---
 
-## Intake: choosing what to hunt
+## 2. The Three-Repository Topology
 
-Six providers implement one interface (`next_item`, `acknowledge`): `rss`,
-`otx`, `misp`, `cisa_kev`, `abuse_ch` and `file`. `multi` composes any subset
-of them behind the same interface, so the orchestrator never knows it is
-talking to more than one source. `hecate-runner sources` manages the set.
-
-**Round-robin, persisted.** `MultiProvider` keeps a cursor so a high-volume
-source (ten RSS feeds) cannot crowd out a slow one (a MISP instance with few
-new events). The rotation decides tie-break order only; a source is skipped in
-a cycle only if it genuinely has nothing new.
-
-The rotation advances on **acknowledge**, not on pick. Every sub-provider
-already moves its own cursor that way, and it means an unacknowledged item (a
-dry run, or a cycle that dies mid-draft) is re-offered from the same source
-rather than silently consuming a slot.
-
-**Triage parks rather than discards.** `cti_triage.triage()` parks conference
-announcements, vendor commentary and similar non-actionable items into
-`cti_queue/parked/` with a reason attached. `hecate-runner parked` lists them
-and `parked restore` puts one back. Nothing is ever thrown away.
-
-Provider evidence profiles add a source-quality gate. MalwareBazaar sample
-records with hashes route to deterministic IOC sweeps; family labels and file
-types do not count as observed behavior. The Runner skips fetching and
-secondary enrichment for these sample records. VX-Underground archive metadata
-with no extracted runtime activity is parked for a richer source. These
-provider limits apply even when commentary triage is disabled.
-
-**Starting from intelligence in hand.** `hecate-runner draft` takes text an
-operator supplies (an argument, a file or standard input, with an optional
-report URL) in place of a feed item. It is a different way in, not a different
-pipeline: the item goes through the cycle below unchanged, with triage skipped
-because someone chose it, and it counts against the same quotas. Core also has
-an older LangGraph graph behind `hecate-agent orchestrate`; that one is
-experimental, lacks most of the stages below and is not scored against the
-gold cases.
-
-**The source-evidence gate.** Provider-declared profiles take precedence over
-the prose shape of a generated blurb. Other items use `has_narrative()` to
-distinguish a report from a bare indicator dump: a human-written summary or
-description, or an explicit ATT&CK technique list. Together these decide the
-route the cycle takes.
-
----
-
-## One orchestrator cycle
-
-`hecate-runner run` executes exactly one cycle. It never raises; it always
-returns a `RunResult` with an outcome.
+The platform is partitioned into three distinct repositories with decoupled responsibilities:
 
 ```mermaid
 flowchart TD
-    START(["hecate-runner run"]) --> PRUNE["Prune old parked items"]
-    PRUNE --> PICK["Pick the next CTI item"]
-    PICK --> ANY{"Anything new?"}
-    ANY -- "no" --> NOCTI(["no_cti"])
-    ANY -- "yes" --> TRIAGE{"Triage: actionable?"}
-    TRIAGE -- "no: park it, try the next (5 skips max)" --> PICK
-    TRIAGE -- "yes" --> DQ{"Draft quota left today?"}
-    DQ -- "no" --> QR(["quota_reached<br/>item stays queued"])
-    DQ -- "yes" --> ROUTE{"Route"}
+    subgraph Repo1["Hecate-Core (BrizoSec/Hecate-Core)"]
+        direction TB
+        C_API["API Layer (hecate_agent.api)"]
+        C_AGENTS["Agentic Reasoning Engine<br/>Hypothesis & Research Agents"]
+        C_SIGMA["Sigma Rule Generator & AST Validator"]
+        C_ATTACK["MITRE ATT&CK STIX Grounder"]
+        C_TRANSPILER["pySigma Multi-Backend Transpiler"]
+        C_CLI["hecate-agent CLI & TUI Monitor"]
+    end
 
-    ROUTE -- "indicator dump with a parseable inventory" --> SWEEP["Deterministic sweep draft<br/>no model call"]
-    ROUTE -- "narrative" --> RQ{"Research quota left today?"}
-    ROUTE -- "no narrative, not parseable" --> SRC
+    subgraph Repo2["Hecate-Runner (BrizoSec/Hecate-Runner)"]
+        direction TB
+        R_DAEMON["Perpetual Daemon Service<br/>(hecate-runner-daemon.service)"]
+        R_CTI["20+ Multi-Feed CTI Ingestion Engine"]
+        R_QUEUE["Dual-Track Priority Queue Scheduler"]
+        R_PURPLE["Purple Team Emulation Harness"]
+        R_REVIEW["Automated Reviewer & Self-Remediation"]
+        R_PUB["GitHub Outbox PR Publisher"]
+        R_SLACK["Interactive Slack Bot & ChatOps"]
+    end
 
-    RQ -- "no" --> RQR(["research_quota_reached<br/>item stays queued"])
-    RQ -- "yes" --> SRC["Source evidence:<br/>read the linked report,<br/>keep only what it says verbatim"]
+    subgraph Repo3["Hecate-Workspace (BrizoSec/Hecate-Content)"]
+        direction TB
+        W_HUNTS["hunts/ (LOCK Pattern Documents)"]
+        W_QUERIES["queries/ (Transpiled SIEM Queries)"]
+        W_RESEARCH["research/ (CTI Research Dossiers)"]
+        W_PLAYBOOKS["playbooks/ (Cross-Campaign Guides)"]
+        W_POLICY["promotion-policy.yaml & Promotion Gates"]
+    end
 
-    SRC --> RES["Research (R-XXXX)<br/>web search only for narrative items"]
-    RES --> BEH{"Describes adversary behaviour?"}
-    BEH -- "no" --> PARK(["parked_after_research<br/>draft slot refunded"])
-    BEH -- "yes" --> HYP["Hypothesis"]
-    HYP --> TECH["Resolve techniques against ATT&CK<br/>derive tactics, platforms, data sources"]
-    SWEEP --> TECH
-    TECH --> CLAIMS["Claim audit and grounding audit"]
-    CLAIMS --> WRITE["Allocate H-XXXX and write the draft"]
-    WRITE --> ACK["Acknowledge the item and save state"]
-    ACK --> SIGMA["Draft Sigma rules per log source,<br/>validate, review"]
-    SIGMA --> FINAL["Re-audit grounding, notify Slack"]
-    FINAL --> DONE(["draft_created"])
+    Repo2 -- "imports in-process as library" --> Repo1
+    Repo2 -- "reads & writes content / publishes PRs" --> Repo3
+    Repo1 -- "references schemas & validates format" --> Repo3
 ```
 
-1. **Prune parked items** older than the configured age.
-2. **Pick the next actionable item.** Skipped items are acknowledged so the
-   cursor moves past them. Walking past an item is not a draft and does not
-   cost quota.
-3. **Reserve a draft slot.** `max_drafts_per_day` is checked and reserved
-   *before* any model call. Exceeding it leaves the intelligence queued for the
-   next cycle.
-4. **Choose the route** from provider evidence profile and narrative gate.
-   - *Sample metadata with routable hashes*: a deterministic IOC sweep; no
-     behavioral techniques are inferred from malware family or file type.
-   - *Archive metadata without runtime behavior or endpoint indicators*:
-     park with a reason before reserving a draft slot.
-   - *No narrative but a parseable indicator inventory*: a deterministic
-     **sweep hypothesis**, built from the indicators alone without research or
-     hypothesis-generation calls. Optional Sigma generation can still run
-     afterward; the behavior hypothesis remains limited to indicator presence.
-   - *Narrative*: research with web search, then a hypothesis.
-   - *No narrative and no parseable inventory*: research without web search,
-     then an indicator-only hypothesis.
-5. **Reserve a research slot** when the route will search the web.
-   `max_research_runs_per_day` is checked here, before anything expensive
-   runs. A refused cycle refunds its draft slot and leaves the item queued. A
-   research slot is *not* refunded when a later step fails, so retries cannot
-   drain the search quota.
-6. **Gather source evidence** (`source_evidence`) for report-backed items. The
-   feed item is usually a short summary of a much longer report. This step fetches the report the
-   item links to, asks the model to extract artifacts from it chunk by chunk,
-   and keeps only those whose value and quoted passage appear verbatim in the
-   page. It then types the feed's own indicators by role (C2, payload host,
-   victim-side target) and status (active or historical). It never fails the
-   cycle: without a link, or on a fetch or model failure, the draft proceeds
-   from the feed text.
-7. **Research** (`generate_research`), unless disabled. Produces `R-XXXX.md`
-   as context for the hypothesis that follows; generated research is not
-   source evidence for this specific item. A research failure aborts the
-   cycle rather than falling back to an ungrounded hypothesis. If research
-   concludes a prose item describes no adversary behaviour, the item is parked
-   and the draft slot refunded.
-8. **Hypothesis generation** (`generate_hypothesis`), constrained by the
-   source profile and whether narrative was present. The output includes
-   claim excerpts and exact source quotes, checked against the final fields
-   and primary CTI text. An empty hypothesis refunds the quota and leaves the
-   intelligence queued.
-9. **Resolve techniques against the live ATT&CK matrix.** Tactics, platforms
-   and data sources are derived deterministically from the resolved techniques,
-   merged with what the source asserted. Technique IDs that do not resolve are
-   dropped so they cannot reach the frontmatter.
-10. **Audit claims and grounding**, then **allocate a hunt ID and write the
-    draft** under a lock. The ID is burned at allocation, so a crash leaves a
-    gap rather than a collision.
-11. **Acknowledge the item and save state.** This happens as soon as the draft
-    is on disk and *before* rule generation, so a process killed during the
-    slowest step cannot lose the quota count or re-draft the same item.
-12. **Generate Sigma rules** (`generate_sigma`), one per applicable log source,
-    validate them, and have the rule reviewer check each model-drafted rule
-    against the hypothesis and the verified source passages.
-13. **Re-audit grounding** with the rules included, render the section and
-    notify Slack.
+### 2.1 Repository Summary
 
-### Who talks to whom
+| Repository | Python Package | Primary Role | Key Artifacts |
+|---|---|---|---|
+| **[`Hecate-Core`](file:///home/chemch/betas/Hecate-Core)** | `hecate_agent` | Core detection reasoning library, prompt engine, MITRE ATT&CK grounding, Sigma generator, and pySigma transpiler. | `hecate-agent` CLI, agent modules, prompt templates, evaluation harness. |
+| **[`Hecate-Runner`](file:///home/chemch/betas/Hecate-Runner)** | `hecate_runner` | Autonomous orchestrator, perpetual daemon, 20+ CTI intake feeds, purple-team adversary emulation, reviewer auto-remediation, GitHub publisher, Slack bot. | `hecate-runner` CLI, daemon service, CTI pollers, emulation runners, PR publisher. |
+| **[`Hecate-Workspace`](file:///home/chemch/betas/Hecate-Workspace)** | *(Content Repo)* | Central version-controlled detection engineering repository (`BrizoSec/Hecate-Content`). | `hunts/` (LOCK markdown), `queries/` (Sigma & SIEM queries), `research/` dossiers, `promotion-policy.yaml`. |
 
-The same cycle as a conversation, for the narrative route:
+---
+
+## 3. End-to-End Lifecycle & Data Flow
+
+From the arrival of an external intelligence pulse to a verified SIEM detection query in production, Hecate runs a multi-stage deterministic pipeline:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant F as CTI feed
-    participant R as Runner
-    participant C as Core
-    participant M as LLM
-    participant W as Web
-    participant D as Workspace
+    participant Feeds as Threat Feeds (20+ Sources)
+    participant Runner as Hecate-Runner Daemon
+    participant Core as Hecate-Core Agent API
+    participant Purple as Purple Team Emulation
+    participant Reviewer as Sigma Reviewer Engine
+    participant GitHub as GitHub (BrizoSec/Hecate-Content)
+    participant Slack as Slack Alert & ChatOps
 
-    R->>F: next_item()
-    F-->>R: CTI item
-    R->>R: triage, reserve draft slot, route, reserve research slot
-    R->>C: source_evidence(report URL)
-    C->>W: fetch the report
-    loop each chunk of the report
-        C->>M: extract artifacts
-        M-->>C: candidates
+    Feeds->>Runner: Raw CTI Item (RSS, OTX, MISP, KEV, etc.)
+    Runner->>Runner: Triage & Deduplication (Park uninteresting/duplicate)
+    alt Fast Indicator Sweep
+        Runner->>Runner: Deterministic Sweep (0-cost rule generation)
+    else Deep Narrative Threat
+        Runner->>Core: Research Agent Context Extraction
+        Core-->>Runner: Grounded Research Dossier (R-XXXX)
+        Runner->>Core: Hypothesis Generation Agent
+        Core-->>Runner: Structured Hypothesis (H-XXXX)
     end
-    C-->>R: verified artifacts, typed indicators, usage
-    R->>C: generate_research(topic, source context)
-    C->>W: Tavily searches
-    C->>M: five research skills
-    C->>D: write R-XXXX.md
-    C-->>R: research id, usage
-    R->>C: generate_hypothesis(intel, research id)
-    C->>M: hypothesis
-    C-->>R: hypothesis, techniques, usage
-    R->>C: lookup_technique() for each technique
-    C-->>R: tactics, platforms, data sources
-    R->>D: write H-XXXX.md
-    R->>F: acknowledge(item)
-    R->>C: generate_sigma(payload)
-    loop each applicable log source
-        C->>M: draft a rule
+    Runner->>Core: Sigma Rule Drafting
+    Core-->>Runner: Candidate Sigma Rules (YAML)
+    Runner->>Purple: Adversary Telemetry Emulation (Atomic Red Team Replay)
+    Purple-->>Runner: Generated & Correlated Synthetic Events
+    Runner->>Reviewer: Automated Syntax & Semantic Review
+    alt Review Errors Found
+        Reviewer->>Core: Self-Remediation Feedback Loop
+        Core-->>Reviewer: Corrected Logsource / Field Mappings
     end
-    C-->>R: rules, rejections, usage
-    R->>D: write queries/H-XXXX/*.yml, update the draft
+    Runner->>Core: pySigma Transpilation (Splunk, Sentinel, CrowdStrike, Elastic, QRadar)
+    Core-->>Runner: Multi-Engine Query Targets
+    Runner->>GitHub: Open Atomic PR with Hunt, Queries, and Digest
+    Runner->>Slack: Broadcast Block Kit Hunt Card with Interactive Actions
 ```
 
 ---
 
-## Where the model decides, and where it does not
+## 4. Key Subsystem Architectures
 
-This is the heart of the design: **the model proposes, deterministic code
-disposes.**
+### 4.1 Autonomous Daemon & Dual-Track Queue
 
-| Decision | Made by |
-|---|---|
-| Which source to poll | Round-robin cursor |
-| Whether an item is actionable | Triage rules and the narrative gate |
-| Whether a cycle may spend a draft or a search | Daily quotas |
-| Which artifacts from a report count as evidence | Verbatim match against the fetched page |
-| Applicable log sources | Technique→logsource map |
-| Data sources / telemetry | Technique and indicator maps, then platform-filtered |
-| Tactics and platforms | Live ATT&CK matrix lookup |
-| Hunt ID and file location | Counter under a lock |
-| **Candidate artifacts in a report** | **LLM**, then verified |
-| **The hypothesis** | **LLM** |
-| **Research prose** | **LLM** |
-| **Sigma detection logic** | **LLM**, then validated and reviewed |
-| Whether a rule survives | Validators, then pySigma |
-| Grounding classification | Regex extraction and source matching |
-
-Every model output passes through a deterministic check before it reaches a
-draft. A generated Sigma rule is rejected if it matches on scaffolding values,
-reproduces a supplied indicator only as a fragment, excludes the hypothesis's
-own attack path, or puts a hostname in an address field. Empty filter blocks
-are repaired rather than rejected. Rejected rules are immediately fed back into a
-retry loop where the model is prompted with the specific validation failure or
-`RuleReviewer` critique so it can self-correct, dramatically reducing empty
-query sections. Furthermore, structured IOCs extracted directly from the CTI are
-routed to dedicated indicator rules, ensuring high-fidelity extraction without TTP conflation.
-
----
-
-## The research agent: five skills
-
-`HuntResearcherAgent` runs five skills in sequence:
-
-1. **System research**: how the targeted technology works. Web search.
-2. **Adversary tradecraft**: how it is abused. Web search.
-3. **Telemetry mapping**: what data sources would show it.
-4. **Related work**: similar past hunts, via TF-IDF similarity over the
-   existing corpus.
-5. **Synthesis**: assembles the research document.
-
-Skills 1 and 2 call Tavily when the narrative gate allowed web search. Skill 4
-needs scikit-learn. Both degrade rather than fail, and both say so in the log
-when they do, because a silent degradation here produces a document that looks
-finished and is not.
-
----
-
-## The hunt document
-
-Drafts follow the LEARN / OBSERVE / CHECK / KEEP structure, land in
-`hunts/YYYY/Qn/H-XXXX.md`, and always start at `status: planning` with a
-banner telling the reader not to execute anything yet.
-
-Each draft carries a **grounding audit**: checkable claims (techniques, CVEs,
-indicators, actor names) are compared with the embedded CTI and linked primary
-report. Generated research and OSINT enrichment do not count as evidence.
-Claim Evidence References list the quoted passage and whether it occurs in the
-source text; quote presence does not prove semantic support. Unsupported
-claims remain visible for review. `hecate-runner audit` re-grades drafts on
-disk at any time.
-
----
-
-## The query loop: human in the loop by design
-
-Drafting a hunt never runs a query. Execution is a separate, deliberately
-gated flow:
+The perpetual daemon ([`hecate_runner.orchestrator`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/orchestrator.py)) runs as a resilient systemd background service (`hecate-runner-daemon.service`).
 
 ```mermaid
-stateDiagram-v2
-    [*] --> Proposed: hecate-runner propose
-    Proposed --> Rejected: guardrails fail
-    Proposed --> Pending: guardrails pass, staged on disk
-    Pending --> Executed: hecate-runner approve (guardrails re-checked, human confirms)
-    Pending --> Discarded: hecate-runner reject
-    Rejected --> [*]
-    Executed --> [*]
-    Discarded --> [*]
+flowchart TD
+    POLL["Poll Active CTI Feeds"] --> DUAL{"Classify Feed Type"}
+    DUAL -- "Pure Indicators / High-Velocity" --> SWEEP["Fast Sweep Track<br/>Short Cooldown (30s)<br/>Deterministic Generator"]
+    DUAL -- "Narrative Threat Intel / Reports" --> DEEP["Deep Research Track<br/>Standard Cooldown (180s)<br/>Agentic Research & Hypothesis"]
+    SWEEP --> EMULATE["Purple Team Emulation & Review"]
+    DEEP --> EMULATE
+    EMULATE --> DRAFT["Write Draft Hunt & Queries"]
+    DRAFT --> SYNC["Outbox PR Dispatch & Slack Notice"]
 ```
 
-`validate_guardrails` rejects a query outright for an empty query body, a
-non-positive or over-long time range (7 days by default), a non-positive or
-over-large row limit, or a missing data source. A query that passes is *staged*,
-not run. `hecate-runner approve` is a separate human action.
+- **Dual-Track Priority:** High-volume indicator feeds (e.g. ThreatFox, MalwareBazaar) bypass heavy LLM research and invoke fast deterministic sweeps, preserving LLM token budgets and Tavily search credits for complex narrative advisories.
+- **State Persistence:** Feed cursor positions, processed pulse IDs, and daily quotas are atomically committed to `.cursors/` and `.orchestrator_state.json`.
 
-`query_provider=mock` is the default, so approval cannot touch a real system
-until a Splunk backend is configured.
+### 4.2 Grounding & Anti-Hallucination Framework
 
----
+To guarantee detection fidelity, Hecate enforces strict verification boundaries in [`hecate_agent.core.grounding`](file:///home/chemch/betas/Hecate-Core/hecate_agent/core/grounding.py) and [`hecate_runner.claim_provenance`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/claim_provenance.py):
 
-## What is on disk
+1. **Source Evidence Extraction:** CTI text and primary web sources are parsed for exact regex matches against processes, command lines, hashes, IPs, domains, and registry keys.
+2. **Verbatim Claim Auditing:** Any rule or hypothesis asserting that an attacker executed a specific artifact must have that artifact present in the verified source text; inferred techniques are explicitly labeled `grounding: inferred`.
+3. **Platform Protects Heuristic:** Dual-use administrative tools (e.g. `whoami.exe`, `net.exe`, `curl`) require specific malicious context or command-line parameters to avoid generating noisy, un-tunable detection rules.
 
-Everything the pipeline produces or remembers lives in the workspace, which is
-the Hecate-Core checkout unless `HECATE_WORKSPACE` says otherwise.
+### 4.3 Automated Reviewer & Self-Remediation Loop
 
-| Path | What it holds | Written by |
-|---|---|---|
-| `hunts/YYYY/Qn/H-XXXX.md` | Draft hunts, in LOCK format | Runner |
-| `research/R-XXXX.md` | Background research context linked to a hunt | Core |
-| `queries/H-XXXX/*.yml` | Drafted Sigma rules for a hunt | Runner |
-| `cti_queue/` | File-queue intake, `parked/` and `processed/` items | Runner |
-| `.orchestrator_state.json` | Today's draft and research counts, last run | Runner |
-| `.*_cursor_state.json` | How far each feed has been read | Runner |
-| `.pending_queries/` | Queries staged for approval | Runner |
-| `logs/orchestrator.log` | Every log line, including the decision trail | Runner |
-| `logs/stage_metrics.jsonl` | One line per finished cycle: stage timings and model usage | Runner |
-| `logs/llm_calls.jsonl` | The running cycle's model calls, as they start and end | Core |
+In [`hecate_agent.agents.llm.sigma_generator`](file:///home/chemch/betas/Hecate-Core/hecate_agent/agents/llm/sigma_generator.py) and [`hecate_runner.rule_tuner`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/rule_tuner.py):
 
----
+1. **Syntactic Validation:** Every generated Sigma YAML rule is loaded into a strict AST parser to prevent invalid syntax or malformed YAML keys.
+2. **Platform & Logsource Correction:** When a rule specifies an ambiguous platform or mismatched logsource (e.g. Linux auditd fields on a Windows process creation rule), the reviewer engine passes remediation error messages back to the LLM generator to regenerate corrected definitions.
+3. **pySigma Backend Compatibility:** The rule is test-transpiled across all 5 target SIEM dialects. If a backend fails due to an unsupported condition modifier or wildcard placement, the rule is automatically tuned.
 
-## Watching a cycle
+### 4.4 Purple-Team Telemetry Replay
 
-A cycle can run for twenty minutes, most of it inside model calls that say
-nothing. Three records exist so that a long silence is never the only signal.
-
-```mermaid
-flowchart LR
-    subgraph cycle["A running cycle"]
-        ORCH["Orchestrator"]
-        PROV["Core's LLM providers"]
-    end
-
-    ORCH -- "one line per decision" --> TRAIL["logs/orchestrator.log<br/>(decision trail)"]
-    ORCH -- "one line when the cycle ends" --> METRICS["logs/stage_metrics.jsonl"]
-    PROV -- "a line as each call starts and ends" --> CALLS["logs/llm_calls.jsonl"]
-
-    TRAIL --> WATCH["hecate-runner watch"]
-    TRAIL --> MON["hecate-agent monitor"]
-    METRICS --> MON
-    METRICS --> MCLI["hecate-runner metrics"]
-    CALLS --> MON
-```
-
-**The decision trail.** Each cycle gets a short ID and logs one line per
-decision: what it picked, why it routed it the way it did, what each stage
-found. Most stages log once, when they finish. The slow ones (source evidence,
-research, hypothesis, rule generation) also log a line when they start, so the
-trail shows what is in hand. `hecate-runner watch` follows it.
-
-**Stage metrics.** When a cycle ends, one JSON line records every stage's wall
-time and the model usage Core reported for it: calls, tokens, estimated cost,
-models. `hecate-runner metrics` aggregates these by CTI source.
-
-**The live call log.** Stage metrics arrive only when a cycle ends. So the
-Runner passes `HECATE_LLM_CALL_LOG` to Core, and every provider call appends a
-line when it is sent and another when it returns or fails. The Runner empties
-the file at the start of each cycle, so it only ever holds the cycle in
-progress. Outside the Runner the variable is unset and nothing is written.
-
-**The monitor.** `hecate-agent monitor` is a terminal dashboard over all three:
-the stage in hand, the trail, host load, the queue, and model usage. While a
-cycle runs its usage panel reads the live call log (calls done, calls in
-flight, tokens so far); once the cycle ends it shows the recorded per-stage
-totals.
+In [`hecate_runner.purple_team`](file:///home/chemch/betas/Hecate-Runner/src/hecate_runner/purple_team.py):
+- For every generated hunt, Hecate simulates the adversary technique using Atomic Red Team definitions and synthetic telemetry generators.
+- Synthesizes realistic events for:
+  - **Process Creation:** Sysmon Event ID 1, Windows 4688, Linux auditd `execve`.
+  - **File Operations:** Sysmon Event ID 11, auditd file write.
+  - **Network Connections:** Sysmon Event ID 3, Zeek `conn.log`, Firewall logs.
+  - **Web Application / WAF:** Apache/Nginx access logs and Cloudflare/ModSecurity WAF events.
+- Evaluates candidate Sigma rules against the synthetic telemetry to verify true-positive detection prior to human submission.
 
 ---
 
-## Scheduling and safety rails
+## 5. Security & Isolation Model
 
-A systemd timer (`hecate-runner-orchestrator.timer`) starts a cycle two
-minutes after boot, then one hour after each activation.
-
-Five independent limits bound autonomous behaviour:
-
-- **Daily draft quota**, reserved before any model call and refunded on failure.
-- **Daily research quota**, checked before the source read and not refunded,
-  so a failing item cannot drain the web search allowance.
-- **Skip limit** of 5 per cycle, so a run cannot spin forever walking past
-  items that have nothing to hunt.
-- **Consecutive failure tracking** in the orchestrator state.
-- **Query guardrails**, which apply regardless of who proposes the query.
-
-Run `hecate-runner doctor` before trusting a deployment. It verifies paths,
-credentials, and, importantly, that the optional capabilities are importable
-*in the Runner's interpreter* and that ATT&CK STIX data is actually present. A
-credential without its client library is a failed check, because that
-combination is precisely how grounding sat silently switched off.
+- **Zero-Unattended Execution:** The pipeline generates `status: planning` hunts and candidate queries. No query or remediation command is executed against production SIEMs without authenticated human confirmation.
+- **Atomic Operations:** All file updates utilize atomic temporary-write-and-rename patterns (`atomic_write_text`) with flock guards to eliminate corruption risks during system interruptions.
+- **Secret Isolation:** API tokens, GitHub App private keys, and SIEM credentials reside in secure `.env` files or `/run/secrets/` and are never committed to version control.
