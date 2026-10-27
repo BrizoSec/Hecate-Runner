@@ -68,24 +68,37 @@ Hecate-Runner/
 
 ---
 
-## 🚀 Quick Start
+## 🚀 5-Minute Quick Install & Getting Started
 
-### 1. Installation
+### Prerequisites
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- An LLM API key (Anthropic, OpenAI, AWS Bedrock) or a local [Ollama](https://ollama.com) instance
 
-Clone alongside its sibling repositories and install with [uv](https://docs.astral.sh/uv/):
-
+### Step 1: Clone Repositories Side-by-Side
 ```bash
-git clone https://github.com/BrizoSec/Hecate-Runner.git
-cd Hecate-Runner
+mkdir -p ~/betas && cd ~/betas
 
-# Install dependencies (automatically links sibling ../Hecate-Core in-process)
+git clone https://github.com/BrizoSec/Hecate-Core.git
+git clone https://github.com/BrizoSec/Hecate-Runner.git
+git clone https://github.com/BrizoSec/Hecate-Content.git Hecate-Workspace
+```
+
+### Step 2: Install Dependencies with `uv`
+```bash
+# Install Hecate-Runner (automatically links sibling ../Hecate-Core in-process)
+cd ~/betas/Hecate-Runner
 uv sync --all-extras
 ```
 
-### 2. Environment Configuration
+### Step 3: Configure Environment
+Copy `.env.example` into `Hecate-Workspace/.env` (Runner automatically symlinks to it):
+```bash
+cd ~/betas/Hecate-Workspace
+cp .env.example .env
+```
 
-Runner symlinks `.env` to `../Hecate-Workspace/.env`. Ensure your configuration includes:
-
+Ensure your configuration includes your API keys and quotas:
 ```dotenv
 # Threat Intelligence Feeds
 OTX_API_KEY=...
@@ -109,6 +122,20 @@ HECATE_RUNNER_GITHUB_APP_ID=...
 HECATE_RUNNER_GITHUB_INSTALLATION_ID=...
 HECATE_RUNNER_GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/hecate-publisher.pem
 HECATE_RUNNER_GITHUB_PUBLISHING_REPOSITORY=BrizoSec/Hecate-Content
+```
+
+### Step 4: Run a Test Hunt or Launch the Daemon
+```bash
+# Option A: Draft a hunt immediately from raw CTI text
+uv run hecate-runner draft \
+  --title "Test Adversary Activity" \
+  --content "Adversaries executed powershell -enc with beaconing to 198.51.100.5"
+
+# Option B: Run a single cycle against active feeds
+uv run hecate-runner run
+
+# Option C: Start the autonomous resident daemon in the foreground
+uv run hecate-runner daemon --interval 60
 ```
 
 ---
