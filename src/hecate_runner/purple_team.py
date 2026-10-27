@@ -174,7 +174,9 @@ def replay_events(
                     "webserver",
                     {
                         "cs-method": "POST"
-                        if any(w in value.lower() for w in ("api", "upload", "audit", "login", "auth"))
+                        if any(
+                            w in value.lower() for w in ("api", "upload", "audit", "login", "auth")
+                        )
                         else "GET",
                         "cs-uri-stem": path if path.startswith("/") else f"/{path}",
                         **({"cs-uri-query": query} if query else {}),
@@ -376,7 +378,10 @@ def replay_events(
             "webserver",
             {
                 "cs-method": "POST"
-                if any(w in ep.lower() for w in ("api", "upload", "audit", "login", "auth", "sqli", "create", "update"))
+                if any(
+                    w in ep.lower()
+                    for w in ("api", "upload", "audit", "login", "auth", "sqli", "create", "update")
+                )
                 else "GET",
                 "cs-uri-stem": path,
                 **({"cs-uri-query": query} if query else {}),

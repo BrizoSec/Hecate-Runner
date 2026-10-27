@@ -2766,9 +2766,15 @@ class Orchestrator:
         log.info("Picked up CTI item from %s (%d chars)", item.source, len(item.content))
         self.metrics.set_source(item.source, item.identifier)
 
-        is_sweep = bool(parse_indicator_inventory(item.content)) if not has_narrative(item.content) else False
+        is_sweep = (
+            bool(parse_indicator_inventory(item.content))
+            if not has_narrative(item.content)
+            else False
+        )
         effective_spacing = (
-            self.settings.min_hours_between_sweeps if is_sweep else self.settings.min_hours_between_drafts
+            self.settings.min_hours_between_sweeps
+            if is_sweep
+            else self.settings.min_hours_between_drafts
         )
         if not dry_run and self.settings.max_drafts_per_day < 900000:
             spaced, elapsed = state.check_spacing(effective_spacing)
