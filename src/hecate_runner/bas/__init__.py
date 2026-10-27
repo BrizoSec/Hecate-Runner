@@ -61,17 +61,27 @@ def get_bas_provider(
     allowed_accounts: list[str] | None = None,
 ) -> BASProvider:
     """Factory creating configured BAS provider instances."""
-    hosts = allowed_hosts or (settings.bas_allowed_hosts if settings else [])
-    accounts = allowed_accounts or (settings.bas_allowed_accounts if settings else [])
+    hosts = (
+        allowed_hosts
+        if allowed_hosts is not None
+        else (settings.bas_allowed_hosts if settings else [])
+    )
+    accounts = (
+        allowed_accounts
+        if allowed_accounts is not None
+        else (settings.bas_allowed_accounts if settings else [])
+    )
 
     name_lower = provider_name.lower().strip()
+    if name_lower != "mock" and settings is not None and not settings.bas_enabled:
+        raise SafetyViolationError("Live BAS is disabled: set HECATE_BAS_ENABLED=true explicitly.")
 
     if name_lower == "caldera":
         url = settings.caldera_url if settings else "http://localhost:8888"
         api_key = settings.caldera_api_key if settings else None
         group = settings.caldera_agent_group if settings else "staging"
         timeout = settings.caldera_timeout_sec if settings else 120
-        fallback = getattr(settings, "bas_fallback_to_mock", True) if settings else True
+        fallback = getattr(settings, "bas_fallback_to_mock", False) if settings else False
         return CalderaConnector(
             base_url=url,
             api_key=api_key,

@@ -22,6 +22,78 @@ hecate_review: {verdict: revise, issues: [no parent constraint]}
 """
 
 
+@pytest.mark.parametrize(
+    ("role", "status", "expected"),
+    [("tool", "active", 1), ("attacker-side", "unknown", 0), ("tool", "historical", 0)],
+)
+def test_pass2_bare_filename_preserves_scope_and_source_exclusions(
+    settings, mock_hecate, tmp_path, role, status, expected
+):
+    from datetime import UTC, datetime
+
+    import yaml
+    from hecate_agent.core.source_evidence import SourceArtifact, SourceEvidence
+
+    from hecate_runner.hecate_client import HypothesisResult
+    from hecate_runner.hunt_writer import DraftHuntRequest
+
+    engine = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
+    engine._source_evidence = SourceEvidence(
+        url="https://report.example",
+        text="The operator executed exp.py.",
+        artifacts=[
+            SourceArtifact(
+                "exp.py", "file_path", role, status, "unknown", "The operator executed exp.py."
+            )
+        ],
+    )
+    req = DraftHuntRequest(
+        hunt_id="H-0001",
+        threat_intel="",
+        hypothesis=HypothesisResult(),
+        generated_at=datetime.now(UTC),
+        platforms=["Linux"],
+    )
+    out = tmp_path / "rules"
+    out.mkdir()
+    rules = engine._generate_pass2_uncovered_rules(
+        req,
+        [{"behaviour": "Execution of the exp.py script", "quote": ""}],
+        CTIItem(content="The operator executed exp.py.", source="manual"),
+        out,
+        [],
+    )
+    assert len(rules) == expected
+    if expected:
+        assert yaml.safe_load(rules[0]["rule_yaml"])["logsource"] == {
+            "category": "file_event",
+            "product": "linux",
+        }
+
+
+def test_pass2_does_not_add_windows_commands_to_a_linux_hunt(settings, mock_hecate, tmp_path):
+    from datetime import UTC, datetime
+
+    from hecate_runner.hecate_client import HypothesisResult
+    from hecate_runner.hunt_writer import DraftHuntRequest
+
+    engine = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
+    req = DraftHuntRequest(
+        hunt_id="H-0001",
+        threat_intel="",
+        hypothesis=HypothesisResult(),
+        generated_at=datetime.now(UTC),
+        platforms=["Linux"],
+    )
+    out = tmp_path / "rules"
+    out.mkdir()
+    item = CTIItem(content="The operator ran net files.", source="manual")
+    rules = engine._generate_pass2_uncovered_rules(
+        req, [{"behaviour": "The operator ran net files.", "quote": "net files"}], item, out, []
+    )
+    assert rules == []
+
+
 def _run(settings: Settings, hecate: MagicMock, caplog: pytest.LogCaptureFixture):
     caplog.set_level(logging.INFO)
     hecate.sigma_generator.return_value = SigmaResult(

@@ -318,9 +318,10 @@ class HecateClient:
                 hunt_id=payload.get("hunt_id"),
             )
             usage = LLMUsage.from_metadata(metadata)
-            # Core writes one file per rule, in rule order; the path lets later
-            # stages update the file they describe.
-            paths = [str(f) for f in files or []]
+            # Core interleaves each Sigma file with native query files. Only
+            # Sigma paths correspond to output.rules; assigning a .kql/.cql
+            # path to another rule lets replay overwrite unrelated artifacts.
+            paths = [str(f) for f in files or [] if Path(f).suffix.lower() in {".yml", ".yaml"}]
             rules = [
                 {
                     "logsource_category": rule.logsource_category,
@@ -369,7 +370,7 @@ class HecateClient:
         if isinstance(generated, SigmaResult):
             return generated
         output, files = generated
-        paths = [str(f) for f in files or []]
+        paths = [str(f) for f in files or [] if Path(f).suffix.lower() in {".yml", ".yaml"}]
         rules = [
             {
                 "logsource_category": r.logsource_category,

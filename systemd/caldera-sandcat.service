@@ -1,23 +1,20 @@
 [Unit]
-Description=CALDERA Sandcat Agent Daemon (Hardened)
-After=network.target docker.service
+Description=CALDERA Sandcat Agent (isolated BAS container)
+After=network.target
 
 [Service]
 Type=simple
-ExecStart=/home/chemch/betas/sandcat -server http://127.0.0.1:8888 -group staging
+# Run scripts/setup-bas-lab.sh once before starting this unit.
+# Payload isolation is enforced by Docker, rather than user service mount settings.
+ExecStart=/usr/bin/docker start --attach hecate-bas-agent
+ExecStop=/usr/bin/docker stop --time 10 hecate-bas-agent
 Restart=always
 RestartSec=5s
+TimeoutStopSec=20s
+NoNewPrivileges=true
+UMask=0077
 StandardOutput=journal
 StandardError=journal
-
-# --- Privilege & Kernel Hardening ---
-# Disallow privilege escalation (blocks sudo, setuid, and capability gains)
-NoNewPrivileges=true
-LockPersonality=true
-RestrictRealtime=true
-RestrictSUIDSGID=true
-PrivateTmp=true
-MemoryDenyWriteExecute=true
 
 [Install]
 WantedBy=default.target

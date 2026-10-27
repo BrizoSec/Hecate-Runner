@@ -1007,6 +1007,20 @@ class Orchestrator:
                         behaviour="named by ID",
                     )
 
+            if (
+                found is None
+                and upper.startswith("T1059.")
+                and any(
+                    e.technique_id.startswith("T1059.") and e.status == "observed"
+                    for e in behaviour
+                )
+            ):
+                # A script host is not evidence for a second language. Keep
+                # every language the source supports, without adding an
+                # unsupported sibling proposed by a model/name matcher.
+                unevidenced.append(upper)
+                continue
+
             if found is not None and found.status in ("capability", "negated", "context"):
                 dropped.append(upper)
                 evidence.append({**found.to_dict(), "technique_id": upper, "status": found.status})
@@ -1598,13 +1612,9 @@ class Orchestrator:
             return []
 
         # Find command candidates from gap text or primary text that match the gaps
-        candidates = list(
-            command_candidates(combined_gap_text, platforms=["linux", "windows", "macos", "unix"])
-        )
+        candidates = list(command_candidates(combined_gap_text, platforms=req.platforms))
         primary_candidates = list(
-            command_candidates(
-                self._primary_evidence_text(item), platforms=["linux", "windows", "macos", "unix"]
-            )
+            command_candidates(self._primary_evidence_text(item), platforms=req.platforms)
         )
         for cand in primary_candidates:
             prog = cand.get("title", "").split()[0].lower()
@@ -1718,7 +1728,11 @@ class Orchestrator:
         # Artifacts from source evidence
         if self._source_evidence and self._source_evidence.artifacts:
             for art in self._source_evidence.artifacts:
-                if getattr(art, "kind", "") == "file_path":
+                if (
+                    getattr(art, "kind", "") == "file_path"
+                    and getattr(art, "status", "") == "active"
+                    and getattr(art, "role", "") != "attacker-side"
+                ):
                     val = str(getattr(art, "value", "") or "").strip()
                     if val:
                         file_path_candidates.add(val)
@@ -1774,8 +1788,11 @@ class Orchestrator:
             return False
 
         if has_file_gap:
+            blocked_values = {value.lower() for value in self._unobservable_values()}
             for path_cand in sorted(file_path_candidates):
                 p_lower = path_cand.lower()
+                if p_lower in blocked_values:
+                    continue  # Pass 2 must preserve the primary source's exclusions.
                 # Check relevance to gap: exact match in gap text or semantic match with gap concepts
                 relevant = (
                     p_lower in gap_lower
@@ -1802,7 +1819,15 @@ class Orchestrator:
                     continue
 
                 cat = "file_event"
-                cand_product = "linux" if path_cand.startswith("/") else "windows"
+                if path_cand.startswith("/"):
+                    cand_product = "linux"
+                elif "\\" in path_cand:
+                    cand_product = "windows"
+                else:
+                    scoped = {p.lower() for p in req.platforms}
+                    if len(scoped) != 1 or not scoped <= {"linux", "windows", "macos"}:
+                        continue  # A bare filename cannot determine the endpoint OS.
+                    cand_product = next(iter(scoped))
                 logsource_block: dict[str, str] = {"category": cat, "product": cand_product}
 
                 detection = {
@@ -2358,6 +2383,10 @@ class Orchestrator:
             provider = get_bas_provider(provider_name, self.settings)
         except Exception as exc:
             log.warning("BAS provider initialization failed (%s): %s", provider_name, exc)
+            return
+
+        if provider.name != "mock" and not self.settings.bas_auto_execute_live:
+            log.info("Skipping unattended live BAS; manual bas-detonate remains available.")
             return
 
         # Determine target technique(s) from hypothesis or rules

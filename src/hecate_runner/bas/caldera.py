@@ -22,6 +22,7 @@ from hecate_runner.bas.base import (
     DetonationRequest,
     DetonationResult,
     DetonationStage,
+    SafetyViolationError,
 )
 
 log = logging.getLogger(__name__)
@@ -90,7 +91,9 @@ class CalderaConnector(BASProvider):
             staging_agents = [a.get("paw") for a in agents if a.get("group") == self.agent_group]
 
             return {
-                "status": "healthy" if resp.status_code in (200, 204, 404) else "degraded",
+                "status": "healthy"
+                if resp.status_code == 200 and agents_resp.status_code == 200
+                else "degraded",
                 "caldera_url": self.base_url,
                 "agent_group": self.agent_group,
                 "active_agents": len(agents),
@@ -143,7 +146,7 @@ class CalderaConnector(BASProvider):
                                 platform_matched.insert(0, ability_id)
                             else:
                                 platform_matched.append(ability_id)
-            return platform_matched if platform_matched else matched
+            return platform_matched if plat_lower else matched
         except Exception as exc:
             log.error("Failed to lookup technique %s in CALDERA: %s", technique_id, exc)
             return []
@@ -152,6 +155,8 @@ class CalderaConnector(BASProvider):
         """Trigger an autonomous adversary operation in CALDERA."""
         # 1. Enforce safety checks
         self.check_safety(request.target)
+        if not request.cleanup_on_finish:
+            raise SafetyViolationError("Live CALDERA execution requires cleanup_on_finish.")
 
         # 2. Check if an active agent exists for target platform (fallback to mock if enabled)
         if self.fallback_to_mock:
@@ -181,7 +186,8 @@ class CalderaConnector(BASProvider):
                         allowed_accounts=self.allowed_accounts,
                     )
                     mock_res = mock_provider.detonate(request)
-                    mock_res.provider = self.name
+                    mock_res.raw_details["requested_provider"] = self.name
+                    mock_res.raw_details["mock_fallback"] = True
                     mock_res.stdout = (
                         f"[Mock Fallback: No active CALDERA agent in group '{self.agent_group}' for platform '{request.platform}']\n"
                         f"{mock_res.stdout}"
@@ -199,11 +205,38 @@ class CalderaConnector(BASProvider):
                     allowed_accounts=self.allowed_accounts,
                 )
                 mock_res = mock_provider.detonate(request)
-                mock_res.provider = self.name
+                mock_res.raw_details["requested_provider"] = self.name
+                mock_res.raw_details["mock_fallback"] = True
                 mock_res.stdout = (
                     f"[Mock Fallback: CALDERA server unreachable ({exc})]\n{mock_res.stdout}"
                 )
                 return mock_res
+
+        # CALDERA schedules by group, so require a dedicated group containing
+        # exactly the explicitly selected endpoint. Never silently fan out.
+        if request.platform != request.target.platform:
+            raise SafetyViolationError("Request and target platforms disagree.")
+        client = self._get_client()
+        agents_resp = client.get("/api/v2/agents")
+        if agents_resp.status_code == 404:
+            agents_resp = client.get("/api/agents")
+        agents_resp.raise_for_status()
+        group_agents = [a for a in agents_resp.json() if a.get("group") == self.agent_group]
+        if len(group_agents) != 1:
+            raise SafetyViolationError(
+                "CALDERA live BAS requires a dedicated group with exactly one agent."
+            )
+        agent = group_agents[0]
+        if (
+            agent.get("host") != request.target.host
+            or agent.get("platform") != request.platform
+            or agent.get("trusted") is not True
+            or not agent.get("paw")
+            or (request.target.agent_id and agent["paw"] != request.target.agent_id)
+        ):
+            raise SafetyViolationError(
+                "CALDERA agent does not match the trusted, allowlisted target."
+            )
 
         # 3. Resolve ability ID
         ability_id = request.ability_id
@@ -249,12 +282,14 @@ class CalderaConnector(BASProvider):
             "auto_close": request.cleanup_on_finish,
         }
 
+        op_id = None
+        op_finished = False
         try:
             op_resp = client.post("/api/v2/operations", json=op_payload)
             if op_resp.status_code in (404, 405):
                 is_v2 = False
                 adv_id = f"hecate-{int(time.time())}"
-                client.put(
+                adv_resp = client.put(
                     "/api/rest",
                     json={
                         "index": "adversaries",
@@ -264,6 +299,7 @@ class CalderaConnector(BASProvider):
                         "atomic_ordering": [{"ability_id": ability_id}],
                     },
                 )
+                adv_resp.raise_for_status()
                 op_resp = client.put(
                     "/api/rest",
                     json={
@@ -334,11 +370,7 @@ class CalderaConnector(BASProvider):
 
                 state = completed_op.get("state", "").lower()
                 chain = completed_op.get("chain", [])
-                chain_done = len(chain) > 0 and (
-                    all(bool(lnk.get("finish")) or lnk.get("status", -3) >= 0 for lnk in chain)
-                    or any(lnk.get("status") == 0 and bool(lnk.get("finish")) for lnk in chain)
-                )
-                if state in ("finished", "cleanup", "out_of_time") or chain_done:
+                if state in ("finished", "out_of_time"):
                     op_finished = True
                     break
                 time.sleep(poll_interval)
@@ -368,6 +400,8 @@ class CalderaConnector(BASProvider):
                     stderr=f"CALDERA operation {op_id} timed out after {request.timeout_sec}s",
                     stage=DetonationStage.FAILED,
                     raw_details={"operation_id": op_id, "last_state": completed_op.get("state")},
+                    cleanup_success=False,
+                    cleanup_error="Timed out; remote artifact cleanup could not be confirmed.",
                     error_message=f"Operation timed out after {request.timeout_sec}s",
                 )
 
@@ -461,7 +495,9 @@ class CalderaConnector(BASProvider):
                 stdout_msg = "\n".join(link_outputs) or "Operation completed with no output."
                 err_msg = "\n".join(link_errors) if link_errors else ""
 
-            is_op_successful = len(chain) > 0 and (len(link_outputs) > 0 or all_succeeded)
+            is_op_successful = (
+                len(chain) > 0 and all_succeeded and completed_op.get("state") == "finished"
+            )
             return DetonationResult(
                 success=is_op_successful,
                 hunt_id=request.hunt_id,
@@ -475,7 +511,7 @@ class CalderaConnector(BASProvider):
                 stdout=stdout_msg,
                 stderr=err_msg,
                 stage=DetonationStage.COMPLETED if is_op_successful else DetonationStage.FAILED,
-                cleanup_success=completed_op.get("state") != "out_of_time",
+                cleanup_success=completed_op.get("state") == "finished",
                 telemetry_signatures=telemetry,
                 raw_details={"operation_id": op_id, "chain_length": len(chain)},
                 error_message=err_msg if not is_op_successful else None,
@@ -497,10 +533,30 @@ class CalderaConnector(BASProvider):
                 stdout="",
                 stderr=str(exc),
                 stage=DetonationStage.FAILED,
+                cleanup_success=False,
+                cleanup_error="Operation failed; remote artifact cleanup could not be confirmed.",
                 error_message=str(exc),
             )
+        finally:
+            # Stop timed-out/error operations so they cannot continue scheduling
+            # commands after this caller has returned. Preserve their evidence.
+            if op_id and not op_finished:
+                try:
+                    stop_resp = client.post(
+                        "/api/rest",
+                        json={
+                            "index": "operation",
+                            "op_id": op_id,
+                            "state": "finished",
+                        },
+                    )
+                    stop_resp.raise_for_status()
+                except Exception:
+                    log.exception(
+                        "Failed to stop CALDERA operation %s; operator intervention required", op_id
+                    )
 
     def cleanup(self, request: DetonationRequest) -> bool:
         """Trigger explicit cleanup for any lingering CALDERA operations."""
-        # CALDERA auto_close handles link cleanup; explicit cleanup can send command if needed
-        return True
+        # Without an operation ID there is no proof that remote cleanup ran.
+        return False

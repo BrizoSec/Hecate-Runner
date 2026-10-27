@@ -102,6 +102,37 @@ def _metrics_result(
 # --- Core with generate_sigma_with_metrics (the path the client prefers) -----------------
 
 
+@pytest.mark.parametrize("metrics_api", [True, False])
+def test_sigma_paths_ignore_interleaved_native_query_files(
+    client, tmp_path, monkeypatch, metrics_api
+):
+    from hecate_agent.agents.llm.sigma_generator import SigmaGenerationOutput, SigmaRule
+
+    output = SigmaGenerationOutput(
+        logsources_considered=["dns_query", "file_event"],
+        rules=[
+            SigmaRule(logsource_category="dns_query", title="DNS", rule_yaml="title: DNS"),
+            SigmaRule(logsource_category="file_event", title="File", rule_yaml="title: File"),
+        ],
+    )
+    paths = [tmp_path / name for name in ("dns.yml", "dns.kql", "dns.leql", "file.yml", "file.kql")]
+    if metrics_api:
+        monkeypatch.setattr(
+            hecate_agent.api,
+            "generate_sigma_with_metrics",
+            lambda **kwargs: (output, paths, {"success": True}),
+        )
+    else:
+        monkeypatch.delattr(hecate_agent.api, "generate_sigma_with_metrics")
+        monkeypatch.setattr(hecate_agent.api, "generate_sigma", lambda **kwargs: (output, paths))
+    result = client.sigma_generator({"hunt_id": "H-TEST"}, tmp_path)
+    assert [r["path"] for r in result.rules] == [
+        str(tmp_path / "dns.yml"),
+        str(tmp_path / "file.yml"),
+    ]
+    assert result.files == paths
+
+
 def test_every_rule_rejected_is_an_outcome_not_an_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -71,6 +71,7 @@ def test_orchestrator_run_bas_validation(tmp_path: Path, caplog: pytest.LogCaptu
         bas_enabled=True,
         bas_mode="mock",
         bas_allowed_hosts=["lab-host"],
+        bas_windows_host="lab-host",
     )
 
     hecate_client = MagicMock()
@@ -123,3 +124,18 @@ detection:
 
     # Trail / Log assertion
     assert "BAS validation completed for H-0099" in caplog.text
+
+
+def test_orchestrator_requires_separate_opt_in_for_unattended_live_bas(tmp_path, monkeypatch):
+    settings = Settings(
+        hecate_workspace=tmp_path,
+        hunts_root=tmp_path / "hunts",
+        bas_enabled=True,
+        bas_auto_execute_live=False,
+    )
+    provider = MagicMock(name="provider")
+    provider.name = "caldera"
+    monkeypatch.setattr("hecate_runner.bas.get_bas_provider", lambda *args: provider)
+    orchestrator = Orchestrator(settings=settings, hecate=MagicMock(), cti_provider=MagicMock())
+    orchestrator._run_bas_validation(MagicMock(), [{}], tmp_path, MagicMock())
+    provider.detonate.assert_not_called()

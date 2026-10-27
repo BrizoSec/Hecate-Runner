@@ -39,7 +39,7 @@ def test_stratus_health_check_with_runner():
             )
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
 
-    connector = StratusConnector(runner_fn=mock_runner)
+    connector = StratusConnector(runner_fn=mock_runner, allowed_accounts=["123456789012"])
     health = connector.health_check()
     assert "2.15.0" in health["version"]
     assert health["mapped_techniques"] > 0
@@ -104,11 +104,13 @@ def test_stratus_detonation_warmup_failure_aborts_detonate():
             args=["stratus", *args], returncode=0, stdout="", stderr=""
         )
 
-    connector = StratusConnector(runner_fn=mock_runner)
+    connector = StratusConnector(runner_fn=mock_runner, allowed_accounts=["123456789012"])
     request = DetonationRequest(
         hunt_id="H-0885",
         technique_id="T1562.008",
-        target=DetonationTarget(environment="staging"),
+        target=DetonationTarget(
+            environment="staging", platform="aws", cloud_account="123456789012"
+        ),
     )
 
     result = connector.detonate(request)
@@ -138,11 +140,13 @@ def test_stratus_detonation_detonate_failure_still_runs_cleanup():
             args=["stratus", *args], returncode=0, stdout="", stderr=""
         )
 
-    connector = StratusConnector(runner_fn=mock_runner)
+    connector = StratusConnector(runner_fn=mock_runner, allowed_accounts=["123456789012"])
     request = DetonationRequest(
         hunt_id="H-0885",
         technique_id="T1562.008",
-        target=DetonationTarget(environment="staging"),
+        target=DetonationTarget(
+            environment="staging", platform="aws", cloud_account="123456789012"
+        ),
     )
 
     result = connector.detonate(request)
@@ -179,11 +183,13 @@ def test_stratus_explicit_cleanup():
             args=["stratus", *args], returncode=0, stdout="cleaned", stderr=""
         )
 
-    connector = StratusConnector(runner_fn=mock_runner)
+    connector = StratusConnector(runner_fn=mock_runner, allowed_accounts=["123456789012"])
     request = DetonationRequest(
         hunt_id="H-0885",
         technique_id="T1562.008",
-        target=DetonationTarget(environment="staging"),
+        target=DetonationTarget(
+            environment="staging", platform="aws", cloud_account="123456789012"
+        ),
     )
     assert connector.cleanup(request) is True
     assert calls == [["cleanup", "aws.defense-evasion.cloudtrail-stop"]]

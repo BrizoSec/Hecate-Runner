@@ -104,9 +104,7 @@ def test_a_technique_cannot_widen_onto_a_platform_the_evidence_does_not_show(
     draft, trail = run()
     assert _frontmatter_line(draft, "platform") == 'platform: ["Windows"]'
     assert "T1059.004" not in _frontmatter_line(draft, "techniques")
-    assert any(
-        "not widening for T1059.004: the specimen's evidence shows only Windows" in m for m in trail
-    )
+    assert any("dropped unevidenced feed tags: T1059.004" in m for m in trail)
 
 
 def test_hybrid_cloud_container_platforms_recognized(

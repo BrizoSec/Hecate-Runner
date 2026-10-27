@@ -8,7 +8,29 @@ from hecate_runner.bas.base import (
     DetonationStage,
     DetonationTarget,
     SafetyViolationError,
+    normalize_platform,
 )
+
+
+@pytest.mark.parametrize(
+    "hosts,host", [(None, "lab-01"), ([], "lab-01"), (["*"], "lab-01"), (["lab-01"], None)]
+)
+def test_live_target_requires_exact_allowlist(hosts, host):
+    with pytest.raises(SafetyViolationError):
+        DetonationTarget(host=host, environment="lab").validate_safety(allowed_hosts=hosts)
+
+
+@pytest.mark.parametrize("environment", [" prod ", "production ", "unknown", "", "development"])
+def test_environment_is_an_allowlist(environment):
+    with pytest.raises(SafetyViolationError):
+        DetonationTarget(host="lab-01", environment=environment).validate_safety(
+            allowed_hosts=["lab-01"]
+        )
+
+
+def test_unknown_platform_does_not_default_to_linux():
+    with pytest.raises(ValueError):
+        normalize_platform("linxu")
 
 
 def test_detonation_target_safety_rejects_production():
@@ -28,13 +50,14 @@ def test_detonation_target_safety_allows_staging_and_lab():
     target.validate_safety(allowed_hosts=["lab-host-01", "lab-host-02"])
 
     target_wildcard = DetonationTarget(environment="lab", host="any-host")
-    target_wildcard.validate_safety(allowed_hosts=["*"])
+    with pytest.raises(SafetyViolationError):
+        target_wildcard.validate_safety(allowed_hosts=["*"])
 
 
 def test_detonation_target_safety_rejects_unlisted_host():
     """Host not present in allowed_hosts is blocked."""
     target = DetonationTarget(environment="staging", host="unlisted-server")
-    with pytest.raises(SafetyViolationError, match="not in allowed hosts list"):
+    with pytest.raises(SafetyViolationError, match="explicit target"):
         target.validate_safety(allowed_hosts=["lab-host-01"])
 
 
@@ -45,7 +68,7 @@ def test_detonation_target_safety_rejects_unlisted_cloud_account():
         platform="aws",
         cloud_account="999888777666",
     )
-    with pytest.raises(SafetyViolationError, match="not in allowed accounts list"):
+    with pytest.raises(SafetyViolationError, match="explicit target"):
         target.validate_safety(allowed_accounts=["111222333444"])
 
 

@@ -26,6 +26,8 @@ NAMES = {
     "T1497.001": "System Checks",
     "T1497.003": "Time Based Checks",
     "T1041": "Exfiltration Over C2 Channel",
+    "T1059.005": "Visual Basic",
+    "T1059.007": "JavaScript",
 }
 
 
@@ -97,6 +99,14 @@ def test_a_capability_only_technique_is_dropped_and_listed(
         '- T1113: "The RAT provides operators with command execution, file access and screen capture capabilities."'
         in tail
     )
+
+
+def test_wscript_javascript_does_not_gain_an_unsupported_visual_basic_mapping(settings, hecate):
+    content = "The malware executes obfuscated JavaScript using WScript on Windows."
+    hecate.candidate_techniques.return_value = [("T1059.005", "Visual Basic")]
+    draft = _draft(settings, hecate, content=content, model_picks=["T1059.005", "T1059.007"])
+    assert "T1059.007" in _techniques(draft)
+    assert "T1059.005" not in _techniques(draft)
 
 
 def test_an_unsupported_sub_technique_is_generalised_to_its_supported_parent(

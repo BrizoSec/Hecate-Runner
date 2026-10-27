@@ -54,7 +54,9 @@ def normalize_platform(platform: str) -> BASPlatform:
         return "gcp"
     if p in ("k8s", "kubernetes"):
         return "k8s"
-    return "linux"
+    if p == "linux":
+        return "linux"
+    raise ValueError(f"Unsupported BAS platform: {platform!r}")
 
 
 @dataclass
@@ -71,13 +73,23 @@ class DetonationTarget:
         self,
         allowed_hosts: list[str] | None = None,
         allowed_accounts: list[str] | None = None,
+        require_allowlist: bool = True,
     ) -> None:
         """Enforce strict environment whitelisting prior to running adversary code."""
-        if self.environment.lower() in ("production", "prod", "live"):
+        if self.environment.strip().lower() not in ("staging", "lab", "sandbox"):
             raise SafetyViolationError(
                 f"Detonation rejected: Environment is flagged as '{self.environment}'. "
                 "Adversary emulation can only be executed against staging, lab, or sandbox environments."
             )
+
+        if require_allowlist:
+            cloud = self.platform in ("aws", "azure", "gcp", "k8s")
+            identity = self.cloud_account if cloud else self.host
+            allowlist = allowed_accounts if cloud else allowed_hosts
+            if not identity or not allowlist or "*" in allowlist or identity not in allowlist:
+                raise SafetyViolationError(
+                    "Live BAS requires an explicit target in a nonempty allowlist; wildcards are forbidden."
+                )
 
         # Host check for endpoint targets
         if (
@@ -188,6 +200,7 @@ class BASProvider(ABC):
         target.validate_safety(
             allowed_hosts=self.allowed_hosts,
             allowed_accounts=self.allowed_accounts,
+            require_allowlist=self.name != "mock",
         )
 
     @abstractmethod

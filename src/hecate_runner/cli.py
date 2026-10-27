@@ -908,6 +908,8 @@ def bas_detonate_cmd(
         console.print(
             f"[dim]Generated {len(result.telemetry_signatures)} raw telemetry events.[/dim]"
         )
+    if not result.success or not result.cleanup_success:
+        raise typer.Exit(code=1)
 
 
 @app.command("bas-verify")

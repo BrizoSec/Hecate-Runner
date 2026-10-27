@@ -217,19 +217,22 @@ Add the BAS configuration parameters to `Hecate-Workspace/.env`:
 
 ```bash
 # BAS Mode: 'caldera', 'stratus', or 'mock'
+HECATE_BAS_ENABLED=true
 HECATE_BAS_MODE=caldera
+HECATE_BAS_AUTO_EXECUTE_LIVE=false
 
 # Allowlisted Target Hosts & Cloud Accounts (Safety Guardrail)
-HECATE_BAS_ALLOWED_HOSTS=k3s-core,lab-win10,lab-host-01
-HECATE_BAS_ALLOWED_ACCOUNTS=123456789012,dev-account-01
+HECATE_BAS_ALLOWED_HOSTS=hecate-bas-lab
+HECATE_BAS_LINUX_HOST=hecate-bas-lab
+HECATE_BAS_ALLOWED_ACCOUNTS=
 
-# Automatic Fallback: Route unsupported platforms (e.g. Windows) to mock when no agent is active
-HECATE_BAS_FALLBACK_TO_MOCK=true
+# Live requests must fail if a live target is unavailable
+HECATE_BAS_FALLBACK_TO_MOCK=false
 
 # CALDERA Configuration
-CALDERA_BASE_URL=http://127.0.0.1:8888
-CALDERA_API_KEY=ngwe2xEREYwD54UGyefYyhSFNi9A4sVahh7pM5V0x5k
-CALDERA_AGENT_GROUP=staging
+CALDERA_URL=http://127.0.0.1:8888
+CALDERA_API_KEY=<your-private-caldera-api-key>
+CALDERA_AGENT_GROUP=hecate-local-lab
 CALDERA_TIMEOUT_SEC=120
 
 # Stratus Red Team Configuration
@@ -245,23 +248,24 @@ For live endpoint adversary emulation on Linux:
    docker run -d --name caldera --restart unless-stopped -p 127.0.0.1:8888:8888 caldera-local:latest
    ```
 
-2. **Enable the Sandcat Agent as a Hardened Systemd User Service:**
+2. **Create the isolated agent container and enable its user service:**
    Install [`systemd/caldera-sandcat.service`](file:///home/chemch/betas/Hecate-Runner/systemd/caldera-sandcat.service) to `~/.config/systemd/user/`:
    ```bash
+   scripts/setup-bas-lab.sh ../sandcat
    mkdir -p ~/.config/systemd/user
    cp systemd/caldera-sandcat.service ~/.config/systemd/user/
    systemctl --user daemon-reload
    systemctl --user enable --now caldera-sandcat.service
    ```
 
-   The service applies kernel isolation controls (`NoNewPrivileges=true`, `PrivateTmp=true`, `MemoryDenyWriteExecute=true`, `RestrictSUIDSGID=true`), ensuring commands executed by the agent cannot acquire elevated privileges.
+   The service supervises a nonroot container with no host mounts, a read-only root filesystem, dropped capabilities, no new privileges, resource limits, and an internal Docker network. Run `scripts/check-bas-isolation.sh` to inspect the deployed controls. Configure `HECATE_BAS_ALLOWED_HOSTS=hecate-bas-lab`, `HECATE_BAS_LINUX_HOST=hecate-bas-lab`, `CALDERA_AGENT_GROUP=hecate-local-lab`, and `HECATE_BAS_FALLBACK_TO_MOCK=false`. Unattended live execution also requires the separate `HECATE_BAS_AUTO_EXECUTE_LIVE=true` opt-in; leave it false for manual operation.
 
 #### 5.3.3 Running On-Demand Adversary Detonations (`bas-detonate`)
 Execute techniques on target systems across Linux, Windows, or Cloud:
 
 ```bash
-# 1. Live Linux detonation via CALDERA (executes on k3s-core)
-hecate-runner bas-detonate T1033 -p caldera --host k3s-core --platform linux --env lab
+# 1. Live Linux detonation via CALDERA (executes on hecate-bas-lab)
+hecate-runner bas-detonate T1033 -p caldera --host hecate-bas-lab --platform linux --env lab
 
 # 2. Windows detonation with automatic Mock fallback (when only Linux agent is connected)
 hecate-runner bas-detonate T1059.001 -p caldera --host lab-win10 --platform windows --env lab

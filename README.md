@@ -190,7 +190,7 @@ Execute on-demand adversary emulation or run closed-loop detection verification 
 
 ```bash
 # Live Linux detonation via CALDERA on local agent
-uv run hecate-runner bas-detonate T1033 --provider caldera --host k3s-core --platform linux --env lab
+uv run hecate-runner bas-detonate T1033 --provider caldera --host hecate-bas-lab --platform linux --env lab
 
 # Windows detonation with automatic Mock fallback (when no active Windows agent is connected)
 uv run hecate-runner bas-detonate T1059.001 --provider caldera --host lab-win10 --platform windows --env lab

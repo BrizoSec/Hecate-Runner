@@ -257,6 +257,11 @@ class Settings(BaseSettings):
         alias="HECATE_BAS_ENABLED",
         description="Enable live adversary emulation & breach simulation validation.",
     )
+    bas_auto_execute_live: bool = Field(
+        default=False,
+        alias="HECATE_BAS_AUTO_EXECUTE_LIVE",
+        description="Permit unattended live BAS from the drafting pipeline (manual CLI remains available).",
+    )
     bas_mode: Literal["mock", "caldera", "stratus", "local_sandbox", "live_lab"] = Field(
         default="mock",
         alias="HECATE_BAS_MODE",
@@ -293,7 +298,7 @@ class Settings(BaseSettings):
         description="Timeout in seconds for CALDERA operation execution.",
     )
     bas_fallback_to_mock: bool = Field(
-        default=True,
+        default=False,
         alias="HECATE_BAS_FALLBACK_TO_MOCK",
         description="Fall back to mock provider if no active agent exists for target platform.",
     )

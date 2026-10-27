@@ -19,6 +19,7 @@ def test_get_bas_provider_mock():
 
 def test_get_bas_provider_caldera():
     settings = Settings(
+        bas_enabled=True,
         caldera_url="http://caldera-test:8888",
         caldera_api_key="test-key",
         caldera_agent_group="test-group",
@@ -34,6 +35,7 @@ def test_get_bas_provider_caldera():
 
 def test_get_bas_provider_stratus():
     settings = Settings(
+        bas_enabled=True,
         stratus_binary="/usr/local/bin/stratus",
         stratus_timeout_sec=180,
         bas_allowed_accounts=["123456789012"],
@@ -48,3 +50,19 @@ def test_get_bas_provider_stratus():
 def test_get_bas_provider_invalid():
     with pytest.raises(ValueError, match="Unknown BAS provider"):
         get_bas_provider("unsupported-provider")
+
+
+def test_live_factory_rejects_disabled_bas():
+    from hecate_runner.bas import SafetyViolationError
+
+    with pytest.raises(SafetyViolationError, match="disabled"):
+        get_bas_provider("caldera", settings=Settings(bas_enabled=False))
+
+
+def test_explicit_empty_allowlist_does_not_inherit_settings():
+    provider = get_bas_provider(
+        "caldera",
+        settings=Settings(bas_enabled=True, bas_allowed_hosts=["lab-01"]),
+        allowed_hosts=[],
+    )
+    assert provider.allowed_hosts == []
