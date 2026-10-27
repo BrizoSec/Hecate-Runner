@@ -81,6 +81,8 @@ from hecate_runner.rss_poller import run_rss_poll
 from hecate_runner.state import OrchestratorState
 from hecate_runner.trail import LOGGER_NAME as TRAIL_LOGGER
 
+log = logging.getLogger("hecate_runner.cli")
+
 app = typer.Typer(
     name="hecate-runner",
     help="Autonomous hunt draft orchestrator for Hecate.",
@@ -178,6 +180,128 @@ def run(
     result = orch.run_once(dry_run=dry_run)
     _print_result(result)
     raise typer.Exit(code=0 if result.ok else 1)
+
+
+@app.command()
+def daemon(
+    interval: Annotated[
+        int | None,
+        typer.Option(
+            "--interval",
+            "-i",
+            help="Polling interval in seconds when intake queue is empty (default from settings: 60s).",
+        ),
+    ] = None,
+    max_cycles: Annotated[
+        int | None,
+        typer.Option(
+            "--max-cycles",
+            "-m",
+            help="Maximum number of cycles to run before exiting (default: infinite).",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Show what would happen without calling hecate."),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            "--ignore-quota",
+            help="Bypass daily draft, research quota, and spacing limits.",
+        ),
+    ] = False,
+) -> None:
+    """Run orchestrator perpetually as a resident daemon with an event-driven worker loop."""
+    import signal
+    import threading
+
+    settings = Settings()
+    _configure_logging(settings)
+
+    effective_interval = interval if interval is not None else settings.daemon_interval_sec
+    stop_event = threading.Event()
+
+    def _sig_handler(signum: int, frame: Any) -> None:
+        signame = signal.Signals(signum).name
+        console.print(
+            f"\n[bold yellow]Daemon received {signame}. Initiating graceful shutdown...[/bold yellow]"
+        )
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, _sig_handler)
+    signal.signal(signal.SIGTERM, _sig_handler)
+
+    console.print(
+        Panel(
+            f"[bold green]Starting Hecate-Runner Autonomous Daemon[/bold green]\n\n"
+            f"• Workspace: [cyan]{settings.hecate_workspace}[/cyan]\n"
+            f"• CTI Provider: [cyan]{settings.cti_provider}[/cyan]\n"
+            f"• Idle Poll Interval: [cyan]{effective_interval}s[/cyan]\n"
+            f"• Max Cycles: [cyan]{max_cycles or 'unlimited'}[/cyan]\n"
+            f"• Research Reuse: [cyan]{'enabled (<=' + str(settings.research_reuse_max_age_days) + 'd)' if settings.research_reuse_enabled else 'disabled'}[/cyan]\n"
+            f"• Dry Run: [cyan]{dry_run}[/cyan]\n"
+            f"• Force Quotas: [cyan]{force}[/cyan]\n\n"
+            "[dim]Press Ctrl+C to terminate cleanly.[/dim]",
+            title="⚡ Hecate Daemon",
+            box=box.ROUNDED,
+        )
+    )
+
+    cycles_completed = 0
+    try:
+        while not stop_event.is_set():
+            if force:
+                orch = build_default_orchestrator(settings, ignore_quota=True)
+            else:
+                orch = build_default_orchestrator(settings)
+
+            log.info("Daemon executing cycle #%d...", cycles_completed + 1)
+            result = orch.run_once(dry_run=dry_run)
+            _print_result(result)
+            cycles_completed += 1
+
+            if max_cycles is not None and cycles_completed >= max_cycles:
+                console.print(
+                    f"[bold green]Reached max cycles ({max_cycles}). Exiting daemon.[/bold green]"
+                )
+                break
+
+            if stop_event.is_set():
+                break
+
+            # If an item was successfully drafted, check if there is immediate pending work before sleeping
+            if result.outcome == "drafted":
+                log.info(
+                    "Cycle completed with draft %s. Pausing 5s before next item...", result.hunt_id
+                )
+                stop_event.wait(5.0)
+            elif result.outcome in ("empty", "queue_empty"):
+                log.info("CTI intake queue is idle. Sleeping for %ds...", effective_interval)
+                stop_event.wait(float(effective_interval))
+            elif result.outcome == "quota_exceeded":
+                log.warning(
+                    "Daily quota reached. Waiting for next window (%ds)...", effective_interval
+                )
+                stop_event.wait(float(effective_interval))
+            else:
+                log.info(
+                    "Cycle completed with status '%s'. Sleeping for %ds...",
+                    result.outcome,
+                    effective_interval,
+                )
+                stop_event.wait(float(effective_interval))
+
+    except Exception as exc:
+        log.error("Fatal daemon error: %s", exc, exc_info=True)
+        console.print(f"[bold red]Fatal daemon exception:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"[bold green]Hecate daemon shut down gracefully after {cycles_completed} cycles.[/bold green]"
+    )
+    raise typer.Exit(code=0)
 
 
 def _print_result(result: RunResult) -> None:
@@ -2040,11 +2164,6 @@ app.add_typer(sources_app, name="sources")
 @sources_app.command("list")
 def list_sources() -> None:
     """List all CTI sources, their configuration status, and active state."""
-    from rich.console import Console
-    from rich.table import Table
-
-    from hecate_runner.config import Settings
-
     settings = Settings()
     console = Console()
 

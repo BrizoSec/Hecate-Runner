@@ -272,6 +272,28 @@ class Settings(BaseSettings):
             "draft from primary CTI without research context, e.g. for offline testing."
         ),
     )
+    research_reuse_enabled: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_RESEARCH_REUSE_ENABLED",
+        description=(
+            "Reuse existing completed research documents for the same topic or technique "
+            "if fresh, saving Tavily search calls and LLM tokens."
+        ),
+    )
+    research_reuse_max_age_days: int = Field(
+        default=7,
+        ge=1,
+        le=90,
+        alias="HECATE_RUNNER_RESEARCH_REUSE_MAX_AGE_DAYS",
+        description="Maximum age in days for an existing research document to be reused.",
+    )
+    daemon_interval_sec: int = Field(
+        default=60,
+        ge=1,
+        le=3600,
+        alias="HECATE_RUNNER_DAEMON_INTERVAL_SEC",
+        description="Seconds to sleep between checks when the CTI intake queue is empty in daemon mode.",
+    )
     sigma_generation_enabled: bool = Field(
         default=True,
         alias="HECATE_RUNNER_SIGMA_GENERATION_ENABLED",

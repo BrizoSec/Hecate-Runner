@@ -3081,68 +3081,103 @@ class Orchestrator:
                 "Context Window Metrics: Executing research_new with ~%d input tokens", input_tokens
             )
 
-            try:
-                with self.metrics.measure("research") as measured:
-                    research_result = self.hecate.research_new(
+            reused_doc = None
+            describes_behavior = True
+            if self.settings.research_reuse_enabled:
+                try:
+                    from hecate_agent.core.research_manager import ResearchManager
+
+                    manager = ResearchManager(self.hecate.workspace / "research")
+                    reused_doc = manager.find_recent_match(
                         topic=topic,
-                        technique=technique,
-                        depth=self.settings.research_depth,
-                        timeout_sec=self.settings.llm_timeout_sec,
-                        web_search_enabled=intel_has_narrative,
-                        # The topic is a search label; research needs the report,
-                        # and the primary source's verified artifacts with it.
-                        source_context=research_context,
+                        technique_id=technique,
+                        max_age_days=self.settings.research_reuse_max_age_days,
                     )
-                    measured.set_usage(research_result.usage)
-            except HecateError as exc:
-                # Cold (ungrounded) generation measured ~30% accuracy on known-
-                # answer fixtures (see `hecate-agent eval`) — a research failure is
-                # refused rather than silently falling back to that. Refund
-                # the quota; the CTI stays in the queue for the next cycle.
-                log.error(
-                    "hecate-agent research new failed (%s); refusing to generate without configured research context",
-                    exc,
-                )
-                state.drafts_today -= 1
-                state.total_drafts_ever -= 1
-                return RunResult(
-                    outcome="research_error", detail=str(exc), parked_count=parked_count
-                )
+                except Exception as exc:
+                    log.debug("Research reuse lookup failed: %s", exc)
 
-            if research_result.is_empty:
-                log.error(
-                    "hecate-agent research new produced no research_id; refusing to generate without configured research context"
-                )
-                state.drafts_today -= 1
-                state.total_drafts_ever -= 1
-                return RunResult(outcome="research_empty", parked_count=parked_count)
-
-            research_id = research_result.research_id
-            related_hunts = research_result.related_hunts
-            self._research_grounding = research_result.grounding
-            self._research_grounding_label = research_result.grounding_label()
-            self.trail.step(
-                "research",
-                "%s done in %.0fs; context quality: %s; describes adversary behavior: %s; related hunts: %s",
-                research_id,
-                self.trail.elapsed - research_started,
-                self._research_grounding_label,
-                "yes" if research_result.describes_behavior else "NO",
-                listing(related_hunts),
-            )
-            if intel_has_narrative and research_result.grounding == "source-only":
-                # Not parked: the item is still actionable. Research is just
-                # not allowed to stand in for evidence it never gathered.
-                log.warning(
-                    "Research %s ran source-only (%s); it will not count as evidence for techniques or grounding.",
-                    research_id,
-                    research_result.web_search_note or "no web searches",
-                )
+            if reused_doc and reused_doc.get("research_id"):
+                research_id = reused_doc["research_id"]
+                fm = reused_doc.get("frontmatter", {})
+                linked_hunts = [h for h in fm.get("linked_hunts", []) if isinstance(h, str)]
+                self._research_grounding = fm.get("grounding", "web_and_local")
+                self._research_grounding_label = f"reused {research_id}"
+                related_hunts = linked_hunts
+                content = reused_doc.get("content", "")
+                if "describes no observable adversary behavior" in content.lower():
+                    describes_behavior = False
                 self.trail.step(
                     "research",
-                    "SOURCE-ONLY: web search was requested but none succeeded; "
-                    "research is not counted as evidence this cycle",
+                    "%s reused from workspace (<%dd old, topic %s); saved web searches & LLM calls; related hunts: %s",
+                    research_id,
+                    self.settings.research_reuse_max_age_days,
+                    clip(topic, 60),
+                    ", ".join(related_hunts) if related_hunts else "none",
                 )
+            else:
+                try:
+                    with self.metrics.measure("research") as measured:
+                        research_result = self.hecate.research_new(
+                            topic=topic,
+                            technique=technique,
+                            depth=self.settings.research_depth,
+                            timeout_sec=self.settings.llm_timeout_sec,
+                            web_search_enabled=intel_has_narrative,
+                            # The topic is a search label; research needs the report,
+                            # and the primary source's verified artifacts with it.
+                            source_context=research_context,
+                        )
+                        measured.set_usage(research_result.usage)
+                except HecateError as exc:
+                    # Cold (ungrounded) generation measured ~30% accuracy on known-
+                    # answer fixtures (see `hecate-agent eval`) — a research failure is
+                    # refused rather than silently falling back to that. Refund
+                    # the quota; the CTI stays in the queue for the next cycle.
+                    log.error(
+                        "hecate-agent research new failed (%s); refusing to generate without configured research context",
+                        exc,
+                    )
+                    state.drafts_today -= 1
+                    state.total_drafts_ever -= 1
+                    return RunResult(
+                        outcome="research_error", detail=str(exc), parked_count=parked_count
+                    )
+
+                if research_result.is_empty:
+                    log.error(
+                        "hecate-agent research new produced no research_id; refusing to generate without configured research context"
+                    )
+                    state.drafts_today -= 1
+                    state.total_drafts_ever -= 1
+                    return RunResult(outcome="research_empty", parked_count=parked_count)
+
+                research_id = research_result.research_id
+                related_hunts = research_result.related_hunts
+                self._research_grounding = research_result.grounding
+                self._research_grounding_label = research_result.grounding_label()
+                describes_behavior = research_result.describes_behavior
+                self.trail.step(
+                    "research",
+                    "%s done in %.0fs; context quality: %s; describes adversary behavior: %s; related hunts: %s",
+                    research_id,
+                    self.trail.elapsed - research_started,
+                    self._research_grounding_label,
+                    "yes" if describes_behavior else "NO",
+                    listing(related_hunts),
+                )
+                if intel_has_narrative and research_result.grounding == "source-only":
+                    # Not parked: the item is still actionable. Research is just
+                    # not allowed to stand in for evidence it never gathered.
+                    log.warning(
+                        "Research %s ran source-only (%s); it will not count as evidence for techniques or grounding.",
+                        research_id,
+                        research_result.web_search_note or "no web searches",
+                    )
+                    self.trail.step(
+                        "research",
+                        "SOURCE-ONLY: web search was requested but none succeeded; "
+                        "research is not counted as evidence this cycle",
+                    )
 
             # Intake triage matches publisher categories and title shapes, so
             # it cannot see that a post with a fresh category is commentary:
@@ -3154,7 +3189,7 @@ class Orchestrator:
             if (
                 self.settings.cti_triage == "park"
                 and intel_has_narrative
-                and not research_result.describes_behavior
+                and not describes_behavior
             ):
                 reason = (
                     f"research {research_id} found no adversary behavior to hunt in it "
