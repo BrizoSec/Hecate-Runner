@@ -5,6 +5,7 @@ Uses pydantic-settings so config is typed, validated, and self-documenting.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any, ClassVar, Literal
@@ -256,17 +257,17 @@ class Settings(BaseSettings):
         alias="HECATE_BAS_ENABLED",
         description="Enable live adversary emulation & breach simulation validation.",
     )
-    bas_mode: Literal["mock", "local_sandbox", "live_lab"] = Field(
+    bas_mode: Literal["mock", "caldera", "stratus", "local_sandbox", "live_lab"] = Field(
         default="mock",
         alias="HECATE_BAS_MODE",
         description="Operational mode for BAS execution (mock, local_sandbox, live_lab).",
     )
-    bas_allowed_hosts: list[str] = Field(
+    bas_allowed_hosts: Any = Field(
         default_factory=list,
         alias="HECATE_BAS_ALLOWED_HOSTS",
         description="Allowlist of hostnames/IPs permitted for live CALDERA execution.",
     )
-    bas_allowed_accounts: list[str] = Field(
+    bas_allowed_accounts: Any = Field(
         default_factory=list,
         alias="HECATE_BAS_ALLOWED_ACCOUNTS",
         description="Allowlist of cloud account/subscription IDs permitted for Stratus execution.",
@@ -1294,6 +1295,25 @@ class Settings(BaseSettings):
     @classmethod
     def _expand_workspace(cls, v: Path) -> Path:
         return v.expanduser().resolve()
+
+    @field_validator("bas_allowed_hosts", "bas_allowed_accounts", mode="after")
+    @classmethod
+    def _parse_comma_or_json_list(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            if v.startswith("[") and v.endswith("]"):
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        return [str(x).strip() for x in parsed if str(x).strip()]
+                except Exception:
+                    pass
+            return [x.strip() for x in v.split(",") if x.strip()]
+        if isinstance(v, (list, tuple, set)):
+            return [str(x).strip() for x in v if str(x).strip()]
+        return []
 
     def env_for_hecate(self) -> dict[str, str]:
         """Env vars to pass through when subprocessing the hecate-agent CLI.

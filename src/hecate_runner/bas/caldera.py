@@ -365,6 +365,16 @@ class CalderaConnector(BASProvider):
                         json={"index": "adversaries", "adversary_id": adv_id},
                     )
 
+            if len(chain) == 0:
+                stdout_msg = (
+                    "Operation completed with 0 links executed. "
+                    f"No active CALDERA agent in group '{self.agent_group}' matched ability platform/executor."
+                )
+                err_msg = f"No active CALDERA agent in group '{self.agent_group}' to execute ability {ability_id}."
+            else:
+                stdout_msg = "\n".join(link_outputs) or "Operation completed with no output."
+                err_msg = "\n".join(link_errors) if link_errors else ""
+
             return DetonationResult(
                 success=all_succeeded and len(chain) > 0,
                 hunt_id=request.hunt_id,
@@ -374,13 +384,14 @@ class CalderaConnector(BASProvider):
                 start_time_utc=start_time.isoformat(),
                 end_time_utc=end_time.isoformat(),
                 duration_seconds=duration,
-                exit_code=0 if all_succeeded else 1,
-                stdout="\n".join(link_outputs) or "Operation completed with no output.",
-                stderr="\n".join(link_errors),
-                stage=DetonationStage.COMPLETED,
+                exit_code=0 if (all_succeeded and len(chain) > 0) else 1,
+                stdout=stdout_msg,
+                stderr=err_msg,
+                stage=DetonationStage.COMPLETED if len(chain) > 0 else DetonationStage.FAILED,
                 cleanup_success=completed_op.get("state") != "out_of_time",
                 telemetry_signatures=telemetry,
                 raw_details={"operation_id": op_id, "chain_length": len(chain)},
+                error_message=err_msg if not (all_succeeded and len(chain) > 0) else None,
             )
 
         except Exception as exc:
