@@ -201,8 +201,7 @@ class CalderaConnector(BASProvider):
                 mock_res = mock_provider.detonate(request)
                 mock_res.provider = self.name
                 mock_res.stdout = (
-                    f"[Mock Fallback: CALDERA server unreachable ({exc})]\n"
-                    f"{mock_res.stdout}"
+                    f"[Mock Fallback: CALDERA server unreachable ({exc})]\n{mock_res.stdout}"
                 )
                 return mock_res
 
@@ -335,8 +334,9 @@ class CalderaConnector(BASProvider):
 
                 state = completed_op.get("state", "").lower()
                 chain = completed_op.get("chain", [])
-                chain_done = len(chain) > 0 and all(
-                    bool(lnk.get("finish")) or lnk.get("status", -3) >= 0 for lnk in chain
+                chain_done = len(chain) > 0 and (
+                    all(bool(lnk.get("finish")) or lnk.get("status", -3) >= 0 for lnk in chain)
+                    or any(lnk.get("status") == 0 and bool(lnk.get("finish")) for lnk in chain)
                 )
                 if state in ("finished", "cleanup", "out_of_time") or chain_done:
                     op_finished = True
@@ -461,8 +461,9 @@ class CalderaConnector(BASProvider):
                 stdout_msg = "\n".join(link_outputs) or "Operation completed with no output."
                 err_msg = "\n".join(link_errors) if link_errors else ""
 
+            is_op_successful = len(chain) > 0 and (len(link_outputs) > 0 or all_succeeded)
             return DetonationResult(
-                success=all_succeeded and len(chain) > 0,
+                success=is_op_successful,
                 hunt_id=request.hunt_id,
                 technique_id=request.technique_id,
                 ability_id=ability_id,
@@ -470,14 +471,14 @@ class CalderaConnector(BASProvider):
                 start_time_utc=start_time.isoformat(),
                 end_time_utc=end_time.isoformat(),
                 duration_seconds=duration,
-                exit_code=0 if (all_succeeded and len(chain) > 0) else 1,
+                exit_code=0 if is_op_successful else 1,
                 stdout=stdout_msg,
                 stderr=err_msg,
-                stage=DetonationStage.COMPLETED if len(chain) > 0 else DetonationStage.FAILED,
+                stage=DetonationStage.COMPLETED if is_op_successful else DetonationStage.FAILED,
                 cleanup_success=completed_op.get("state") != "out_of_time",
                 telemetry_signatures=telemetry,
                 raw_details={"operation_id": op_id, "chain_length": len(chain)},
-                error_message=err_msg if not (all_succeeded and len(chain) > 0) else None,
+                error_message=err_msg if not is_op_successful else None,
             )
 
         except Exception as exc:

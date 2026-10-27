@@ -1,14 +1,23 @@
 [Unit]
-Description=CALDERA Sandcat Agent Daemon
+Description=CALDERA Sandcat Agent Daemon (Hardened)
 After=network.target docker.service
 
 [Service]
 Type=simple
-ExecStart=/home/chemch/betas/sandcat -server http://localhost:8888 -group staging
+ExecStart=/home/chemch/betas/sandcat -server http://127.0.0.1:8888 -group staging
 Restart=always
 RestartSec=5s
 StandardOutput=journal
 StandardError=journal
+
+# --- Privilege & Kernel Hardening ---
+# Disallow privilege escalation (blocks sudo, setuid, and capability gains)
+NoNewPrivileges=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+PrivateTmp=true
+MemoryDenyWriteExecute=true
 
 [Install]
 WantedBy=default.target
