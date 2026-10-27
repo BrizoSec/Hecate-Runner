@@ -2385,7 +2385,21 @@ class Orchestrator:
 
         allowed_hosts = getattr(self.settings, "bas_allowed_hosts", [])
         allowed_accounts = getattr(self.settings, "bas_allowed_accounts", [])
-        target_host = allowed_hosts[0] if allowed_hosts else "lab-agent-01"
+
+        # Pick a platform-appropriate host from settings or allowlist
+        if norm_platform == "windows":
+            target_host = getattr(self.settings, "bas_windows_host", "") or (
+                next((h for h in allowed_hosts if "win" in h.lower()), None)
+                or (allowed_hosts[0] if allowed_hosts else "lab-agent-01")
+            )
+        elif norm_platform == "linux":
+            target_host = getattr(self.settings, "bas_linux_host", "") or (
+                next((h for h in allowed_hosts if "win" not in h.lower()), None)
+                or (allowed_hosts[0] if allowed_hosts else "lab-agent-01")
+            )
+        else:
+            target_host = allowed_hosts[0] if allowed_hosts else "lab-agent-01"
+
         target_account = allowed_accounts[0] if (allowed_accounts and is_cloud) else None
 
         target = DetonationTarget(

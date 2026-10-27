@@ -297,6 +297,16 @@ class Settings(BaseSettings):
         alias="HECATE_BAS_FALLBACK_TO_MOCK",
         description="Fall back to mock provider if no active agent exists for target platform.",
     )
+    bas_linux_host: str = Field(
+        default="",
+        alias="HECATE_BAS_LINUX_HOST",
+        description="Preferred allowlisted host for Linux detonations (e.g. k3s-core).",
+    )
+    bas_windows_host: str = Field(
+        default="",
+        alias="HECATE_BAS_WINDOWS_HOST",
+        description="Preferred allowlisted host for Windows detonations (e.g. lab-win10).",
+    )
     stratus_binary: str = Field(
         default="stratus-red-team",
         alias="STRATUS_BINARY_PATH",
