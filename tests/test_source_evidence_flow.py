@@ -107,7 +107,8 @@ def test_the_draft_carries_the_evidence_and_each_indicators_role(
 ) -> None:
     draft = _run(settings, evidence_hecate).draft_path.read_text()
     section = draft.split("### Primary Source Evidence", 1)[1].split("### Justification", 1)[0]
-    assert f"[{REPORT}]({REPORT})" in section and "32,920 characters" in section
+    assert "[hxxps://report[.]example/vshell](hxxps://report[.]example/vshell)" in section
+    assert "32,920 characters" in section
     assert "`cmd.exe` | process" in section
     assert "| memory_only | active |" in section and "none: exists only in memory" in section
     assert "| executable | active |" in section and "process_creation" in section

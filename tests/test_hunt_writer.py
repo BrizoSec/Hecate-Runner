@@ -923,6 +923,6 @@ def test_the_role_table_lists_the_log_sources_the_rules_actually_use(
         cells[1].strip(" `"): cells[6].strip()
         for cells in (row.split("|") for row in table.splitlines()[2:])
     }
-    assert rows["45.153.212.101"] == "webserver, network_connection"
-    assert rows["209.141.43.95"] == "network_connection on 80"
-    assert rows["/vpn/index.html"].startswith("none:")
+    assert rows["45[.]153[.]212[.]101"] == "webserver, network_connection"
+    assert rows["209[.]141[.]43[.]95"] == "network_connection on 80"
+    assert rows["/vpn/index[.]html"].startswith("none:")
