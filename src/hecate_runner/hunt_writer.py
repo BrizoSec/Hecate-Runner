@@ -132,11 +132,11 @@ def _defang_network_value(value: str) -> str:
 
 
 def _defang_prose_iocs(markdown: str, indicators: set[str]) -> str:
-    """Defang network indicators outside fenced query/code blocks.
+    """Defang network indicators in prose and Sigma provenance metadata.
 
-    Query fences remain byte-for-byte intact so reviewed detections can still
-    be copied and run. All other rendered hunt text, including quoted CTI,
-    indicator tables, and model-generated observables, is presentation text.
+    Detection code in fences remains byte-for-byte intact so reviewed queries
+    can still be copied and run. Prose, indicator tables, quoted CTI, and the
+    non-executable ``hecate_provenance`` YAML block are presentation text.
     """
     if not indicators:
         return markdown
@@ -148,12 +148,34 @@ def _defang_prose_iocs(markdown: str, indicators: set[str]) -> str:
     ]
     output: list[str] = []
     in_fence = False
+    yaml_fence = False
+    fence_character = ""
+    in_provenance = False
     for line in markdown.splitlines(keepends=True):
-        if re.match(r"^\s*(```|~~~)", line):
-            in_fence = not in_fence
+        fence = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
+        if fence:
+            if not in_fence:
+                in_fence = True
+                fence_character = fence.group(1)[0]
+                yaml_fence = fence.group(2).strip().lower() in {"yaml", "yml"}
+                in_provenance = False
+            elif fence.group(1)[0] == fence_character:
+                in_fence = False
+                yaml_fence = False
+                in_provenance = False
             output.append(line)
             continue
         if in_fence:
+            is_top_level_key = bool(re.match(r"^[A-Za-z_][A-Za-z0-9_-]*:\s*", line))
+            if yaml_fence and re.match(r"^hecate_provenance:\s*$", line):
+                in_provenance = True
+            elif in_provenance and is_top_level_key:
+                in_provenance = False
+            if in_provenance:
+                for pattern in patterns:
+                    line = pattern.sub(
+                        lambda match: _defang_network_value(match.group(0)), line
+                    )
             output.append(line)
             continue
         for pattern in patterns:
