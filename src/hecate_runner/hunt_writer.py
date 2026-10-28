@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -90,6 +91,75 @@ class DraftHuntRequest:
 #: so if this ever does truncate it says so in the text rather than leaving
 #: the audit to draw the wrong conclusion from silence.
 _MAX_EMBEDDED_CTI = 10_000
+
+
+_IPV4_TOKEN = re.compile(
+    r"(?<![\w.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}"
+    r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?![\w.])"
+)
+_URL_TOKEN = re.compile(r"(?i)\bhttps?://[^\s<>()\[\]{}\"']+")
+_DOMAIN_TOKEN = re.compile(
+    r"(?i)(?<![\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z]{2,63}(?![\w-])"
+)
+_COMMON_TLDS = frozenset(
+    "ai app asia au biz ca cc cloud cn co com de edu fr gov in info io ir jp me mil mobi "
+    "net nl nz online org pro ru shop site tech top tv uk us xyz za".split()
+)
+_NON_DOMAIN_SUFFIXES = frozenset(
+    "bat bin cache cmd conf config css csv dat dll docx drv exe gz htm html ini js jsx json "
+    "log md ocx pdf path preload ps1 psm1 py pyc registry scr security so sys tar ts tsx txt "
+    "vbe vbs wsh wsf xlsx xml yaml yml zip".split()
+)
+
+
+def _network_ioc_tokens(text: str) -> set[str]:
+    """Find IPv4, URL, and public-looking hostname literals in source text."""
+    tokens = {match.group(0).rstrip(".,;:!?") for match in _URL_TOKEN.finditer(text)}
+    tokens.update(match.group(0) for match in _IPV4_TOKEN.finditer(text))
+    for match in _DOMAIN_TOKEN.finditer(text):
+        value = match.group(0)
+        suffix = value.rsplit(".", 1)[-1].lower()
+        if suffix in _COMMON_TLDS and suffix not in _NON_DOMAIN_SUFFIXES:
+            tokens.add(value)
+    return {token for token in tokens if token}
+
+
+def _defang_network_value(value: str) -> str:
+    """Render a network IOC so prose cannot turn it into a live link or lookup."""
+    defanged = re.sub(r"(?i)^http", lambda match: "hxxp", value)
+    return defanged.replace(".", "[.]")
+
+
+def _defang_prose_iocs(markdown: str, indicators: set[str]) -> str:
+    """Defang network indicators outside fenced query/code blocks.
+
+    Query fences remain byte-for-byte intact so reviewed detections can still
+    be copied and run. All other rendered hunt text, including quoted CTI,
+    indicator tables, and model-generated observables, is presentation text.
+    """
+    if not indicators:
+        return markdown
+
+    patterns = [
+        re.compile(rf"(?<![\w.-]){re.escape(value)}(?![\w-])", re.IGNORECASE)
+        for value in sorted(indicators, key=len, reverse=True)
+        if "[.]" not in value
+    ]
+    output: list[str] = []
+    in_fence = False
+    for line in markdown.splitlines(keepends=True):
+        if re.match(r"^\s*(```|~~~)", line):
+            in_fence = not in_fence
+            output.append(line)
+            continue
+        if in_fence:
+            output.append(line)
+            continue
+        for pattern in patterns:
+            line = pattern.sub(lambda match: _defang_network_value(match.group(0)), line)
+        output.append(line)
+    return "".join(output)
 
 
 def embedded_cti(threat_intel: str) -> str:
@@ -974,7 +1044,49 @@ Source CTI:
 **Draft Created:** {req.generated_at.strftime("%Y-%m-%d %H:%M:%S UTC")} by hecate-runner
 **Next Review:** [Human review required before status can advance to `in-progress`]
 """
-    return frontmatter + body
+    prose_sources = [
+        req.threat_intel,
+        hyp.hypothesis,
+        hyp.justification,
+        hyp.actor,
+        hyp.behavior,
+        hyp.location,
+        hyp.evidence,
+        hyp.expected_malicious,
+        hyp.expected_benign,
+        hyp.falsification_criteria,
+        hyp.low_confidence_reason,
+        req.grounding_section,
+        *hyp.observables,
+        *hyp.false_positives,
+    ]
+    prose_sources.extend(str(record.get("value", "")) for record in req.indicator_records)
+    prose_sources.extend(str(rule.get("title", "")) for rule in req.sigma_rules)
+    prose_sources.extend(
+        str(artifact.get(field, ""))
+        for artifact in req.source_evidence.get("artifacts", [])
+        for field in ("value", "evidence")
+    )
+    for records, fields in (
+        (req.claim_audit, ("text", "reason")),
+        (req.claim_evidence, ("claim", "quote")),
+        (req.detection_guidance, ("text", "reason")),
+        (req.review_gaps, ("behaviour", "quote")),
+        (req.technique_evidence, ("passage", "behaviour")),
+    ):
+        prose_sources.extend(str(record.get(field, "")) for record in records for field in fields)
+    if req.bas_verification:
+        prose_sources.extend(str(note) for note in req.bas_verification.get("notes") or [])
+    network_iocs = _network_ioc_tokens("\n".join(str(value) for value in prose_sources))
+    network_iocs.update(
+        str(record.get("value", "")).strip()
+        for record in req.indicator_records
+        if (
+            str(record.get("type", "")).lower() in {"ipv4", "ip", "domain", "hostname", "url"}
+            and str(record.get("value", "")).strip()
+        )
+    )
+    return _defang_prose_iocs(frontmatter + body, network_iocs)
 
 
 def write_draft(req: DraftHuntRequest, hunts_root: Path) -> Path:
