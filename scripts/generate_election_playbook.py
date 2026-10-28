@@ -118,10 +118,11 @@ def main() -> None:
         "--workspace", type=Path, default=Path(__file__).resolve().parents[2] / "Hecate-Workspace"
     )
     parser.add_argument("--review-date", default="2026-10-27")
+    parser.add_argument("--manifest-name", default="final-rerun-manifest.json")
     args = parser.parse_args()
     w = args.workspace.resolve()
     review = w / "playbooks/elections/reviews" / args.review_date
-    manifest_path = review / "final-rerun-manifest.json"
+    manifest_path = review / args.manifest_name
     manifest = json.loads(manifest_path.read_text())
     if len(manifest) != 2 or any(
         r["exit_code"] != 0 or r.get("output_edits") != "none" for r in manifest
@@ -139,6 +140,12 @@ def main() -> None:
         facts.update(name=run["name"], source_url=run["source_url"])
         hunts.append(facts)
     integration = json.loads((review / "integrations.json").read_text())
+    gate_path = review / "latest-gate-recheck.json"
+    gate_data = json.loads(gate_path.read_text())
+    gate_rows = {row["hunt_id"]: row for row in gate_data["checks"]}
+    missing_gates = [h["hunt_id"] for h in hunts if h["hunt_id"] not in gate_rows]
+    if missing_gates:
+        raise ValueError("Missing grounding/promotion recheck for: " + ", ".join(missing_gates))
     blockers = [r for r in integration["checks"] if r["status"] == "fail"]
     status = Counter(r["status"] for r in integration["checks"])
     metadata = {
@@ -225,9 +232,30 @@ def main() -> None:
         "",
         "## Latest analyst gate review",
         "",
-        f"See the [latest grounding and promotion-policy recheck](reviews/{args.review_date}/latest-gate-recheck.json) and the [detailed analyst review](reviews/{args.review_date}/election_rerun_review.md). H-0896 passes the current grounding and structure checks, but its policy eligibility does not constitute analyst approval or live detection validation.",
+        f"See the [latest grounding and promotion-policy recheck](reviews/{args.review_date}/latest-gate-recheck.json) and the [detailed analyst review](reviews/{args.review_date}/election_rerun_review.md). Unsupported claims are retained in the generated hunt with their evidence status visible. Any hunt with unsupported claims requires qualified human review before merge; the publisher must disable auto-merge for that hunt.",
         "",
-        "H-0898 passes structure validation but currently has 8 unsupported grounding claims and is ineligible under the promotion policy. Resolve or remove those claims, especially values that may describe operator-side artifacts, then rerun grounding and promotion checks before considering promotion.",
+    ]
+    for h in hunts:
+        row = gate_rows[h["hunt_id"]]
+        grounding = row["grounding"]
+        policy = row["promotion_policy"]
+        if grounding["unsupported"] or policy["review_required"]:
+            values = ", ".join("`" + str(v) + "`" for v in grounding.get("unsupported_values", []))
+            suffix = f" Unsupported values: {values}." if values else ""
+            lines.append(
+                f"- **{h['hunt_id']}: human review required before merge.** "
+                f"Grounding: {grounding['cti_asserted']} source-asserted, "
+                f"{grounding['inferred']} inferred, {grounding['unsupported']} unsupported; "
+                f"promotion eligible: {str(policy['eligible']).lower()}; "
+                f"review required: {str(policy['review_required']).lower()}." + suffix
+            )
+        else:
+            lines.append(
+                f"- **{h['hunt_id']}: no unsupported claims were reported** in the recorded grounding check. "
+                f"Promotion eligible: {str(policy['eligible']).lower()}; review required: "
+                f"{str(policy['review_required']).lower()}. Eligibility alone is not analyst approval or live detection validation."
+            )
+    lines += [
         "",
         "## Integration readiness",
         "",
@@ -281,12 +309,12 @@ def main() -> None:
         "",
         "## Reproducibility",
         "",
-        f"See [the detailed review](reviews/{args.review_date}/election_rerun_review.md), [the rerun manifest](reviews/{args.review_date}/final-rerun-manifest.json), and [the artifact integrity record](reviews/{args.review_date}/playbook-build.json).",
+        f"See [the detailed review](reviews/{args.review_date}/election_rerun_review.md), [the rerun manifest](reviews/{args.review_date}/{args.manifest_name}), and [the artifact integrity record](reviews/{args.review_date}/playbook-build.json).",
         "",
         "From Hecate-Runner, regenerate this playbook with:",
         "",
         "```bash",
-        f".venv/bin/python scripts/generate_election_playbook.py --review-date {args.review_date}",
+        f".venv/bin/python scripts/generate_election_playbook.py --review-date {args.review_date} --manifest-name {args.manifest_name}",
         "```",
         "",
     ]

@@ -44,6 +44,7 @@ class HuntFacts:
     hunt_id: str = ""
     research_id: str = ""
     cti_text: str = ""
+    primary_source_text: str = ""
     cti_techniques: list[str] = field(default_factory=list)
 
     @property
@@ -103,10 +104,49 @@ def extract_cti_block(text: str) -> str:
     return "\n".join(collected).strip()
 
 
+def extract_primary_source_evidence(text: str) -> str:
+    """Recover only quoted, per-artifact evidence from the hunt's source table.
+
+    Do not trust the whole section: it also contains feed indicators whose
+    presence in the linked report may be unknown. A row is evidence only when
+    its final cell contains a quoted excerpt emitted by the source extractor.
+    """
+    lines = text.splitlines()
+    try:
+        start = next(
+            i for i, line in enumerate(lines) if line.strip() == "### Primary Source Evidence"
+        )
+    except StopIteration:
+        return ""
+    collected: list[str] = []
+    for line in lines[start + 1 :]:
+        stripped = line.strip()
+        if stripped.startswith("### ") or stripped.startswith("## "):
+            break
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if (
+            len(cells) < 5
+            or cells[0].startswith("---")
+            or cells[0].lower() in {"artifact", "indicator"}
+        ):
+            continue
+        value = cells[0].strip("`")
+        excerpt = cells[-1].strip()
+        if not cells[0].startswith("`"):
+            continue
+        if not value or not (excerpt.startswith('"') and excerpt.endswith('"')):
+            continue
+        collected.extend((value, excerpt.strip('"')))
+    return "\n".join(collected)
+
+
 def parse_hunt_file(text: str) -> HuntFacts:
     """Pull the audit's inputs back out of a finished hunt file."""
     lines = text.splitlines()
     cti = extract_cti_block(text)
+    primary_source = extract_primary_source_evidence(text)
 
     # Techniques the *source* asserted, not the ones the draft settled on --
     # the distinction between "asserted" and "derived" depends on it.
@@ -120,6 +160,7 @@ def parse_hunt_file(text: str) -> HuntFacts:
         hunt_id=_frontmatter_value(lines, "hunt_id"),
         research_id=_frontmatter_value(lines, "spawned_from"),
         cti_text=cti,
+        primary_source_text=primary_source,
         cti_techniques=techniques,
     )
 
@@ -184,7 +225,7 @@ def audit_hunt_text(
     facts = parse_hunt_file(text)
     report = audit_draft(
         draft_text=strip_grounding_section(text),
-        cti_text=facts.cti_text,
+        cti_text="\n".join(filter(None, (facts.cti_text, facts.primary_source_text))),
         research_text="",
         cti_techniques=facts.cti_techniques,
         technique_facts=technique_facts,

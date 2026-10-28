@@ -14,6 +14,7 @@ from pathlib import Path
 from hecate_runner.hunt_audit import (
     audit_hunt_text,
     extract_cti_block,
+    extract_primary_source_evidence,
     parse_hunt_file,
     replace_grounding_section,
     research_text_for,
@@ -85,6 +86,28 @@ def test_absent_marker_returns_empty_rather_than_guessing():
 def test_facts_expose_whether_cti_was_recoverable():
     assert parse_hunt_file(HUNT).has_cti is True
     assert parse_hunt_file("# no context").has_cti is False
+
+
+def test_primary_source_audit_uses_only_rows_with_verified_quotes():
+    text = """### Primary Source Evidence
+
+| Artifact | Kind | Role | Status | Evidence |
+|---|---|---|---|---|
+| `exp.py` | file_path | script | active | "The operator executed exp.py against targets." |
+
+**Indicators by role**
+
+| Indicator | Type | Role | Status | Confidence | Rules | Evidence |
+|---|---|---|---|---|---|---|
+| `bad.example` | domain | unknown | unknown | unknown | dns_query | unverified |
+| `c2.example` | domain | c2 | active | high | dns_query | "The report identifies c2.example as command infrastructure." |
+
+### Justification
+"""
+    recovered = extract_primary_source_evidence(text)
+    assert "exp.py" in recovered
+    assert "c2.example" in recovered
+    assert "bad.example" not in recovered
 
 
 # --- Frontmatter -----------------------------------------------------------

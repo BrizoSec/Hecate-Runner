@@ -381,9 +381,10 @@ def _render_source_evidence(req: DraftHuntRequest) -> str:
     lines = [
         "### Primary Source Evidence",
         "",
-        f"Extracted from [{url}]({url}) ({ev.get('chars', 0):,} characters). Every value below appears "
-        "verbatim in the report. A role or status without a quoted passage is recorded as unknown. "
-        "This is the report's account, not independent confirmation.",
+        f"Extracted from [{url}]({url}) ({ev.get('chars', 0):,} characters). Artifacts in the first table "
+        "were verified verbatim in the report. Feed indicators are listed separately; only indicators "
+        "with a quoted evidence passage are verified against this report. This is the report's account, "
+        "not independent confirmation.",
         "",
     ]
     behaviours = [a for a in ev.get("artifacts", []) if a.get("kind") not in _INDICATOR_KINDS]
@@ -400,13 +401,15 @@ def _render_source_evidence(req: DraftHuntRequest) -> str:
         lines += [
             "**Indicators by role** (the feed's indicators, typed against the report):",
             "",
-            "| Indicator | Type | Role | Status | Confidence | Rules |",
-            "|---|---|---|---|---|---|",
+            "| Indicator | Type | Role | Status | Confidence | Rules | Evidence |",
+            "|---|---|---|---|---|---|---|",
         ]
         for r in records:
+            evidence = f'"{_cell(r["evidence"])}"' if r.get("evidence") else "unverified"
             lines.append(
                 f"| `{_cell(r['value'], 70)}` | {r['type']} | {r.get('role', 'unknown')} | "
-                f"{r.get('status', 'unknown')} | {r.get('confidence', 'unknown')} | {_rule_placements(r)} |"
+                f"{r.get('status', 'unknown')} | {r.get('confidence', 'unknown')} | {_rule_placements(r)} | "
+                f"{evidence} |"
             )
         lines.append("")
     return "\n".join(lines) + "\n"

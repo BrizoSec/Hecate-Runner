@@ -140,6 +140,7 @@ def _snapshot_bundle(settings: Settings, hunt_id: str) -> tuple[dict[str, str], 
     policy = load_policy(workspace)
     if policy["publisher_login"].lower() != f"{settings.github_app_slug.lower()}[bot]":
         raise PublisherError("Configured GitHub App slug does not match promotion-policy.yaml")
+    decision = evaluate_promotion(workspace, hunt_id)
     manifest_path = f"promotion-manifests/{hunt_id}-{digest[:12]}.json"
     files[manifest_path] = (
         json.dumps(
@@ -149,7 +150,14 @@ def _snapshot_bundle(settings: Settings, hunt_id: str) -> tuple[dict[str, str], 
                 "sha256": digest,
                 "files": sorted(path for path in files),
                 "publisher": "hecate-runner",
-                "auto_merge": bool(policy["auto_merge"].get("enabled", False)),
+                # Never enable auto-merge for a review-classified hunt. The PR
+                # review workflow runs asynchronously; enabling auto-merge
+                # from the publisher can merge a risky bundle before that job
+                # gets a chance to enforce the human approval requirement.
+                "auto_merge": bool(policy["auto_merge"].get("enabled", False))
+                and decision.eligible,
+                "review_required": decision.review_required,
+                "promotion_reasons": decision.reasons,
                 "merge_method": policy["auto_merge"].get("merge_method", "squash"),
             },
             indent=2,
@@ -566,7 +574,7 @@ class GitHubAppClient:
     def _set_auto_merge(
         self, repo_path: str, pull_request: dict[str, Any], enabled: bool, merge_method: str
     ) -> bool:
-        """Configure auto-merge or merge directly if eligible and repository auto-merge is disabled."""
+        """Configure GitHub auto-merge without bypassing repository checks."""
         if not enabled:
             query = """mutation DisableAutoMerge($pullRequestId: ID!) {
               disablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId}) {
@@ -606,31 +614,16 @@ class GitHubAppClient:
             if not response.get("errors"):
                 return False  # Successfully enabled auto-merge queue on GitHub
             log.info(
-                "GraphQL auto-merge rejected for PR #%s: %s; attempting direct merge",
+                "GitHub auto-merge unavailable for PR #%s: %s; leaving PR open for checks/review",
                 pull_request.get("number"),
                 response.get("errors"),
             )
         except PublisherError as exc:
             log.info(
-                "GraphQL auto-merge failed for PR #%s (%s); attempting direct merge",
+                "GitHub auto-merge failed for PR #%s (%s); leaving PR open for checks/review",
                 pull_request.get("number"),
                 exc,
             )
-
-        # Fallback: If repo setting disables auto-merge mutation, merge directly if PR is clean
-        pr_number = pull_request.get("number")
-        try:
-            merge_res = self._request(
-                "PUT",
-                f"{repo_path}/pulls/{pr_number}/merge",
-                json={"merge_method": merge_method.lower()},
-            )
-            if merge_res.get("merged"):
-                log.info("Directly merged auto-eligible PR #%s into %s", pr_number, repo_path)
-                return True
-        except Exception as exc:
-            log.info("Direct merge fallback for PR #%s could not complete: %s", pr_number, exc)
-
         return False
 
 
@@ -643,7 +636,6 @@ def outbox_for(settings: Settings) -> PromotionOutbox:
 def enqueue_hunt(settings: Settings, hunt_id: str) -> str:
     # Hard policy blocks (for example TLP:RED) raise here. Review-classified
     # bundles are still published so a human can review them in GitHub.
-    evaluate_promotion(settings.hecate_workspace, hunt_id)
     files, digest = _snapshot_bundle(settings, hunt_id)
     return outbox_for(settings).enqueue(hunt_id, digest, files)
 

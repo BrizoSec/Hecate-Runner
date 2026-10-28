@@ -106,7 +106,8 @@ publisher_login: hecate-publisher[bot]
 
     # Create hunt draft with frontmatter
     (hunts_dir / "H-9999.md").write_text(
-        "---\nhunt_id: H-9999\ntitle: Test Hunt\n---\n# H-9999 Test Hunt", encoding="utf-8"
+        "---\nhunt_id: H-9999\ntitle: Test Hunt\nstatus: planning\n---\n# H-9999 Test Hunt",
+        encoding="utf-8",
     )
 
     # Create canonical YAML and transpiled query files
