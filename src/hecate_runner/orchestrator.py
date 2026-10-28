@@ -3170,31 +3170,25 @@ class Orchestrator:
                                 len(c2_domains),
                                 len(tags),
                             )
-                            # Merge discovered C2 infrastructure into item indicators
-                            for ip in c2_ips:
-                                if ip not in item_inds.setdefault("ipv4", []):
-                                    item_inds["ipv4"].append(ip)
-                            for dom in c2_domains:
-                                if dom not in item_inds.setdefault("domain", []):
-                                    item_inds["domain"].append(dom)
-
-                            # Merge discovered MITRE techniques
-                            item_techs = item.metadata.setdefault("techniques", [])
-                            for t in techs:
-                                if t not in item_techs:
-                                    item_techs.append(t)
+                            # Sandbox capabilities and contacts are secondary leads,
+                            # not assertions by the primary intrusion report. Merging
+                            # them into the source metadata bypassed technique
+                            # grounding and promoted benign contacts to campaign IOCs.
+                            item.metadata.setdefault("vt_behavior_graphs", []).append(
+                                {"sample_hash": chash, "graph": bg}
+                            )
 
                             # Build human-readable behavioral graph block
                             bg_lines = [f"#### 🧬 VirusTotal Behavioral Graph ({chash[:12]}...)"]
                             if techs:
                                 bg_lines.append(
-                                    f"- **Observed ATT&CK Techniques:** {', '.join(techs[:6])}"
+                                    f"- **Sandbox ATT&CK labels (context only):** {', '.join(techs[:6])}"
                                 )
                             if tags:
                                 bg_lines.append(f"- **Capability Tags:** {', '.join(tags[:6])}")
                             if c2_ips:
                                 bg_lines.append(
-                                    f"- **Contacted C2 Traffic:** {', '.join(c2_ips[:5])}"
+                                    f"- **Sandbox-contacted addresses (unverified role):** {', '.join(c2_ips[:5])}"
                                 )
                             if c2_domains:
                                 bg_lines.append(
