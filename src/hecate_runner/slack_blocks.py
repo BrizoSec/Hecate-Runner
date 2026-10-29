@@ -324,7 +324,7 @@ def build_hunt_completed_card(
         }
     )
 
-    return [{"color": COLOR_SUCCESS, "blocks": blocks}]
+    return [{"color": COLOR_INFO, "blocks": blocks}]
 
 
 def build_purple_team_card(
