@@ -126,8 +126,11 @@ def test_vt_graph_preserves_source_assertions_and_keeps_sample_context_separate(
     provider.next_item.return_value = item
     monkeypatch.setattr("hecate_agent.api.extract_indicators", lambda _: {"hashes": [sample]})
     monkeypatch.setattr("hecate_agent.api.generate_enrichment_summary", lambda _: "")
-    graph = {"mitre_techniques": [{"id": "T1485"}],
-        "contacted_ips": ["203.0.113.9"], "contacted_domains": ["sandbox-only.test"]}
+    graph = {
+        "mitre_techniques": [{"id": "T1485"}],
+        "contacted_ips": ["203.0.113.9"],
+        "contacted_domains": ["sandbox-only.test"],
+    }
     monkeypatch.setattr("hecate_agent.api.extract_vt_behavior_graph", lambda _: graph)
 
     result = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()

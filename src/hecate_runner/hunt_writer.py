@@ -103,13 +103,99 @@ _DOMAIN_TOKEN = re.compile(
     r"[a-z]{2,63}(?![\w-])"
 )
 _COMMON_TLDS = frozenset(
-    "ai app asia au biz ca cc cloud cn co com de edu fr gov in info io ir jp me mil mobi "
-    "net nl nz online org pro ru shop site tech top tv uk us xyz za".split()
+    [
+        "ai",
+        "app",
+        "asia",
+        "au",
+        "biz",
+        "ca",
+        "cc",
+        "cloud",
+        "cn",
+        "co",
+        "com",
+        "de",
+        "edu",
+        "fr",
+        "gov",
+        "in",
+        "info",
+        "io",
+        "ir",
+        "jp",
+        "me",
+        "mil",
+        "mobi",
+        "net",
+        "nl",
+        "nz",
+        "online",
+        "org",
+        "pro",
+        "ru",
+        "shop",
+        "site",
+        "tech",
+        "top",
+        "tv",
+        "uk",
+        "us",
+        "xyz",
+        "za",
+    ]
 )
 _NON_DOMAIN_SUFFIXES = frozenset(
-    "bat bin cache cmd conf config css csv dat dll docx drv exe gz htm html ini js jsx json "
-    "log md ocx pdf path preload ps1 psm1 py pyc registry scr security so sys tar ts tsx txt "
-    "vbe vbs wsh wsf xlsx xml yaml yml zip".split()
+    [
+        "bat",
+        "bin",
+        "cache",
+        "cmd",
+        "conf",
+        "config",
+        "css",
+        "csv",
+        "dat",
+        "dll",
+        "docx",
+        "drv",
+        "exe",
+        "gz",
+        "htm",
+        "html",
+        "ini",
+        "js",
+        "jsx",
+        "json",
+        "log",
+        "md",
+        "ocx",
+        "pdf",
+        "path",
+        "preload",
+        "ps1",
+        "psm1",
+        "py",
+        "pyc",
+        "registry",
+        "scr",
+        "security",
+        "so",
+        "sys",
+        "tar",
+        "ts",
+        "tsx",
+        "txt",
+        "vbe",
+        "vbs",
+        "wsh",
+        "wsf",
+        "xlsx",
+        "xml",
+        "yaml",
+        "yml",
+        "zip",
+    ]
 )
 
 
@@ -173,9 +259,7 @@ def _defang_prose_iocs(markdown: str, indicators: set[str]) -> str:
                 in_provenance = False
             if in_provenance:
                 for pattern in patterns:
-                    line = pattern.sub(
-                        lambda match: _defang_network_value(match.group(0)), line
-                    )
+                    line = pattern.sub(lambda match: _defang_network_value(match.group(0)), line)
             output.append(line)
             continue
         for pattern in patterns:
