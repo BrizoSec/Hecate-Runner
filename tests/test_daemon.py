@@ -16,6 +16,7 @@ runner = CliRunner()
 
 @pytest.fixture
 def cli_env(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr("hecate_runner.integration_checks.start_health_refresh", lambda _: None)
     monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))
     monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "10")
     monkeypatch.setenv("HECATE_RUNNER_DAEMON_INTERVAL_SEC", "1")

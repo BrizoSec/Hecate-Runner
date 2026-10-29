@@ -247,3 +247,57 @@ uv run pytest tests/test_daemon.py
 ## 📄 License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
+
+## Structured CTI sources and confirmed health
+
+Enable sources with `hecate-runner sources enable <name>`. Public repository
+sources use `GITHUB_TOKEN` when configured for higher API rate limits. They poll
+hourly, compare immutable blob revisions, and queue changed entries durably.
+First use establishes a baseline; it does not backfill the entire catalog. An
+acknowledgment consumes one entry, while fetch/schema/rate-limit failures retain
+pending work. At most ten filtered entries are examined per poll.
+
+| Provider | Intake and enrichment |
+| --- | --- |
+| `lolbas` | Changed [LOLBAS](https://github.com/LOLBAS-Project/LOLBAS) YAML procedures, including exact decoded command strings and ATT&CK IDs; named binary enrichment. |
+| `loldrivers` | Changed [LOLDrivers](https://github.com/magicsword-io/LOLDrivers) entries and vulnerable sample hashes; hash lookup against the official JSON API with a daily cache and snapshot digest. |
+| `gtfobins` | Changed [GTFOBins](https://github.com/GTFOBins/GTFOBins.github.io) YAML entries (including extensionless files), function commands and privilege contexts; named binary enrichment. |
+| `nuclei` | Changed HTTP CVE [templates](https://github.com/projectdiscovery/nuclei-templates), in priority tier 1 beside KEV. Requires live KEV membership or FIRST EPSS at the configured `HECATE_RUNNER_FIRST_ORG_MIN_EPSS` and `HECATE_RUNNER_FIRST_ORG_MIN_PERCENTILE` thresholds (defaults 0.5 and 0.85). Embedded template EPSS scores do not authorize intake. FIRST scores older than three days, malformed responses and API outages defer processing. |
+| `cisa_advisories` | Dedicated [CISA advisory feed](https://www.cisa.gov/cybersecurity-advisories/all.xml) with a browser user agent and full article retrieval for narrative AA/CSA reports; independent official [CISA CSAF IT](https://github.com/cisagov/CSAF) deltas. A failed narrative channel remains red even when CSAF works. |
+| `cisa_ics` | Official CISA CSAF OT advisories, preserving notes, CVEs, versions and original documents. Legacy TLP:WHITE maps explicitly to TLP:CLEAR. |
+| `attack_deltas` | Monthly commit-pinned [MITRE ATT&CK STIX](https://github.com/mitre-attack/attack-stix-data) enterprise and ICS deltas. Changed techniques and procedure examples become deep-track items only for techniques without a non-archived hunt. Timestamp/version-only changes and revoked/deprecated objects are ignored; pending items are checked again against current coverage. |
+
+Catalogs, Nuclei and ATT&CK deltas use the deep research route. Catalog and template
+examples are reference capabilities, never claims of an observed intrusion.
+Their domains and placeholders are excluded from incident IOC extraction and
+secondary OSINT queries. Catalog enrichments remain background context, separate
+from primary incident evidence; disable them with
+`HECATE_RUNNER_CATALOG_ENRICHMENT_ENABLED=false`.
+
+Structured primary sources retain exact source text and revision. Catalog command
+values produce deterministic reference candidates only when they include a
+specific argument. Nuclei retains method, path, headers, body, raw requests,
+extractors and response matchers separately. Concrete request methods/URIs produce
+Sigma candidates and source-based replay events without inferred methods or
+invented matcher values. Template DSL, variables, scanner callbacks and fetched
+commands are never executed. Unresolved paths, request bodies and custom headers
+remain in the source for analyst mapping; they are not silently translated into
+unavailable web-log fields. HTTP KQL requires a real deployed table mapping;
+unsupported target conversions retain explicit rejection reasons.
+
+`hecate-runner sources check` performs read-only connectivity/schema checks and
+writes local health records under `.hecate/integrations/`; it neither advances CTI
+cursors nor creates hunts. The daemon refreshes these checks hourly in a background
+thread. The monitor shows **green only for enabled integrations confirmed within
+the past two hours**. Failed, disabled, unconfigured, stale and unconfirmed
+integrations are **red**, and disabled integrations remain visible in the grid.
+CISA narrative and CSAF health are shown separately. An unconfigured OpenCTI
+instance is unconfirmed, even though the existing provider has a test-data fallback.
+
+Intentionally filtered Nuclei entries retain the last 200 decisions, with reasons
+and pinned source revisions, in `.hecate/source-decisions/nuclei.json`. Cursors,
+health records and catalog caches are runtime state, not content to commit.
+`hecate-runner sources reset <name>` resets delta sources to a fresh baseline on
+their next poll. Restart the daemon and reopen the monitor after installing an
+update so both processes load the new code and configuration.

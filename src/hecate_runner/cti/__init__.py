@@ -2,22 +2,29 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from hecate_runner.config import Settings
 from hecate_runner.cti.abuse_ch import AbuseChProvider
 from hecate_runner.cti.anyrun import AnyRunProvider
+from hecate_runner.cti.attack_deltas import AttackDeltaProvider
 from hecate_runner.cti.base import ATTACK_TECHNIQUE_LINE, CTIItem, CTIProvider
+from hecate_runner.cti.catalogs import GTFOBinsProvider, LolbasProvider, LolDriversProvider
 from hecate_runner.cti.censys_c2 import CensysC2Provider
 from hecate_runner.cti.certstream import CertStreamProvider
+from hecate_runner.cti.cisa_advisories import CisaAdvisoryProvider, CisaICSProvider
 from hecate_runner.cti.cisa_kev import CisaKevProvider
 from hecate_runner.cti.cloud_threat import CloudThreatProvider
 from hecate_runner.cti.dfir_report import DfirReportProvider
 from hecate_runner.cti.file_queue import FileQueueProvider
 from hecate_runner.cti.first_org import FirstOrgProvider
+from hecate_runner.cti.github_delta import GitHubDeltaProvider
 from hecate_runner.cti.github_poc import GitHubPocProvider
 from hecate_runner.cti.malwarebazaar import MalwareBazaarProvider
 from hecate_runner.cti.misp import MispProvider
 from hecate_runner.cti.msrc import MsrcProvider
 from hecate_runner.cti.multi import MultiProvider
+from hecate_runner.cti.nuclei import NucleiProvider
 from hecate_runner.cti.opencti import OpenCTIProvider
 from hecate_runner.cti.otx import OtxProvider
 from hecate_runner.cti.rss import RssProvider
@@ -57,6 +64,26 @@ __all__ = [
 
 def get_provider(name: str, *, settings: Settings) -> CTIProvider:
     """Factory that returns a CTI provider by name."""
+    references: dict[str, type[GitHubDeltaProvider] | type[AttackDeltaProvider]] = {
+        "lolbas": LolbasProvider,
+        "loldrivers": LolDriversProvider,
+        "gtfobins": GTFOBinsProvider,
+        "nuclei": NucleiProvider,
+        "cisa_advisories": CisaAdvisoryProvider,
+        "cisa_ics": CisaICSProvider,
+        "attack_deltas": AttackDeltaProvider,
+    }
+    if name in references:
+        options: dict[str, Any] = {
+            "workspace": settings.hecate_workspace,
+            "github_token": settings.github_token,
+        }
+        if name == "nuclei":
+            options.update(
+                min_epss=settings.first_org_min_epss,
+                min_percentile=settings.first_org_min_percentile,
+            )
+        return references[name](**options)
     if name == "file":
         return FileQueueProvider(queue_dir=settings.cti_queue_dir_resolved)
     if name == "otx":

@@ -249,16 +249,24 @@ def daemon(
         )
     )
 
+    from hecate_runner.integration_checks import start_health_refresh
+
     cycles_completed = 0
     try:
         while not stop_event.is_set():
+            start_health_refresh(settings)
             if force:
                 orch = build_default_orchestrator(settings, ignore_quota=True)
             else:
                 orch = build_default_orchestrator(settings)
 
             log.info("Daemon executing cycle #%d...", cycles_completed + 1)
-            result = orch.run_once(dry_run=dry_run)
+            try:
+                result = orch.run_once(dry_run=dry_run)
+            finally:
+                provider = getattr(orch, "cti", None)
+                if provider is not None:
+                    provider.close()
             _print_result(result)
             cycles_completed += 1
 
@@ -2455,6 +2463,24 @@ sources_app = typer.Typer(help="Manage CTI sources (list, enable, disable, reset
 app.add_typer(sources_app, name="sources")
 
 
+@sources_app.command("check")
+def check_sources() -> None:
+    """Confirm read-only connectivity and record monitor health (no hunts or messages)."""
+    from hecate_runner.integration_checks import check_integrations
+
+    results = check_integrations(Settings())
+    table = Table(title="Confirmed integration health")
+    table.add_column("Integration")
+    table.add_column("Status")
+    table.add_column("Detail")
+    for name, result in sorted(results.items()):
+        ok = result["healthy"] and result["enabled"]
+        table.add_row(
+            name, "[green]confirmed[/green]" if ok else "[red]unavailable[/red]", result["detail"]
+        )
+    Console().print(table)
+
+
 @sources_app.command("list")
 def list_sources() -> None:
     """List all CTI sources, their configuration status, and active state."""
@@ -2482,6 +2508,22 @@ def list_sources() -> None:
             dt = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
             return f"Exists (last updated {dt})"
         return "None"
+
+    for name in (
+        "lolbas",
+        "loldrivers",
+        "gtfobins",
+        "nuclei",
+        "cisa_advisories",
+        "cisa_ics",
+        "attack_deltas",
+    ):
+        table.add_row(
+            name,
+            format_active(name),
+            "Public repository / dedicated feed",
+            cursor_status(settings.hecate_workspace / ".cursors" / f"{name}_cursor.json"),
+        )
 
     # OTX
     otx_cred = "API Key present" if settings.otx_api_key else "Missing API Key"
@@ -2717,6 +2759,13 @@ def enable_source(name: str) -> None:
         "first_org",
         "anyrun",
         "opencti",
+        "lolbas",
+        "loldrivers",
+        "gtfobins",
+        "nuclei",
+        "cisa_advisories",
+        "cisa_ics",
+        "attack_deltas",
         "file",
     }
     if name not in valid:
@@ -2790,7 +2839,7 @@ def disable_source(name: str) -> None:
 
 @sources_app.command("reset")
 def reset_cursor(name: str) -> None:
-    """Reset a CTI source's cursor to force re-ingestion."""
+    """Reset source state; delta sources establish a fresh baseline on their next poll."""
     import os
 
     from rich.console import Console
@@ -2822,6 +2871,21 @@ def reset_cursor(name: str) -> None:
         "anyrun": settings.anyrun_cursor_file,
         "opencti": settings.opencti_cursor_file,
     }
+
+    for source in (
+        "lolbas",
+        "loldrivers",
+        "gtfobins",
+        "nuclei",
+        "cisa_advisories",
+        "cisa_ics",
+        "attack_deltas",
+    ):
+        cursors[source] = settings.hecate_workspace / ".cursors" / f"{source}_cursor.json"
+    if name == "cisa_advisories":
+        (settings.hecate_workspace / ".cursors" / "cisa_narrative_feed.json").unlink(
+            missing_ok=True
+        )
 
     if name not in cursors:
         console.print(f"[red]Error:[/red] Unknown source or source without cursor '{name}'.")

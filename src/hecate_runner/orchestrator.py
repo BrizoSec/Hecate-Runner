@@ -1221,6 +1221,45 @@ class Orchestrator:
         indicators = dict(item.metadata.get("indicators") or {})
         if not self.settings.source_evidence_enabled:
             return
+        # These providers retain their complete parsed source and immutable revision.
+        # Parsed YAML scalar values are verified against the retained source text.
+        if item.source in {
+            "lolbas",
+            "loldrivers",
+            "gtfobins",
+            "nuclei",
+            "cisa_ics",
+            "attack_deltas",
+        } or (item.source == "cisa_advisories" and item.metadata.get("structured_document")):
+            from hecate_agent.core.source_evidence import SourceArtifact, SourceEvidence
+
+            artifacts = []
+            for raw in item.metadata.get("source_artifacts", []):
+                value = str(raw.get("value", ""))
+                if value and value in item.content:
+                    artifacts.append(
+                        SourceArtifact(
+                            value=value,
+                            kind=str(raw.get("kind", "command_line")),
+                            role=str(raw.get("role", "documented reference")),
+                            status="unknown",
+                            evidence=value,
+                        )
+                    )
+            self._source_evidence = SourceEvidence(
+                url=item.source_url or "",
+                chars=len(item.content),
+                chunks=1,
+                artifacts=artifacts,
+                text=item.content,
+            )
+            self.trail.step(
+                "source",
+                "retained structured primary source at revision %s; %d literal artifact(s)",
+                str(item.metadata.get("source_revision", ""))[:40],
+                len(artifacts),
+            )
+            return
         from hecate_agent.core.source_evidence import report_urls
 
         urls = report_urls(item.content, item.source_url)
@@ -1946,6 +1985,8 @@ class Orchestrator:
         )
         out_dir = self.settings.hecate_workspace / "queries" / req.hunt_id
 
+        from hecate_runner.cti.reference_rules import reference_candidates
+
         payload = {
             "hunt_id": req.hunt_id,
             "threat_intel": item.content,
@@ -1967,7 +2008,10 @@ class Orchestrator:
             "detection_guidance": self._detection_guidance,
             "source_artifacts": self._source_artifacts(),
             "review_rules": self.settings.sigma_review_enabled,
-            "observed_commands": self._observed_commands(item, req.platforms),
+            "observed_commands": []
+            if item.metadata.get("reference_only")
+            else self._observed_commands(item, req.platforms),
+            "reference_candidates": reference_candidates(item.metadata),
         }
         import json
 
@@ -2240,6 +2284,7 @@ class Orchestrator:
             techniques=techniques,
             enable_atomic=enable_atomic,
             platforms=platforms,
+            http_requests=item.metadata.get("http_requests"),
         )
 
         req.purple_team_atomic_techniques = techniques if enable_atomic else []
@@ -2762,6 +2807,11 @@ class Orchestrator:
         for m in re.finditer(r"\bCVE-\d{4}-\d{4,7}\b", item.title or "", re.IGNORECASE):
             cves.add(m.group(0).upper())
 
+        # A request-bearing template adds evidence that an earlier KEV/CVE inventory lacked.
+        # Its pinned source URL still deduplicates the exact template revision.
+        if item.source == "nuclei" and item.metadata.get("http_requests"):
+            cves.clear()
+
         now = datetime.datetime.now(datetime.UTC)
         max_cve_age_sec = 3 * 86400  # 72 hours deduplication window
 
@@ -2917,7 +2967,7 @@ class Orchestrator:
         log.info("Picked up CTI item from %s (%d chars)", item.source, len(item.content))
         self.metrics.set_source(item.source, item.identifier)
 
-        is_sweep = (
+        is_sweep = item.metadata.get("processing_track") != "deep" and (
             bool(parse_indicator_inventory(item.content))
             if not has_narrative(item.content)
             else False
@@ -2988,7 +3038,9 @@ class Orchestrator:
         # search for) and constrains hypothesis generation afterwards
         # (nothing real to infer a behavior from).
         source_is_indicator_only = _indicator_only_source(item)
-        intel_has_narrative = not source_is_indicator_only and has_narrative(item.content)
+        intel_has_narrative = not source_is_indicator_only and (
+            item.metadata.get("processing_track") == "deep" or has_narrative(item.content)
+        )
         if not intel_has_narrative:
             log.info(
                 "CTI item has no behavior evidence (indicator/sample metadata); disabling web search and "
@@ -3071,7 +3123,9 @@ class Orchestrator:
             else "Enriching CTI observables via OSINT sources..."
         )
         try:
-            indicators = extract_indicators(item.content)
+            indicators = (
+                {} if item.metadata.get("reference_only") else extract_indicators(item.content)
+            )
             ips_count = len(indicators.get("ips", []))
             hashes_count = len(indicators.get("hashes", []))
             domains_count = len(indicators.get("domains", []))
@@ -3135,8 +3189,56 @@ class Orchestrator:
             log.warning("Indicator extraction failed before enrichment: %s", exc)
 
         self._enriched_context = (
-            "" if source_is_indicator_only else generate_enrichment_summary(item.content)
+            ""
+            if source_is_indicator_only or item.metadata.get("reference_only")
+            else generate_enrichment_summary(item.content)
         )
+
+        if self.settings.catalog_enrichment_enabled and not item.metadata.get("reference_only"):
+            import json
+
+            from hecate_runner.cti import get_provider
+
+            enabled = (
+                self.settings.cti_multi_provider_names
+                if self.settings.cti_provider == "multi"
+                else [self.settings.cti_provider]
+            )
+            for catalog in ("lolbas", "loldrivers", "gtfobins"):
+                if catalog not in enabled:
+                    continue
+                from hecate_runner.cti.catalogs import CatalogProvider
+
+                provider = get_provider(catalog, settings=self.settings)
+                if not isinstance(provider, CatalogProvider):
+                    continue
+                try:
+                    matches = provider.enrich(item.content)
+                    if matches:
+                        self._enriched_context += (
+                            "\nSecondary capability reference (not incident evidence):\n"
+                            + json.dumps(matches)
+                        )
+                        self.trail.step(
+                            "enrichment",
+                            "%s: %d documented capability reference(s)",
+                            catalog,
+                            len(matches),
+                        )
+                except Exception as exc:
+                    from hecate_runner.integration_health import record_health
+
+                    record_health(
+                        self.settings.hecate_workspace,
+                        catalog,
+                        False,
+                        "catalog enrichment fetch/schema failure",
+                    )
+                    log.warning(
+                        "Catalog enrichment %s unavailable: %s", catalog, type(exc).__name__
+                    )
+                finally:
+                    provider.close()
 
         # Tier 5: VirusTotal v3 Behavioral Graph expansion
         vt_behavior_blocks: list[str] = []
