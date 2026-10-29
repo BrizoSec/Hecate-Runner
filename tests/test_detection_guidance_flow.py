@@ -100,7 +100,8 @@ def test_the_draft_lists_each_item_with_where_it_runs(
     section = draft.split("### Detection Guidance from the Source", 1)[1].split(
         "### Hunting Queries", 1
     )[0]
-    assert f"Quoted from the detection section of {REPORT}." in section
+    assert "Quoted from the detection section of hxxps://report[.]example/vshell." in section
+    assert REPORT not in section
     assert (
         '| G2 | "Resume-themed executables launching cmd.exe and then Word" | Sigma | '
         "cmd.exe launching winword.exe |" in section
