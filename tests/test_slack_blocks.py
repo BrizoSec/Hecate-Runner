@@ -60,7 +60,7 @@ def test_build_hunt_completed_card() -> None:
         misp_event_id="140",
     )
     assert len(cards) == 1
-    assert cards[0]["color"] == COLOR_INFO
+    assert cards[0]["color"] == COLOR_SUCCESS
 
     blocks = cards[0]["blocks"]
     assert blocks[0]["type"] == "header"
