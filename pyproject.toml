@@ -37,6 +37,7 @@ dependencies = [
     # grounding and Sigma validation were all silently inert.
     "hecate-agent[all]",
     "slack-bolt>=1.20.0",
+    "beautifulsoup4>=4.12",
 ]
 
 [project.optional-dependencies]

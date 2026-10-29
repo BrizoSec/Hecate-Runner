@@ -91,6 +91,7 @@ def replay_events(
     techniques: Iterable[str] = (),
     enable_atomic: bool = True,
     platforms: list[str] | None = None,
+    http_requests: list[dict[str, Any]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """``{logsource category: [event, ...]}`` from typed indicators, behaviour artifacts,
     and dynamic Atomic Red Team adversary emulation.
@@ -367,9 +368,26 @@ def replay_events(
         )
 
     # Synthesize webserver and proxy events when web endpoints or paths are present in CTI
-    web_endpoints = re.findall(
-        r"/(?:api|v\d+|wp-admin|console|owa|autodiscover|actuator|oa_servlets|OA_HTML|scripts|logon|vpn|nitro|mgmt|rest)/[a-zA-Z0-9_\-./?=&#%]+",
-        combined_intel,
+    from hecate_runner.cti.reference_rules import template_requests
+
+    for request in template_requests(http_requests or []):
+        path, _, query = request["uri"].partition("?")
+        add(
+            "webserver",
+            {
+                "cs-method": request["method"],
+                "cs-uri-stem": path,
+                **({"cs-uri-query": query} if query else {}),
+                "c-uri": request["uri"],
+            },
+        )
+    web_endpoints = (
+        []
+        if http_requests is not None
+        else re.findall(
+            r"/(?:api|v\d+|wp-admin|console|owa|autodiscover|actuator|oa_servlets|OA_HTML|scripts|logon|vpn|nitro|mgmt|rest)/[a-zA-Z0-9_\-./?=&#%]+",
+            combined_intel,
+        )
     )
     for ep in web_endpoints:
         path = ep.split("?")[0]

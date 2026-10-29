@@ -50,6 +50,10 @@ class CTIProvider(ABC):
 
     name: str = "abstract"
 
+    def close(self) -> None:
+        """Release provider resources when a polling cycle ends."""
+        return None
+
     @abstractmethod
     def next_item(self) -> CTIItem | None:
         """Return the next CTI item, or None if none is available."""

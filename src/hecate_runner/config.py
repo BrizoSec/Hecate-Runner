@@ -183,6 +183,13 @@ class Settings(BaseSettings):
         "first_org",
         "anyrun",
         "opencti",
+        "lolbas",
+        "loldrivers",
+        "gtfobins",
+        "nuclei",
+        "cisa_advisories",
+        "cisa_ics",
+        "attack_deltas",
         "multi",
     ] = Field(
         default="file",
@@ -202,6 +209,11 @@ class Settings(BaseSettings):
             "cycle; after that, which source gets first pick round-robins "
             "automatically so one high-volume source can't crowd out the others."
         ),
+    )
+    catalog_enrichment_enabled: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_CATALOG_ENRICHMENT_ENABLED",
+        description="Enrich named binaries/driver hashes using enabled catalogs as background capability context.",
     )
     log_max_bytes: int = Field(
         default=5 * 1024 * 1024,

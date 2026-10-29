@@ -54,9 +54,15 @@ class MultiCursorState:
         atomic_write_text(path, json.dumps({"next_index": self.next_index}))
 
 
-TIER_1_CRITICAL: frozenset[str] = frozenset({"cisa_kev", "vulncheck", "github_poc"})
+TIER_1_CRITICAL: frozenset[str] = frozenset({"cisa_kev", "vulncheck", "github_poc", "nuclei"})
 TIER_2_THREAT_FEEDS: frozenset[str] = frozenset(
     {
+        "lolbas",
+        "loldrivers",
+        "gtfobins",
+        "cisa_advisories",
+        "cisa_ics",
+        "attack_deltas",
         "otx",
         "misp",
         "malwarebazaar",
@@ -96,6 +102,10 @@ class MultiProvider(CTIProvider):
         self._by_name = {p.name: p for p in providers}
 
     # --- CTIProvider interface -----------------------------------------------
+
+    def close(self) -> None:
+        for provider in self.providers:
+            provider.close()
 
     def next_item(self) -> CTIItem | None:
         cursor = MultiCursorState.load(self.cursor_file)
