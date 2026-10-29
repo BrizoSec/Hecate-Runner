@@ -1060,6 +1060,7 @@ class Settings(BaseSettings):
         "slack_bot_token",
         "slack_app_token",
         "misp_api_key",
+        "caldera_api_key",
         "urlscan_api_key",
         "spur_api_key",
         "mnemonic_api_key",
