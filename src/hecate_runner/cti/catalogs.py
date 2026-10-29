@@ -127,9 +127,13 @@ class LolDriversProvider(CatalogProvider):
     repo = "magicsword-io/LOLDrivers"
     prefix = "yaml/"
 
+    max_catalog_bytes = 64_000_000
+
     def enrich(self, text: str, limit: int = 3) -> list[dict[str, Any]]:
-        # Driver entries have UUID filenames: match their authoritative hash
-        # catalog, not UUID stems or guessed binary names.
+        # UUID filenames cannot be matched to binaries. The public JSON includes
+        # large PE metadata, so stream with a hard bound and cache only evidence
+        # needed for hash correlation, plus the original response digest.
+        import hashlib
         import json
         import time
 
@@ -140,19 +144,53 @@ class LolDriversProvider(CatalogProvider):
             return []
         cache = self.workspace / ".hecate" / "catalogs" / "loldrivers.json"
         if cache.exists() and time.time() - cache.stat().st_mtime < 86400:
-            entries = json.loads(cache.read_text())
+            cached = json.loads(cache.read_text())
+            entries = cached["entries"]
+            snapshot = cached["snapshot_sha256"]
         else:
-            r = self.client.get("https://www.loldrivers.io/api/drivers.json")
-            r.raise_for_status()
-            if len(r.content) > 30_000_000:
-                raise ValueError("driver catalog exceeds size limit")
-            entries = r.json()
-            if not isinstance(entries, list):
+            payload = bytearray()
+            with self.client.stream(
+                "GET", "https://www.loldrivers.io/api/drivers.json"
+            ) as response:
+                response.raise_for_status()
+                for chunk in response.iter_bytes():
+                    if len(payload) + len(chunk) > self.max_catalog_bytes:
+                        raise ValueError("driver catalog exceeds size limit; prior cache retained")
+                    payload.extend(chunk)
+            source = json.loads(payload)
+            if (
+                not isinstance(source, list)
+                or not source
+                or any(not isinstance(e, dict) for e in source)
+            ):
                 raise ValueError("invalid driver catalog")
-            atomic_write_text(cache, json.dumps(entries))
-        import hashlib
-
-        snapshot = hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
+            snapshot = hashlib.sha256(payload).hexdigest()
+            entries = []
+            for entry in source:
+                pruned = {
+                    k: entry[k]
+                    for k in (
+                        "Id",
+                        "Tags",
+                        "Category",
+                        "Description",
+                        "MitreID",
+                        "Commands",
+                        "Resources",
+                    )
+                    if k in entry
+                }
+                pruned["KnownVulnerableSamples"] = [
+                    {
+                        k: sample[k]
+                        for k in ("Filename", "OriginalFilename", "SHA256", "SHA1", "MD5")
+                        if k in sample
+                    }
+                    for sample in entry.get("KnownVulnerableSamples", [])
+                    if isinstance(sample, dict)
+                ]
+                entries.append(pruned)
+            atomic_write_text(cache, json.dumps({"snapshot_sha256": snapshot, "entries": entries}))
         return [
             {
                 "catalog": self.name,
@@ -163,9 +201,8 @@ class LolDriversProvider(CatalogProvider):
             }
             for entry in entries
             if any(
-                str(s.get("SHA256", "")).lower() in hashes
-                for s in entry.get("KnownVulnerableSamples", [])
-                if isinstance(s, dict)
+                str(sample.get("SHA256", "")).lower() in hashes
+                for sample in entry.get("KnownVulnerableSamples", [])
             )
         ][:limit]
 

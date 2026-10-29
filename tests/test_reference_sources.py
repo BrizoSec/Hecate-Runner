@@ -435,3 +435,43 @@ def test_gtfobins_frontmatter_fence_is_a_line_not_a_command_substring(tmp_path: 
     provider = GTFOBinsProvider(tmp_path, client=client)
     raw, data = provider.fetch_entry(NEW, "_gtfobins/printf")
     assert raw == body and data["functions"]["shell"][0]["code"] == "printf '---'"
+
+
+def test_driver_cache_excludes_pe_metadata_and_oversize_download_keeps_prior_cache(
+    tmp_path: Path,
+) -> None:
+    source = [{"Id": "one", "KnownVulnerableSamples": [{"SHA256": "a" * 64, "PE": "x" * 1024}]}]
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=source)))
+    provider = LolDriversProvider(tmp_path, client=client)
+    matches = provider.enrich("a" * 64)
+    assert matches and "PE" not in matches[0]["entry"]["KnownVulnerableSamples"][0]
+    cache = tmp_path / ".hecate/catalogs/loldrivers.json"
+    previous = cache.read_text()
+    assert "PE" not in previous
+    import os
+
+    os.utime(cache, (0, 0))
+    provider.max_catalog_bytes = 20
+    with pytest.raises(ValueError, match="exceeds size limit"):
+        provider.enrich("a" * 64)
+    assert cache.read_text() == previous
+
+
+def test_catalog_shell_chains_do_not_require_shell_separators_in_child_process_telemetry() -> None:
+    from hecate_runner.cti.reference_rules import shell_segments
+
+    command = r"sc.exe create vulnerable binPath=C:\Windows\Temp\driver.sys type=kernel && sc.exe start vulnerable"
+    candidates = reference_candidates(
+        {
+            "evidence_profile": "behavior_catalog",
+            "platform": "Windows",
+            "source_artifacts": [{"kind": "command_line", "value": command}],
+        }
+    )
+    assert len(candidates) == 2
+    assert all("&&" not in c["detection"]["selection"]["CommandLine|contains"] for c in candidates)
+    assert "type=kernel" in candidates[0]["detection"]["selection"]["CommandLine|contains"]
+    assert shell_segments('bash -c "echo a && echo b" && bash -p') == [
+        'bash -c "echo a && echo b"',
+        "bash -p",
+    ]

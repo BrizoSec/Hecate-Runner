@@ -31,34 +31,58 @@ def template_requests(requests: list[dict[str, Any]]) -> list[dict[str, str]]:
     return output
 
 
+def shell_segments(command: str) -> list[str]:
+    """Split shell AND/OR chains outside quotes without interpreting their content."""
+    segments = []
+    quote = ""
+    start, position = 0, 0
+    while position < len(command):
+        char = command[position]
+        if char in {"'", '"'} and (position == 0 or command[position - 1] != "\\"):
+            quote = "" if quote == char else quote or char
+        if not quote and command[position : position + 2] in {"&&", "||"}:
+            segments.append(command[start:position].strip())
+            position += 2
+            start = position
+            continue
+        position += 1
+    segments.append(command[start:].strip())
+    return [segment for segment in segments if segment]
+
+
 def reference_candidates(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     output = []
     if metadata.get("evidence_profile") == "behavior_catalog":
         for artifact in metadata.get("source_artifacts", []):
-            command = str(artifact.get("value", ""))
-            prefix = re.split(r"\{|\$|%[A-Za-z_]+%|<", command, maxsplit=1)[0].strip()
-            match = re.match(r"^([\w.\\/+-]+)\s+(.+)", prefix)
-            if not match or "\n" in prefix:
+            if artifact.get("kind", "command_line") != "command_line":
                 continue
-            program = match[1].replace("\\", "/").rsplit("/", 1)[-1]
-            if program in {"cd", "export", "echo", "read", "source", "alias"} or len(match[2]) < 3:
-                continue
-            image = ("\\" if metadata.get("platform") == "Windows" else "/") + program
-            output.append(
-                {
-                    "category": "process_creation",
-                    "platform": metadata.get("platform", "").lower(),
-                    "title": f"Catalog abuse procedure: {prefix}"[:110],
-                    "level": "medium",
-                    "detection": {
-                        "selection": {"Image|endswith": image, "CommandLine|contains": prefix},
-                        "condition": "selection",
-                    },
-                    "command": command,
-                    "behaviour": prefix,
-                    "passage": command,
-                }
-            )
+            for command in shell_segments(str(artifact.get("value", ""))):
+                prefix = re.split(r"\{|\$|%[A-Za-z_]+%|<", command, maxsplit=1)[0].strip()
+                match = re.match(r"^([\w.\\/+-]+)\s+(.+)", prefix)
+                if not match or "\n" in prefix:
+                    continue
+                program = match[1].replace("\\", "/").rsplit("/", 1)[-1]
+                if (
+                    program in {"cd", "export", "echo", "read", "source", "alias"}
+                    or len(match[2]) < 3
+                ):
+                    continue
+                image = ("\\" if metadata.get("platform") == "Windows" else "/") + program
+                output.append(
+                    {
+                        "category": "process_creation",
+                        "platform": metadata.get("platform", "").lower(),
+                        "title": f"Catalog abuse procedure: {prefix}"[:110],
+                        "level": "medium",
+                        "detection": {
+                            "selection": {"Image|endswith": image, "CommandLine|contains": prefix},
+                            "condition": "selection",
+                        },
+                        "command": command,
+                        "behaviour": prefix,
+                        "passage": command,
+                    }
+                )
     for request in template_requests(metadata.get("http_requests") or []):
         uri = request["uri"]
         path, _, query = uri.partition("?")
