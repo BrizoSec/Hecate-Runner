@@ -73,6 +73,7 @@ def test_workspace_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_redacted_dict_masks_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HECATE_WORKSPACE", "/tmp/hecate")
     monkeypatch.setenv("OTX_API_KEY", "super-secret-otx-key")
+    monkeypatch.setenv("CALDERA_API_KEY", "test-secret-caldera-key")
     monkeypatch.setenv(
         "HECATE_RUNNER_SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/super/secret/path"
     )
@@ -81,6 +82,8 @@ def test_redacted_dict_masks_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     dumped = s.redacted_dict()
     assert dumped["otx_api_key"] == "<redacted>"
     assert dumped["slack_webhook_url"] == "<redacted>"
+    assert dumped["caldera_api_key"] == "<redacted>"
+    assert "test-secret-caldera-key" not in str(dumped)
     assert "super-secret-otx-key" not in str(dumped)
     assert "hooks.slack.com" not in str(dumped)
 
