@@ -18,7 +18,7 @@ def record_health(
     # Callers supply bounded status descriptions, never HTTP bodies or credentials.
     record = {
         "enabled": enabled,
-        "healthy": bool(healthy and enabled),
+        "healthy": bool(healthy),
         "detail": detail[:160],
         "checked_at": datetime.now(UTC).isoformat(),
     }

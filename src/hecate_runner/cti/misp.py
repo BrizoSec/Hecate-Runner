@@ -513,6 +513,9 @@ def _event_org(event: dict[str, Any]) -> str:
 
 
 def _is_published(event: dict[str, Any]) -> bool:
+    # Never feed our own stored pipeline artifacts back into hunt generation.
+    if re.match(r"^Hecate Hunt: H-\d+\b", str(event.get("info", ""))):
+        return False
     value = event.get("published")
     if isinstance(value, bool):
         return value

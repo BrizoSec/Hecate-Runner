@@ -181,8 +181,11 @@ def collect_threat_intel_metrics(settings: Settings, hours: int = 24) -> dict[st
                 }
             )
 
-    # 3. MISP Sync Status
-    misp_configured = bool(settings.misp_base_url and settings.misp_api_key)
+    # Credentials alone do not establish that output has reached MISP.
+    from hecate_runner.misp_publisher import misp_publication_status
+
+    misp_exports = misp_publication_status(settings)
+    confirmed_exports = sum(row["status"] == "confirmed" for row in misp_exports)
 
     return {
         "active_sources": active_sources,
@@ -191,7 +194,10 @@ def collect_threat_intel_metrics(settings: Settings, hours: int = 24) -> dict[st
         "recent_research_count": len(recent_research),
         "cves_tracked_count": len(cve_set),
         "cves_sample": sorted(list(cve_set))[:5],
-        "misp_sync_active": misp_configured,
+        "misp_sync_active": settings.misp_publishing_enabled and confirmed_exports > 0,
+        "misp_output_enabled": settings.misp_publishing_enabled,
+        "misp_confirmed_exports": confirmed_exports,
+        "misp_pending_exports": len(misp_exports) - confirmed_exports,
         "recent_topics": recent_topics[:4],
     }
 

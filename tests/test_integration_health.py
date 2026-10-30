@@ -76,6 +76,83 @@ def test_html_login_and_invalid_feed_are_not_confirmed(
     assert not result["cisa_narrative"]["healthy"]
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("http_status", [200, 401])
+def test_misp_reachability_is_independent_of_source_enablement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: bool, http_status: int
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    s = settings(tmp_path)
+    s.cti_provider = "misp" if enabled else "file"
+    s.misp_base_url = "https://misp.test"
+    s.misp_api_key = "secret-misp-key"
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "misp.test":
+            requests.append(request)
+            return httpx.Response(http_status, json={"version": "2.5"})
+        return httpx.Response(503)
+
+    result = check_integrations(s, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert len(requests) == 1
+    assert requests[0].url.path == "/servers/getVersion"
+    assert requests[0].headers["Authorization"] == "secret-misp-key"
+    assert result["misp"]["enabled"] is enabled
+    assert result["misp"]["healthy"] is (http_status == 200)
+    assert not s.misp_cursor_file.exists()
+    assert "secret-misp-key" not in (tmp_path / ".hecate/integrations/misp.json").read_text()
+
+
+def test_misp_missing_url_is_not_probed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    s = settings(tmp_path)
+    s.cti_provider = "misp"
+    s.misp_api_key = "secret-misp-key"
+    s.misp_base_url = None
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(503)
+
+    result = check_integrations(s, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert not result["misp"]["healthy"]
+    assert all(request.url.path != "/servers/getVersion" for request in requests)
+
+
+@pytest.mark.parametrize("can_add,can_modify", [(True, True), (True, False), (False, True)])
+def test_misp_downstream_checks_writer_separately_from_intake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, can_add: bool, can_modify: bool
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    s = settings(tmp_path)
+    s.misp_publishing_enabled = True
+    s.misp_base_url = "https://misp.test"
+    s.misp_api_key = "intake-read-key"
+    s.misp_output_api_key = "dedicated-write-key"
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "misp.test":
+            seen.append(request)
+            assert request.headers["Accept"] == "application/json"
+            if request.url.path == "/users/view/me":
+                assert request.headers["Authorization"] == "dedicated-write-key"
+                return httpx.Response(
+                    200, json={"Role": {"perm_add": can_add, "perm_modify": can_modify}}
+                )
+            assert request.headers["Authorization"] == "intake-read-key"
+            return httpx.Response(200, json={"version": "2.5"})
+        return httpx.Response(503)
+
+    result = check_integrations(s, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert result["misp_output"]["enabled"]
+    assert result["misp_output"]["healthy"] is (can_add and can_modify)
+    assert not result["misp"]["enabled"]
+    assert all(request.method == "GET" for request in seen)
+
+
 def test_source_checks_are_read_only_and_do_not_establish_or_consume_cursor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

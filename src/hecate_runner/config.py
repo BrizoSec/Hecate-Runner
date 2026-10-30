@@ -523,6 +523,16 @@ class Settings(BaseSettings):
     )
 
     # --- MISP CTI provider ---------------------------------------------------
+    misp_publishing_enabled: bool = Field(
+        default=False,
+        alias="HECATE_RUNNER_MISP_PUBLISHING_ENABLED",
+        description="Store final pipeline artifacts in organization-only MISP draft events, independently of intake.",
+    )
+    misp_output_api_key: str | None = Field(
+        default=None,
+        alias="MISP_OUTPUT_API_KEY",
+        description="Separate MISP writer credential; falls back to MISP_API_KEY if omitted.",
+    )
     misp_base_url: str | None = Field(
         default=None,
         alias="MISP_BASE_URL",

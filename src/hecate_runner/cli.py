@@ -2463,6 +2463,86 @@ sources_app = typer.Typer(help="Manage CTI sources (list, enable, disable, reset
 app.add_typer(sources_app, name="sources")
 
 
+misp_app = typer.Typer(help="Store completed pipeline artifacts in MISP independently of intake.")
+app.add_typer(misp_app, name="misp")
+
+
+@misp_app.command("enable")
+def enable_misp_output() -> None:
+    settings = Settings()
+    if not (settings.misp_base_url and (settings.misp_output_api_key or settings.misp_api_key)):
+        console.print("[red]MISP_BASE_URL and a MISP writer API key are required.[/red]")
+        raise typer.Exit(1)
+    _update_env_key("HECATE_RUNNER_MISP_PUBLISHING_ENABLED", "true")
+    console.print(
+        "MISP output enabled: organization-only draft events; intake is configured separately."
+    )
+
+
+@misp_app.command("disable")
+def disable_misp_output() -> None:
+    _update_env_key("HECATE_RUNNER_MISP_PUBLISHING_ENABLED", "false")
+    console.print("MISP output disabled.")
+
+
+@misp_app.command("publish")
+def publish_to_misp(hunt_id: str) -> None:
+    """Queue one existing hunt and verify its artifacts were stored in MISP."""
+    from hecate_runner.misp_publisher import (
+        enqueue_misp_hunt,
+        misp_publication_status,
+        sync_misp_outbox,
+    )
+
+    settings = Settings()
+    try:
+        enqueue_misp_hunt(settings, hunt_id)
+        sync_misp_outbox(settings)
+    except Exception as exc:
+        console.print(f"[red]Could not export hunt ({type(exc).__name__}).[/red]")
+        raise typer.Exit(1) from exc
+    row = next(row for row in misp_publication_status(settings) if row["hunt_id"] == hunt_id)
+    if row["status"] != "confirmed":
+        console.print(
+            f"[yellow]{hunt_id} remains queued: {row['last_error'] or row['status']}[/yellow]"
+        )
+        raise typer.Exit(1)
+    console.print(
+        f"{hunt_id}: confirmed MISP event #{row['event_id']} ({settings.misp_base_url}/events/view/{row['event_id']})"
+    )
+
+
+@misp_app.command("sync")
+def sync_misp_output() -> None:
+    """Retry due output records without drafting or consuming CTI."""
+    from hecate_runner.misp_publisher import sync_misp_outbox
+
+    settings = Settings()
+    if not settings.misp_publishing_enabled:
+        console.print("MISP output is disabled. Run hecate-runner misp enable first.")
+        raise typer.Exit(1)
+    results = sync_misp_outbox(settings)
+    console.print(f"Confirmed {len(results)} MISP export(s).")
+
+
+@misp_app.command("status")
+def misp_output_status(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+    from hecate_runner.misp_publisher import misp_publication_status
+
+    settings = Settings()
+    rows = misp_publication_status(settings)
+    if json_output:
+        typer.echo(
+            json.dumps({"enabled": settings.misp_publishing_enabled, "exports": rows}, indent=2)
+        )
+        return
+    console.print(f"MISP output: {'enabled' if settings.misp_publishing_enabled else 'disabled'}")
+    table = Table("Hunt", "Status", "MISP event", "Last error")
+    for row in rows:
+        table.add_row(row["hunt_id"], row["status"], row["event_id"] or "--", row["last_error"])
+    console.print(table)
+
+
 @sources_app.command("check")
 def check_sources() -> None:
     """Confirm read-only connectivity and record monitor health (no hunts or messages)."""
@@ -2474,10 +2554,14 @@ def check_sources() -> None:
     table.add_column("Status")
     table.add_column("Detail")
     for name, result in sorted(results.items()):
-        ok = result["healthy"] and result["enabled"]
-        table.add_row(
-            name, "[green]confirmed[/green]" if ok else "[red]unavailable[/red]", result["detail"]
+        status = (
+            "[green]confirmed[/green]"
+            if result["healthy"] and result["enabled"]
+            else "[magenta]reachable; disabled[/magenta]"
+            if result["healthy"]
+            else "[red]unavailable[/red]"
         )
+        table.add_row("misp_intake" if name == "misp" else name, status, result["detail"])
     Console().print(table)
 
 
@@ -2629,7 +2713,7 @@ def list_sources() -> None:
     ss_cred = (
         "API Key/Secret present"
         if settings.shadowserver_api_key and settings.shadowserver_api_secret
-        else "Free Community / Keyless"
+        else "Missing API key/secret"
     )
     table.add_row(
         "shadowserver",
@@ -2677,7 +2761,11 @@ def list_sources() -> None:
     )
 
     # opencti
-    octi_cred = "GraphQL Client" if settings.opencti_token else "Community STIX 2.1"
+    octi_cred = (
+        "GraphQL Client"
+        if settings.opencti_url and settings.opencti_token
+        else "Test STIX fallback; no instance"
+    )
     table.add_row(
         "opencti",
         format_active("opencti"),

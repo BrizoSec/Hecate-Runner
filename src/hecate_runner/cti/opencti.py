@@ -4,7 +4,7 @@ Connects to OpenCTI instances via GraphQL API to ingest structured threat intell
 including Reports, Intrusion Sets, Threat Actors, Attack Patterns (ATT&CK techniques),
 and Indicator observables.
 
-When unconfigured, provides a built-in fallback to OpenCTI open community STIX datasets.
+When unconfigured, falls back to an upstream test STIX fixture, not live intelligence.
 """
 
 from __future__ import annotations
@@ -243,7 +243,7 @@ class OpenCTIProvider(CTIProvider):
                     exc,
                 )
 
-        # Mode 2: Open community STIX feed
+        # Mode 2: Upstream test STIX fixture (not a live OpenCTI instance)
         return self._poll_stix_fallback(cursor)
 
     def _poll_graphql(self, cursor: OpenCTICursorState) -> CTIItem | None:
