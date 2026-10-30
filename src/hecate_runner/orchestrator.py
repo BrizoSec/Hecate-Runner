@@ -3223,7 +3223,7 @@ class Orchestrator:
                     if matches:
                         self._enriched_context += (
                             "\nSecondary capability reference (not incident evidence):\n"
-                            + json.dumps(matches)
+                            + json.dumps(matches, default=str)
                         )
                         self.trail.step(
                             "enrichment",
