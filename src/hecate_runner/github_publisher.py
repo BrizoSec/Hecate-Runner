@@ -1,4 +1,4 @@
-"""Publish completed hunts to Hecate-Content through an isolated GitHub PR.
+"""Publish completed hunts to a policy-approved repository through an isolated GitHub PR.
 
 The publisher never operates on the workspace's Git checkout. It snapshots a
 small, validated set of artifacts into a SQLite outbox, then uses the GitHub
@@ -26,7 +26,7 @@ import jwt
 
 from hecate_runner.config import Settings
 from hecate_runner.hunt_audit import parse_hunt_file
-from hecate_runner.promotion_policy import evaluate_promotion, load_policy
+from hecate_runner.promotion_policy import _TLP_RE, evaluate_promotion, load_policy
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +36,13 @@ _MAX_BUNDLE_FILES = 80
 _MAX_FILE_BYTES = 2_000_000
 _MAX_BUNDLE_BYTES = 8_000_000
 _API = "https://api.github.com"
+_SECRET_PATTERNS = (
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{30,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
+)
 
 
 class PublisherError(RuntimeError):
@@ -140,14 +147,36 @@ def snapshot_hunt_artifacts(settings: Settings, hunt_id: str) -> tuple[dict[str,
     return files, digest
 
 
+def _validate_public_bundle(settings: Settings, files: dict[str, str]) -> None:
+    """Reject restricted markings and credentials before any public GitHub write."""
+    secrets = [
+        value
+        for name, value in settings.model_dump().items()
+        if isinstance(value, str)
+        and len(value) >= 12
+        and any(part in name for part in ("api_key", "token", "secret", "password"))
+    ]
+    for path, content in files.items():
+        if any(value.upper() not in {"CLEAR", "WHITE"} for value in _TLP_RE.findall(content)):
+            raise PublisherError(f"Restricted TLP marking prevents public publication: {path}")
+        if any(pattern.search(content) for pattern in _SECRET_PATTERNS) or any(
+            value in content for value in secrets
+        ):
+            raise PublisherError(f"Credential material prevents public publication: {path}")
+
+
 def _snapshot_bundle(settings: Settings, hunt_id: str) -> tuple[dict[str, str], str]:
     """Apply GitHub promotion policy to the shared artifact snapshot."""
     files, digest = snapshot_hunt_artifacts(settings, hunt_id)
     workspace = settings.hecate_workspace.resolve()
-    policy = load_policy(workspace)
+    policy = load_policy(workspace, settings.github_publishing_policy_path)
     if policy["publisher_login"].lower() != f"{settings.github_app_slug.lower()}[bot]":
         raise PublisherError("Configured GitHub App slug does not match promotion-policy.yaml")
-    decision = evaluate_promotion(workspace, hunt_id)
+    decision = evaluate_promotion(
+        workspace, hunt_id, policy_path=settings.github_publishing_policy_path
+    )
+    if policy["target_visibility"] == "public":
+        _validate_public_bundle(settings, files)
     manifest_path = f"promotion-manifests/{hunt_id}-{digest[:12]}.json"
     files[manifest_path] = (
         json.dumps(
@@ -157,6 +186,8 @@ def _snapshot_bundle(settings: Settings, hunt_id: str) -> tuple[dict[str, str], 
                 "sha256": digest,
                 "files": sorted(path for path in files),
                 "publisher": "hecate-runner",
+                "target_repository": settings.github_publishing_repository,
+                "target_visibility": policy["target_visibility"],
                 # Never enable auto-merge for a review-classified hunt. The PR
                 # review workflow runs asynchronously; enabling auto-merge
                 # from the publisher can merge a risky bundle before that job
@@ -418,7 +449,10 @@ class GitHubAppClient:
 
     def publish(self, row: sqlite3.Row) -> PublishResult:
         repo_path = self.repository_path
-        self._assert_private_repository(repo_path)
+        policy = load_policy(
+            self.settings.hecate_workspace, self.settings.github_publishing_policy_path
+        )
+        visibility = str(policy["target_visibility"])
 
         hunt_id = str(row["hunt_id"])
         digest = str(row["digest"])
@@ -428,6 +462,24 @@ class GitHubAppClient:
             isinstance(k, str) and isinstance(v, str) for k, v in files.items()
         ):
             raise PublisherError("Outbox bundle is malformed")
+        manifests = [
+            json.loads(content)
+            for path, content in files.items()
+            if path.startswith("promotion-manifests/")
+        ]
+        if len(manifests) != 1:
+            raise PublisherError("Outbox bundle must contain exactly one promotion manifest")
+        manifest = manifests[0]
+        if (
+            manifest.get("target_repository", self.settings.github_publishing_repository)
+            != self.settings.github_publishing_repository
+        ):
+            raise PublisherError("Outbox destination does not match the configured repository")
+        if manifest.get("target_visibility", "private") != visibility:
+            raise PublisherError("Outbox visibility does not match the destination policy")
+        if visibility == "public":
+            _validate_public_bundle(self.settings, files)
+        self._assert_target_repository(repo_path, visibility)
 
         existing = self._find_pull_request(repo_path, branch)
         if existing:
@@ -455,7 +507,7 @@ class GitHubAppClient:
             branch_ref = None
 
         if branch_ref is None:
-            self._assert_private_repository(repo_path)
+            self._assert_target_repository(repo_path, visibility)
             base_ref = self._request(
                 "GET",
                 f"{repo_path}/git/ref/heads/{quote(self.settings.github_publishing_base_branch, safe='/')}",
@@ -507,7 +559,7 @@ class GitHubAppClient:
 
         pull_request = self._find_pull_request(repo_path, branch)
         if pull_request is None:
-            self._assert_private_repository(repo_path)
+            self._assert_target_repository(repo_path, visibility)
             owner = self.settings.github_publishing_repository.split("/", 1)[0]
             body = (
                 f"Automated planning bundle for **{hunt_id}**.\n\n"
@@ -555,11 +607,11 @@ class GitHubAppClient:
         )
         return pulls[0] if pulls else None
 
-    def _assert_private_repository(self, repo_path: str) -> None:
+    def _assert_target_repository(self, repo_path: str, visibility: str) -> None:
         repository = self._request("GET", repo_path)
-        if repository.get("private") is not True:
+        if repository.get("private") is not (visibility == "private"):
             raise PublisherError(
-                "Target repository is not private; publication is blocked by policy"
+                "Target repository visibility does not match the publication policy"
             )
 
     @staticmethod
@@ -636,7 +688,8 @@ class GitHubAppClient:
 
 def outbox_for(settings: Settings) -> PromotionOutbox:
     return PromotionOutbox(
-        settings.hecate_workspace / ".hecate" / "publisher" / "promotion-outbox.sqlite3"
+        settings.github_publishing_outbox_path
+        or settings.hecate_workspace / ".hecate" / "publisher" / "promotion-outbox.sqlite3"
     )
 
 

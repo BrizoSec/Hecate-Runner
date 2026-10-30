@@ -50,8 +50,8 @@ def _load_frontmatter(text: str) -> dict[str, Any]:
     return value
 
 
-def load_policy(workspace: Path) -> dict[str, Any]:
-    path = workspace / "promotion-policy.yaml"
+def load_policy(workspace: Path, policy_path: Path | None = None) -> dict[str, Any]:
+    path = policy_path or workspace / "promotion-policy.yaml"
     if not path.is_file():
         raise ValueError("promotion-policy.yaml is required")
     try:
@@ -60,8 +60,8 @@ def load_policy(workspace: Path) -> dict[str, Any]:
         raise ValueError("promotion policy is not valid YAML") from exc
     if not isinstance(policy, dict) or policy.get("version") != 1:
         raise ValueError("unsupported promotion policy version")
-    if policy.get("target_visibility") != "private":
-        raise ValueError("automatic publication requires target_visibility: private")
+    if policy.get("target_visibility") not in {"private", "public"}:
+        raise ValueError("target_visibility must be private or public")
     merge = policy.get("auto_merge")
     risks = policy.get("risk")
     review = policy.get("review")
@@ -99,15 +99,22 @@ def load_policy(workspace: Path) -> dict[str, Any]:
             raise ValueError(f"promotion policy has an invalid action for risk.{key}")
     if "bas_failed" in risks and risks["bas_failed"] not in _ACTIONS:
         raise ValueError("promotion policy has an invalid action for risk.bas_failed")
+    if policy["target_visibility"] == "public":
+        if "allow_private" in risks.values():
+            raise ValueError("public publication cannot use allow_private risk actions")
+        if risks["tlp_amber"] != "block":
+            raise ValueError("public publication requires risk.tlp_amber: block")
     return policy
 
 
-def evaluate_promotion(workspace: Path, hunt_id: str) -> PromotionDecision:
+def evaluate_promotion(
+    workspace: Path, hunt_id: str, *, policy_path: Path | None = None
+) -> PromotionDecision:
     """Classify whether a planning hunt can pass the required policy check."""
     if not _HUNT_ID_RE.fullmatch(hunt_id):
         raise ValueError("hunt ID must look like H-0001")
     workspace = workspace.resolve()
-    policy = load_policy(workspace)
+    policy = load_policy(workspace, policy_path)
     matches = sorted((workspace / "hunts").glob(f"**/{hunt_id}.md"))
     if len(matches) != 1:
         raise ValueError(f"expected exactly one hunt file for {hunt_id}; found {len(matches)}")
@@ -174,7 +181,10 @@ def evaluate_promotion(workspace: Path, hunt_id: str) -> PromotionDecision:
             f"live adversary emulation verification failed ({status_note})",
         )
 
-    matches_tlp = _TLP_RE.findall("\n".join((facts.cti_text, research)))
+    tlp_text = "\n".join(
+        (text if policy["target_visibility"] == "public" else facts.cti_text, research)
+    )
+    matches_tlp = _TLP_RE.findall(tlp_text)
     tlp_values = [match.upper().replace("  ", " ") for match in matches_tlp]
     rank = {
         "CLEAR": 0,
@@ -186,6 +196,8 @@ def evaluate_promotion(workspace: Path, hunt_id: str) -> PromotionDecision:
         "RED": 4,
     }
     tlp = max(tlp_values, key=lambda value: rank.get(value, 0), default=None)
+    if policy["target_visibility"] == "public" and tlp not in {None, "CLEAR", "WHITE"}:
+        raise ValueError(f"TLP:{tlp} material cannot be published to a public repository")
     if tlp == "RED":
         raise ValueError("TLP:RED material cannot be published to the content workspace")
     if tlp and tlp.startswith("AMBER"):

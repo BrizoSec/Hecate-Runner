@@ -128,6 +128,20 @@ HECATE_RUNNER_GITHUB_PUBLISHING_REPOSITORY=BrizoSec/Hecate-Content
 
 ### Step 4: Run a Test Hunt or Launch the Daemon
 
+GitHub publication defaults to a private target. A public destination requires
+`target_visibility: public` in its promotion policy, `risk.tlp_amber: block`, and
+no `allow_private` risk actions. Explicitly allowing unmarked source material
+uses `risk.unknown_tlp: allow`. Restricted TLP markings and credentials are
+checked before the first public GitHub write, including on retries.
+
+To retain local hunt history while changing the remote destination, set
+`HECATE_RUNNER_GITHUB_PUBLISHING_REPOSITORY` to the new repository,
+`HECATE_RUNNER_GITHUB_PUBLISHING_POLICY_PATH` to its local policy file, and
+`HECATE_RUNNER_GITHUB_PUBLISHING_OUTBOX_PATH` to a fresh queue database. This
+keeps previous queued exports separate. Install the publisher App on the new
+repository and enable its promotion workflow, required checks, and auto-merge
+before switching the service configuration.
+
 MISP output is independent of the MISP intake source. After the final hunt and
 Sigma steps, the Runner queues the hunt, linked research, and detection files in
 a durable local outbox. Each hunt has one organization-only, unpublished MISP
