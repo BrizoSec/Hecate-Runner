@@ -651,7 +651,9 @@ def promotion_check(
     """Evaluate the versioned GitHub promotion policy without changing files."""
     settings = Settings()
     try:
-        decision = evaluate_promotion(settings.hecate_workspace, hunt_id)
+        decision = evaluate_promotion(
+            settings.hecate_workspace, hunt_id, policy_path=settings.github_publishing_policy_path
+        )
     except (OSError, ValueError) as exc:
         console.print(f"[red]Promotion blocked:[/red] {exc}")
         raise typer.Exit(code=2) from exc
@@ -676,7 +678,7 @@ def promotion_policy_validate() -> None:
     """Validate the workspace's versioned promotion policy."""
     settings = Settings()
     try:
-        load_policy(settings.hecate_workspace)
+        load_policy(settings.hecate_workspace, settings.github_publishing_policy_path)
     except (OSError, ValueError) as exc:
         console.print(f"[red]Invalid promotion policy:[/red] {exc}")
         raise typer.Exit(code=2) from exc

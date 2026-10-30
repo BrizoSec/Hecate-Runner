@@ -807,6 +807,16 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_GITHUB_PUBLISHING_BASE_BRANCH",
         description="Protected target branch for generated hunt pull requests.",
     )
+    github_publishing_policy_path: Path | None = Field(
+        default=None,
+        alias="HECATE_RUNNER_GITHUB_PUBLISHING_POLICY_PATH",
+        description="Optional destination policy file when local hunt storage and the publication repository differ.",
+    )
+    github_publishing_outbox_path: Path | None = Field(
+        default=None,
+        alias="HECATE_RUNNER_GITHUB_PUBLISHING_OUTBOX_PATH",
+        description="Optional destination-specific publication queue; use a fresh path when changing repositories.",
+    )
     github_poc_request_timeout_sec: float = Field(
         default=10.0,
         ge=3.0,

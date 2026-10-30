@@ -31,7 +31,7 @@ def test_json_output_survives_narrow_terminal_and_brackets(monkeypatch: pytest.M
         tlp=None,
         policy_version=1,
     )
-    monkeypatch.setattr(cli, "evaluate_promotion", lambda _workspace, _hunt_id: decision)
+    monkeypatch.setattr(cli, "evaluate_promotion", lambda _workspace, _hunt_id, **kwargs: decision)
     monkeypatch.setattr(cli.console, "width", 40)
 
     result = runner.invoke(app, ["promotion-check", "H-0001", "--json"], env={"COLUMNS": "40"})
