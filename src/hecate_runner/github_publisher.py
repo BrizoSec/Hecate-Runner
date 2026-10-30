@@ -72,8 +72,8 @@ def _relative_file(workspace: Path, candidate: Path, *, allowed_root: str) -> tu
     return relative, content
 
 
-def _snapshot_bundle(settings: Settings, hunt_id: str) -> tuple[dict[str, str], str]:
-    """Build the explicit artifact allowlist for one hunt, then hash it."""
+def snapshot_hunt_artifacts(settings: Settings, hunt_id: str) -> tuple[dict[str, str], str]:
+    """Snapshot one hunt's artifacts for downstream storage, excluding GitHub policy."""
     if not _HUNT_ID_RE.fullmatch(hunt_id):
         raise PublisherError("Hunt IDs must look like H-0001")
 
@@ -137,6 +137,13 @@ def _snapshot_bundle(settings: Settings, hunt_id: str) -> tuple[dict[str, str], 
         digest_builder.update(content.encode("utf-8"))
         digest_builder.update(b"\0")
     digest = digest_builder.hexdigest()
+    return files, digest
+
+
+def _snapshot_bundle(settings: Settings, hunt_id: str) -> tuple[dict[str, str], str]:
+    """Apply GitHub promotion policy to the shared artifact snapshot."""
+    files, digest = snapshot_hunt_artifacts(settings, hunt_id)
+    workspace = settings.hecate_workspace.resolve()
     policy = load_policy(workspace)
     if policy["publisher_login"].lower() != f"{settings.github_app_slug.lower()}[bot]":
         raise PublisherError("Configured GitHub App slug does not match promotion-policy.yaml")

@@ -521,7 +521,7 @@ def build_ops_metrics_card(metrics_summary: dict[str, Any]) -> list[dict[str, An
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": "⚡ *Runner Service Health: ACTIVE* | 0 crash restarts | MISP sync: Online",
+                    "text": "Pipeline metrics from recorded cycles",
                 }
             ],
         },

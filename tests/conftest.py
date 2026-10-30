@@ -76,6 +76,8 @@ _ENV_VARS_TO_ISOLATE = (
     "HECATE_RUNNER_RSS_MAX_ENTRY_AGE_DAYS",
     "HECATE_RUNNER_RSS_REQUEST_TIMEOUT_SEC",
     "MISP_BASE_URL",
+    "MISP_OUTPUT_API_KEY",
+    "HECATE_RUNNER_MISP_PUBLISHING_ENABLED",
     "MISP_API_KEY",
     "HECATE_RUNNER_MISP_VERIFY_SSL",
     "HECATE_RUNNER_MISP_MAX_EVENT_AGE_DAYS",
@@ -106,6 +108,7 @@ def _never_the_live_workspace(
     """
     for var in _ENV_VARS_TO_ISOLATE:
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HECATE_RUNNER_MISP_PUBLISHING_ENABLED", "false")
     monkeypatch.setenv("HECATE_WORKSPACE", str(tmp_path_factory.mktemp("unset-workspace")))
 
 
@@ -116,6 +119,7 @@ def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Setti
     for var in _ENV_VARS_TO_ISOLATE:
         monkeypatch.delenv(var, raising=False)
 
+    monkeypatch.setenv("HECATE_RUNNER_MISP_PUBLISHING_ENABLED", "false")
     monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))
     monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "4")
     monkeypatch.setenv("HECATE_RUNNER_MIN_HOURS_BETWEEN_DRAFTS", "0.0")

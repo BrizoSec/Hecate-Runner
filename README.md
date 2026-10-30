@@ -102,8 +102,10 @@ Ensure your configuration includes your API keys and quotas:
 ```dotenv
 # Threat Intelligence Feeds
 OTX_API_KEY=...
-MISP_URL=https://misp.example.com
+MISP_BASE_URL=https://misp.example.com
 MISP_API_KEY=...
+MISP_OUTPUT_API_KEY=...             # optional dedicated writer credential
+HECATE_RUNNER_MISP_PUBLISHING_ENABLED=true
 
 # Model & Search API
 HECATE_AI_PROVIDER=anthropic      # or openai, bedrock, ollama
@@ -125,6 +127,23 @@ HECATE_RUNNER_GITHUB_PUBLISHING_REPOSITORY=BrizoSec/Hecate-Content
 ```
 
 ### Step 4: Run a Test Hunt or Launch the Daemon
+
+MISP output is independent of the MISP intake source. After the final hunt and
+Sigma steps, the Runner queues the hunt, linked research, and detection files in
+a durable local outbox. Each hunt has one organization-only, unpublished MISP
+event, with readable reports and file attachments. Typed indicators retain their
+provenance and have `to_ids=false` pending review. Retries reconcile stable UUIDs
+and verify the stored content; an unavailable MISP does not cause a hunt to be
+drafted again. Hecate-generated events are excluded from MISP intake.
+
+```bash
+hecate-runner misp enable          # requires MISP_BASE_URL and a writer API key
+hecate-runner misp publish H-0911  # explicitly export an existing hunt
+hecate-runner misp sync            # retry due exports without running a hunt
+hecate-runner misp status --json   # confirmed event IDs and pending failures
+hecate-runner sources disable opencti
+```
+
 ```bash
 # Option A: Draft a hunt immediately from raw CTI text
 uv run hecate-runner draft \

@@ -40,6 +40,7 @@ from hecate_runner.hunt_writer import (
 )
 from hecate_runner.indicator_sweep import build_indicator_sweep, parse_indicator_inventory
 from hecate_runner.metrics import CycleMetrics, LLMUsage, MetricsStore
+from hecate_runner.misp_publisher import enqueue_misp_hunt, sync_misp_outbox
 from hecate_runner.notifications import notify_draft_created
 from hecate_runner.parked_store import park, prune_parked
 from hecate_runner.state import OrchestratorState
@@ -813,6 +814,11 @@ class Orchestrator:
     def run_once(self, *, dry_run: bool = False) -> RunResult:
         """Execute one cycle. Never raises; always returns a RunResult."""
         log.info("=== Orchestrator cycle starting (dry_run=%s) ===", dry_run)
+        if self.settings.misp_publishing_enabled and not dry_run:
+            try:
+                sync_misp_outbox(self.settings)
+            except Exception as exc:
+                log.warning("Could not sync the MISP output queue (%s)", type(exc).__name__)
         if self.settings.github_publishing_enabled and not dry_run:
             try:
                 sync_outbox(self.settings)
@@ -3916,6 +3922,24 @@ class Orchestrator:
                 sync_outbox(self.settings)
             except Exception as exc:
                 log.warning("Could not queue %s for GitHub publication (%s)", hunt_id, exc)
+
+        if self.settings.misp_publishing_enabled:
+            try:
+                enqueue_misp_hunt(
+                    self.settings,
+                    hunt_id,
+                    indicator_records=[record.to_dict() for record in self._indicator_records],
+                )
+                exported = sync_misp_outbox(self.settings)
+                for export in exported:
+                    self.trail.step(
+                        "misp_output",
+                        "%s stored in MISP event #%s",
+                        export["hunt_id"],
+                        export["event_id"],
+                    )
+            except Exception as exc:
+                log.warning("Could not queue %s for MISP output (%s)", hunt_id, type(exc).__name__)
 
         # A notification failure must not turn an already-successful draft
         # into an "error" outcome — isolate it from the run_once() top-level

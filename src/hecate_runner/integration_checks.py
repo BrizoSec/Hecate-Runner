@@ -33,18 +33,21 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
     )
     # Keys are the stable integration IDs consumed by Core's monitor.
     probes: dict[str, tuple[bool, str, str, dict[str, str], Any]] = {}
+    configured_probes: dict[str, bool] = {}
 
     def add(
         name: str,
         url: str,
         *,
         enabled: bool = True,
+        configured: bool | None = None,
         key: str = "",
         header: str = "",
         method: str = "GET",
         body: Any = None,
     ) -> None:
         probes[name] = (enabled, method, url, {header: key} if header and key else {}, body)
+        configured_probes[name] = enabled if configured is None else configured
 
     def token(*names: str) -> str:
         return next((str(env[n]) for n in names if env.get(n)), "")
@@ -92,14 +95,26 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
         "otx",
         "https://otx.alienvault.com/api/v1/user/me",
         enabled="otx" in active and bool(settings.otx_api_key),
+        configured=bool(settings.otx_api_key),
         key=settings.otx_api_key or "",
         header="X-OTX-API-KEY",
     )
     add(
         "misp",
         str(settings.misp_base_url or "") + "/servers/getVersion",
-        enabled="misp" in active and bool(settings.misp_api_key),
+        enabled="misp" in active and bool(settings.misp_base_url and settings.misp_api_key),
+        configured=bool(settings.misp_base_url and settings.misp_api_key),
         key=settings.misp_api_key or "",
+        header="Authorization",
+    )
+    misp_writer = settings.misp_output_api_key or settings.misp_api_key
+    add(
+        "misp_output",
+        str(settings.misp_base_url or "").rstrip("/") + "/users/view/me",
+        enabled=settings.misp_publishing_enabled,
+        configured=settings.misp_publishing_enabled
+        and bool(settings.misp_base_url and misp_writer),
+        key=misp_writer or "",
         header="Authorization",
     )
     add(
@@ -177,6 +192,7 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
             ),
             key=key,
             header=header,
+            configured=bool(key),
         )
     abuse = settings.abusech_api_key or ""
     for name, url, body in [
@@ -230,7 +246,7 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
         enabled = name not in source_names or name in active
         if name == "cisa_narrative":
             enabled = "cisa_advisories" in active
-        add(name, url, enabled=enabled)
+        add(name, url, enabled=enabled, configured=bool(url))
     slack = token("SLACK_BOT_TOKEN")
     add(
         "slack",
@@ -243,12 +259,14 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
         "cloud_threat",
         settings.cloud_threat_feed_urls[0] if settings.cloud_threat_feed_urls else "",
         enabled="cloud_threat" in active,
+        configured=bool(settings.cloud_threat_feed_urls),
     )
     if settings.opencti_url and settings.opencti_token:
         add(
             "opencti",
             settings.opencti_url.rstrip("/") + "/graphql",
             enabled="opencti" in active,
+            configured=True,
             method="POST",
             key="Bearer " + settings.opencti_token,
             header="Authorization",
@@ -261,6 +279,7 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
         "https://transform.shadowserver.org/api2/reports/list",
         enabled="shadowserver" in active
         and bool(settings.shadowserver_api_key and settings.shadowserver_api_secret),
+        configured=bool(settings.shadowserver_api_key and settings.shadowserver_api_secret),
         method="POST",
         body={"apikey": settings.shadowserver_api_key, "secret": settings.shadowserver_api_secret},
     )
@@ -273,19 +292,25 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
 
     def run(pair: tuple[str, Any]) -> tuple[str, Any]:
         name, (enabled, method, url, headers, body) = pair
-        if not enabled:
+        if not configured_probes[name]:
             return name, record_health(
                 settings.hecate_workspace, name, False, "disabled or unconfigured", enabled=False
             )
         if not url:
             return name, record_health(
-                settings.hecate_workspace, name, False, "no confirmed read-only probe"
+                settings.hecate_workspace,
+                name,
+                False,
+                "instance unconfigured; fallback is test data"
+                if name == "opencti"
+                else "no confirmed read-only probe",
+                enabled=enabled,
             )
         own = client is None
         c = client or httpx.Client(
             timeout=8,
             follow_redirects=True,
-            verify=settings.misp_verify_ssl if name == "misp" else True,
+            verify=settings.misp_verify_ssl if name in {"misp", "misp_output"} else True,
         )
         try:
             headers = {
@@ -293,6 +318,8 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
                 "Accept": "application/json, application/xml, text/plain",
                 **headers,
             }
+            if name in {"misp", "misp_output"}:
+                headers["Accept"] = "application/json"
             if name == "cisa_narrative":
                 from hecate_runner.cti.cisa_advisories import BROWSER_UA
 
@@ -313,6 +340,14 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
                 raise ValueError("GraphQL authentication or schema rejected")
             if name == "slack" and not r.json().get("ok"):
                 raise ValueError("authentication rejected")
+            if name == "misp_output":
+                identity = r.json()
+                role = identity.get("Role") or identity.get("User", {}).get("Role", {})
+                if not all(
+                    role.get(permission) in (True, 1, "1")
+                    for permission in ("perm_add", "perm_modify")
+                ):
+                    raise ValueError("writer permissions unavailable")
             if name == "llm" and llm_provider == "ollama":
                 models = [m.get("name") for m in r.json().get("models", [])]
                 if not models or (llm_model and llm_model not in models):
@@ -350,7 +385,13 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
             }:
                 raise ValueError("unexpected HTML response")
             return name, record_health(
-                settings.hecate_workspace, name, True, "read-only endpoint confirmed"
+                settings.hecate_workspace,
+                name,
+                True,
+                "writer authenticated; create/modify permitted"
+                if name == "misp_output"
+                else "read-only endpoint confirmed",
+                enabled=enabled,
             )
         except Exception as exc:
             detail = (
@@ -358,23 +399,23 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
                 if isinstance(exc, httpx.HTTPStatusError)
                 else type(exc).__name__
             )
-            return name, record_health(settings.hecate_workspace, name, False, detail)
+            return name, record_health(
+                settings.hecate_workspace, name, False, detail, enabled=enabled
+            )
         finally:
             if own:
                 c.close()
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = dict(pool.map(run, probes.items()))
-    if "certstream" not in active:
-        results["certstream"] = record_health(
-            settings.hecate_workspace, "certstream", False, "disabled", enabled=False
-        )
-    elif client is not None:
+    certstream_enabled = "certstream" in active
+    if client is not None:
         results["certstream"] = record_health(
             settings.hecate_workspace,
             "certstream",
             False,
             "websocket not checked by HTTP transport",
+            enabled=certstream_enabled,
         )
     else:
         try:
@@ -385,11 +426,19 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
                 if message.get("message_type") not in {"heartbeat", "certificate_update"}:
                     raise ValueError("invalid CertStream message")
             results["certstream"] = record_health(
-                settings.hecate_workspace, "certstream", True, "live websocket protocol confirmed"
+                settings.hecate_workspace,
+                "certstream",
+                True,
+                "live websocket protocol confirmed",
+                enabled=certstream_enabled,
             )
         except Exception as exc:
             results["certstream"] = record_health(
-                settings.hecate_workspace, "certstream", False, type(exc).__name__
+                settings.hecate_workspace,
+                "certstream",
+                False,
+                type(exc).__name__,
+                enabled=certstream_enabled,
             )
     # Check immutable sample schemas without advancing or acknowledging intake cursors.
     from hecate_runner.cti import get_provider
@@ -406,11 +455,6 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
         "cisa_ics",
         "attack_deltas",
     ):
-        if name not in active:
-            results[name] = record_health(
-                settings.hecate_workspace, name, False, "disabled", enabled=False
-            )
-            continue
         provider = get_provider(name, settings=settings)
         assert isinstance(provider, (GitHubDeltaProvider, AttackDeltaProvider))
         if client is not None:
@@ -454,11 +498,19 @@ def check_integrations(settings: Settings, *, client: httpx.Client | None = None
                     if client is None:
                         c.close()
             results[name] = record_health(
-                settings.hecate_workspace, name, True, "upstream repository/schema confirmed"
+                settings.hecate_workspace,
+                name,
+                True,
+                "upstream repository/schema confirmed",
+                enabled=name in active,
             )
         except Exception:
             results[name] = record_health(
-                settings.hecate_workspace, name, False, "source fetch/schema check failed"
+                settings.hecate_workspace,
+                name,
+                False,
+                "source fetch/schema check failed",
+                enabled=name in active,
             )
         finally:
             provider.close()
