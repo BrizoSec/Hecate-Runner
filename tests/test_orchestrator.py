@@ -95,6 +95,39 @@ def test_happy_path_creates_draft(
     assert mock_hecate.hypothesis_generator.call_args.kwargs["research_id"] == "R-0001"
 
 
+def test_catalog_yaml_dates_reach_research_as_secondary_context(
+    settings: Settings,
+    file_queue_with_cti: FileQueueProvider,
+    mock_hecate: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import yaml
+
+    from hecate_runner import cti
+    from hecate_runner.cti.catalogs import LolbasProvider
+
+    settings.cti_provider = "multi"
+    settings.cti_multi_providers_raw = "lolbas"
+    settings.catalog_enrichment_enabled = True
+    provider = MagicMock(spec=LolbasProvider)
+    provider.enrich.return_value = [
+        {
+            "catalog": "lolbas",
+            "entry": yaml.safe_load("Name: Rundll32.exe\nCreated: 2026-10-30\n"),
+            "meaning": "documented capability; not evidence of use in this intrusion",
+        }
+    ]
+    monkeypatch.setattr(cti, "get_provider", lambda *args, **kwargs: provider)
+    result = Orchestrator(
+        settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti
+    ).run_once()
+    assert result.outcome == "draft_created"
+    context = mock_hecate.research_new.call_args.kwargs["source_context"]
+    assert '"Created": "2026-10-30"' in context
+    assert "not source evidence" in context
+    provider.close.assert_called_once()
+
+
 def test_parseable_indicator_dump_skips_research_and_llm(
     settings: Settings,
     workspace: Path,
