@@ -313,6 +313,10 @@ def container_config():
 def test_sensor_accepts_the_isolated_lab_and_pins_its_container_identity(monkeypatch):
     def inspect(*args):
         if args[0] == "inspect":
+            if args[1] == "caldera":
+                from tests.test_bas_controller import controller_config
+
+                return json.dumps([controller_config()])
             return json.dumps([container_config()])
         if args[0] == "network":
             return json.dumps([{"Internal": True}])

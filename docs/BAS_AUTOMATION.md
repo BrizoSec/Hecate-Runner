@@ -43,6 +43,10 @@ The temporary filesystem is `noexec`, core dumps are disabled, open descriptors
 are capped at 256, and file sizes are bounded at 16 MiB. Preflight refuses a lab
 that loses these controls. CALDERA server resource limits are configured
 separately; the installed server has a 1 GiB memory limit, one CPU, and 128 PIDs.
+The controller is also required to run as nonroot with a read-only root, dropped
+capabilities, private named volumes, and loopback-only API publishing. A reverted
+or weakened controller is refused before automatic BAS execution. Migration and
+recovery are documented in [host protections](HOST_HARDENING.md).
 
 Before scheduling, Hecate checks the exact container identity, hostname, agent
 arguments, tracer entrypoint, read-only root, nonroot user, dropped capabilities,
