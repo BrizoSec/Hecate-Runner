@@ -108,3 +108,23 @@ def test_misp_org_allowlist_defaults_to_empty(monkeypatch: pytest.MonkeyPatch) -
 def test_misp_org_allowlist_parses_and_trims(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HECATE_RUNNER_MISP_ORG_ALLOWLIST", " CIRCL , CUDESO ,, ESET ")
     assert Settings(_env_file=None).misp_org_allowlist == ["CIRCL", "CUDESO", "ESET"]
+
+
+def test_shared_settings_cannot_publish_to_live_services(settings: Settings) -> None:
+    assert not settings.github_publishing_enabled
+    assert not settings.misp_publishing_enabled
+    assert settings.github_app_id is None
+    assert settings.github_installation_id is None
+    assert settings.github_app_private_key_path is None
+
+
+def test_local_dotenv_cannot_enable_publication_during_tests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "HECATE_RUNNER_GITHUB_PUBLISHING_ENABLED=true\nHECATE_RUNNER_MISP_PUBLISHING_ENABLED=true\n"
+    )
+    config = Settings()
+    assert not config.github_publishing_enabled
+    assert not config.misp_publishing_enabled

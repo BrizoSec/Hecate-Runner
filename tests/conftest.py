@@ -12,6 +12,7 @@ import pytest
 
 from hecate_runner.config import Settings
 from hecate_runner.cti import FileQueueProvider
+from hecate_runner.github_publisher import GitHubAppClient
 from hecate_runner.hecate_client import (
     HecateClient,
     HypothesisResult,
@@ -78,6 +79,14 @@ _ENV_VARS_TO_ISOLATE = (
     "MISP_BASE_URL",
     "MISP_OUTPUT_API_KEY",
     "HECATE_RUNNER_MISP_PUBLISHING_ENABLED",
+    "GITHUB_TOKEN",
+    "HECATE_RUNNER_GITHUB_PUBLISHING_ENABLED",
+    "HECATE_RUNNER_GITHUB_APP_ID",
+    "HECATE_RUNNER_GITHUB_INSTALLATION_ID",
+    "HECATE_RUNNER_GITHUB_APP_SLUG",
+    "HECATE_RUNNER_GITHUB_APP_PRIVATE_KEY_PATH",
+    "HECATE_RUNNER_GITHUB_PUBLISHING_REPOSITORY",
+    "HECATE_RUNNER_GITHUB_PUBLISHING_BASE_BRANCH",
     "HECATE_RUNNER_GITHUB_PUBLISHING_POLICY_PATH",
     "HECATE_RUNNER_GITHUB_PUBLISHING_OUTBOX_PATH",
     "MISP_API_KEY",
@@ -111,11 +120,17 @@ def _never_the_live_workspace(
     for var in _ENV_VARS_TO_ISOLATE:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("HECATE_RUNNER_MISP_PUBLISHING_ENABLED", "false")
+    monkeypatch.setenv("HECATE_RUNNER_GITHUB_PUBLISHING_ENABLED", "false")
     monkeypatch.setenv("HECATE_BAS_ENABLED", "false")
     monkeypatch.setenv("HECATE_BAS_AUTO_EXECUTE_LIVE", "false")
     monkeypatch.setenv("HECATE_BAS_MODE", "mock")
     monkeypatch.setenv("HECATE_BAS_AUTO_TECHNIQUES", "")
     monkeypatch.setenv("HECATE_WORKSPACE", str(tmp_path_factory.mktemp("unset-workspace")))
+
+    def reject_github_request(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("Tests must mock GitHub publisher requests before calling the API")
+
+    monkeypatch.setattr(GitHubAppClient, "_request", reject_github_request)
 
 
 @pytest.fixture
@@ -126,6 +141,7 @@ def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Setti
         monkeypatch.delenv(var, raising=False)
 
     monkeypatch.setenv("HECATE_RUNNER_MISP_PUBLISHING_ENABLED", "false")
+    monkeypatch.setenv("HECATE_RUNNER_GITHUB_PUBLISHING_ENABLED", "false")
     monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))
     monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "4")
     monkeypatch.setenv("HECATE_RUNNER_MIN_HOURS_BETWEEN_DRAFTS", "0.0")
