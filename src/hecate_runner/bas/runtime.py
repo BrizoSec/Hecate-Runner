@@ -115,7 +115,7 @@ def run_approved_validation(
                 params={"approved_only": True},
             )
             detonation = provider.detonate(request)
-            events = sensor.collect(detonation, procedure.command) if detonation.success else []
+            events = sensor.collect(detonation, procedure.argv) if detonation.success else []
             verification = DetectionVerifier().verify_detonation(
                 detonation, rule_yaml=rule_yaml, raw_events=events, backend="lab_process"
             )

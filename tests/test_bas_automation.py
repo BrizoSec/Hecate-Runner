@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
@@ -78,10 +79,14 @@ def test_unapproved_and_wrong_platform_rules_are_not_executed():
         )
         is None
     )
+    different_behavior = RULE.replace(
+        "Image|endswith: /whoami", "CommandLine|contains: /sensitive/database"
+    )
+    assert select_approved_rule([{"rule_yaml": different_behavior}], ["T1033"], ["T1033"]) is None
 
 
 def test_configuration_rejects_unreviewed_or_wildcard_procedures():
-    for value in ("*", "T1059.004", '["T1033", "T1003"]'):
+    for value in ("*", "T1003", '["T1033", "T1003"]'):
         with pytest.raises(ValueError, match="reviewed techniques"):
             Settings(_env_file=None, bas_auto_techniques=value)
     assert Settings(_env_file=None, bas_auto_techniques="T1033,T1057").bas_auto_techniques == [
@@ -182,6 +187,66 @@ def test_trace_reassembles_successful_exec_only():
     assert [e["ProcessId"] for e in result] == [20]
 
 
+@pytest.mark.parametrize("procedure", APPROVED_PROCEDURES.values(), ids=APPROVED_PROCEDURES.keys())
+def test_parameterized_procedures_require_exact_observed_arguments(procedure):
+    image = "/usr/bin/" + procedure.argv[0]
+    argv = list(procedure.argv)
+    good = f"12 100.000 execve({json.dumps(image)}, {json.dumps(argv)}, 0x0) = 0"
+    changed = (
+        f"13 100.000 execve({json.dumps(image)}, {json.dumps([*argv, 'unexpected'])}, 0x0) = 0"
+    )
+    events = parse_exec_trace(
+        good + "\n" + changed, start=99, end=101, host="lab", command=procedure.argv
+    )
+    assert len(events) == 1
+    assert events[0]["CommandLine"] == shlex.join(argv)
+
+
+def test_missing_managed_procedures_can_be_installed_without_overwriting_stock(
+    tmp_path, monkeypatch
+):
+    from hecate_runner.cli import bas_install_procedures_cmd
+
+    requests = []
+    catalog = {}
+    for procedure in APPROVED_PROCEDURES.values():
+        if not procedure.managed:
+            catalog[procedure.ability_id] = {
+                "ability_id": procedure.ability_id,
+                "technique_id": procedure.technique_id,
+                "executors": [{"platform": "linux", "name": "sh", "command": procedure.command}],
+            }
+
+    def handle(request):
+        requests.append(request)
+        if request.method == "PUT":
+            body = json.loads(request.content)
+            assert body["id"] not in catalog
+            catalog[body["id"]] = {
+                "ability_id": body["id"],
+                "technique_id": body["technique"]["attack_id"],
+                "executors": [
+                    {
+                        "platform": "linux",
+                        "name": "sh",
+                        "command": body["platforms"]["linux"]["sh"]["command"],
+                    }
+                ],
+            }
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json=list(catalog.values()))
+
+    connector = CalderaConnector(
+        client=httpx.Client(transport=httpx.MockTransport(handle), base_url="http://test")
+    )
+    monkeypatch.setattr("hecate_runner.bas.get_bas_provider", lambda *args: connector)
+    bas_install_procedures_cmd()
+    assert len(catalog) == len(APPROVED_PROCEDURES)
+    assert sum(r.method == "PUT" for r in requests) == sum(
+        p.managed for p in APPROVED_PROCEDURES.values()
+    )
+
+
 def test_caldera_receipts_cannot_become_sensor_evidence():
     now = datetime.now(UTC).isoformat()
     detonation = DetonationResult(
@@ -213,17 +278,51 @@ def container_config():
     return {
         "Id": "pinned-container-id",
         "State": {"Running": True},
-        "Config": {"Hostname": "lab", "User": "65534:65534", "Entrypoint": SENSOR_ENTRYPOINT},
+        "Config": {
+            "Hostname": "lab",
+            "User": "65534:65534",
+            "Entrypoint": SENSOR_ENTRYPOINT,
+            "Cmd": [
+                "-server",
+                "http://caldera:8888",
+                "-group",
+                "hecate-local-lab",
+                "-paw",
+                "hecate-local-sandbox",
+            ],
+        },
         "HostConfig": {
             "ReadonlyRootfs": True,
             "CapDrop": ["ALL"],
             "SecurityOpt": ["no-new-privileges=true"],
             "Memory": 268435456,
             "PidsLimit": 128,
+            "NanoCpus": 500000000,
+            "Tmpfs": {"/tmp": "rw,nosuid,nodev,noexec,size=64m,mode=1777"},
+            "Ulimits": [
+                {"Name": "core", "Soft": 0, "Hard": 0},
+                {"Name": "nofile", "Soft": 256, "Hard": 256},
+                {"Name": "fsize", "Soft": 16777216, "Hard": 16777216},
+            ],
         },
         "NetworkSettings": {"Networks": {"hecate-bas-lab": {}}},
         "Mounts": [],
     }
+
+
+def test_sensor_accepts_the_isolated_lab_and_pins_its_container_identity(monkeypatch):
+    def inspect(*args):
+        if args[0] == "inspect":
+            return json.dumps([container_config()])
+        if args[0] == "network":
+            return json.dumps([{"Internal": True}])
+        assert args[:2] == ("exec", "pinned-container-id")
+        return '8 100.000 execve("/usr/local/bin/sandcat", ["sandcat"], 0x0) = 0'
+
+    monkeypatch.setattr(LabProcessSensor, "_docker", staticmethod(inspect))
+    sensor = LabProcessSensor("agent", "lab")
+    sensor.preflight()
+    assert sensor.container_id == "pinned-container-id"
 
 
 @pytest.mark.parametrize(
@@ -235,6 +334,8 @@ def container_config():
         {"PidMode": "host"},
         {"SecurityOpt": ["seccomp=unconfined"]},
         {"Memory": 0},
+        {"Ulimits": []},
+        {"Tmpfs": {"/tmp": "rw,nosuid,nodev,size=64m"}},
     ],
 )
 def test_sensor_rejects_weakened_lab_before_execution(monkeypatch, change):

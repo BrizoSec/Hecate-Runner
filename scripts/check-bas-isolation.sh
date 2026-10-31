@@ -12,6 +12,10 @@ assert "no-new-privileges=true" in h["SecurityOpt"], "Privilege escalation permi
 assert not c["Mounts"], "Unexpected mounted host data or volumes"
 assert set(c["NetworkSettings"]["Networks"]) == {"hecate-bas-lab"}, "Unexpected network attachment"
 assert h["PidsLimit"] == 128 and h["Memory"] == 268435456, "Resource limits differ"
+assert "noexec" in h.get("Tmpfs", {}).get("/tmp", "").split(","), "Temporary filesystem permits native executables"
+limits={item["Name"]: item for item in h.get("Ulimits", [])}
+assert limits["core"]["Hard"] == 0 and limits["nofile"]["Hard"] <= 256, "Missing process limits"
+assert 0 < limits["fsize"]["Hard"] <= 16777216, "Unbounded file size"
 print("PASS: container configuration")
 '
 [[ $(docker network inspect -f '{{.Internal}}' hecate-bas-lab) == true ]]

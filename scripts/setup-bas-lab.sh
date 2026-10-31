@@ -26,7 +26,8 @@ docker create --name hecate-bas-agent --hostname hecate-bas-lab \
     --network hecate-bas-lab --read-only --user 65534:65534 \
     --cap-drop ALL --security-opt no-new-privileges=true \
     --pids-limit 128 --memory 256m --cpus 0.5 \
-    --tmpfs /tmp:rw,nosuid,nodev,size=64m,mode=1777 \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777 \
+    --ulimit core=0:0 --ulimit nofile=256:256 --ulimit fsize=16777216:16777216 \
     --log-opt max-size=10m --log-opt max-file=3 \
     hecate-bas-agent:local -server http://caldera:8888 \
     -group hecate-local-lab -paw hecate-local-sandbox

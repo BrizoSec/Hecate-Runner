@@ -277,7 +277,7 @@ class Settings(BaseSettings):
     bas_auto_techniques: Any = Field(
         default_factory=list,
         alias="HECATE_BAS_AUTO_TECHNIQUES",
-        description="Explicit subset of reviewed Linux lab procedures: T1033, T1057, T1083.",
+        description="Explicit subset of the reviewed, fixed Linux lab procedure catalog.",
     )
     bas_telemetry: Literal["none", "lab_process"] = Field(
         default="none",
@@ -1391,7 +1391,10 @@ class Settings(BaseSettings):
         from hecate_runner.bas.approved import APPROVED_PROCEDURES
 
         if set(value) - APPROVED_PROCEDURES.keys():
-            raise ValueError("Unattended BAS accepts only reviewed techniques T1033, T1057, T1083.")
+            raise ValueError(
+                "Unattended BAS accepts only reviewed techniques: "
+                + ", ".join(sorted(APPROVED_PROCEDURES))
+            )
         return list(dict.fromkeys(value))
 
     def env_for_hecate(self) -> dict[str, str]:

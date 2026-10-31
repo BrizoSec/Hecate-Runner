@@ -43,11 +43,14 @@ _RESUMED = re.compile(r"^\s*(\d+)\s+\d+\.\d+\s+<\.\.\. execve resumed>.*= 0$")
 
 
 def parse_exec_trace(
-    text: str, *, start: float, end: float, host: str, command: str
+    text: str, *, start: float, end: float, host: str, command: str | tuple[str, ...]
 ) -> list[dict[str, Any]]:
     """Return successful, bounded executions of the exact approved command."""
     events: list[dict[str, Any]] = []
     pending: dict[str, dict[str, Any]] = {}
+    expected = list(shlex.split(command) if isinstance(command, str) else command)
+    if not expected:
+        return []
     for line in text.splitlines():
         match = _EXEC.match(line)
         if match:
@@ -60,8 +63,8 @@ def parse_exec_trace(
             if (
                 not start <= timestamp <= end
                 or not isinstance(argv, list)
-                or argv != [command]
-                or PurePosixPath(image).name != command
+                or argv != expected
+                or PurePosixPath(image).name != PurePosixPath(expected[0]).name
             ):
                 continue
             event = {
@@ -106,6 +109,16 @@ class LabProcessSensor:
         config = container["Config"]
         host = container["HostConfig"]
         networks = container["NetworkSettings"]["Networks"]
+        tmp_options = set((host.get("Tmpfs") or {}).get("/tmp", "").split(","))
+        limits = {item["Name"]: item for item in host.get("Ulimits") or []}
+        limits_ok = (
+            limits.get("core", {}).get("Hard") == 0
+            and limits.get("core", {}).get("Soft") == 0
+            and limits.get("nofile", {}).get("Hard", 0) in range(1, 257)
+            and limits.get("nofile", {}).get("Soft", 0) in range(1, 257)
+            and limits.get("fsize", {}).get("Hard", 0) in range(1, 16777217)
+            and limits.get("fsize", {}).get("Soft", 0) in range(1, 16777217)
+        )
         if (
             not container["State"]["Running"]
             or config.get("Hostname") != self.host
@@ -134,6 +147,8 @@ class LabProcessSensor:
             or host.get("PidsLimit", 0) not in range(1, 129)
             or host.get("Memory", 0) not in range(1, 268435457)
             or host.get("NanoCpus", 0) not in range(1, 500000001)
+            or not {"rw", "nosuid", "nodev", "noexec"} <= tmp_options
+            or not limits_ok
         ):
             raise SafetyViolationError("BAS lab isolation or process sensor preflight failed.")
         network = json.loads(self._docker("network", "inspect", "hecate-bas-lab"))[0]
@@ -145,7 +160,9 @@ class LabProcessSensor:
         if 'execve("/usr/local/bin/sandcat"' not in trace or "= 0" not in trace:
             raise SafetyViolationError("BAS process sensor is not recording executions.")
 
-    def collect(self, detonation: DetonationResult, command: str) -> list[dict[str, Any]]:
+    def collect(
+        self, detonation: DetonationResult, command: str | tuple[str, ...]
+    ) -> list[dict[str, Any]]:
         if not self.container_id:
             raise SafetyViolationError("BAS process sensor was not checked before execution.")
         # Bounded read; newest trace records remain at the end of the file.

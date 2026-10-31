@@ -830,12 +830,24 @@ def bas_check_cmd() -> None:
         raise typer.Exit(code=1)
     failed = False
     for procedure in procedures:
-        rule = (
-            "title: BAS Lab Process Sensor Control\nstatus: test\n"
-            "logsource:\n  product: linux\n  category: process_creation\n"
-            "detection:\n  selection:\n"
-            f"    Image|endswith: /{procedure.command}\n"
-            f"    CommandLine: {procedure.command}\n  condition: selection\n"
+        import shlex
+
+        import yaml
+
+        rule = yaml.safe_dump(
+            {
+                "title": "BAS Lab Process Sensor Control",
+                "status": "test",
+                "logsource": {"product": "linux", "category": "process_creation"},
+                "tags": ["attack." + procedure.technique_id.lower()],
+                "detection": {
+                    "selection": {
+                        "Image|endswith": "/" + procedure.argv[0],
+                        "CommandLine": shlex.join(procedure.argv),
+                    },
+                    "condition": "selection",
+                },
+            }
         )
         result = run_approved_validation(settings, "LAB-CHECK", procedure, rule)
         console.print(f"{procedure.technique_id} ({procedure.command}): {result['status']}")
@@ -847,6 +859,46 @@ def bas_check_cmd() -> None:
     )
     if failed:
         raise typer.Exit(code=1)
+
+
+@app.command("bas-install-procedures")
+def bas_install_procedures_cmd() -> None:
+    """Install missing catalog-managed abilities; refuse to overwrite altered content."""
+    from hecate_runner.bas import CalderaConnector, get_bas_provider
+    from hecate_runner.bas.approved import (
+        APPROVED_PROCEDURES,
+        ability_definition,
+        validate_approved_ability,
+    )
+
+    settings = Settings()
+    provider = get_bas_provider("caldera", settings)
+    assert isinstance(provider, CalderaConnector)
+    with provider._get_client() as client:
+        existing = client.get("/api/abilities")
+        existing.raise_for_status()
+        catalog = {a["ability_id"]: a for a in existing.json()}
+        # Validate all existing procedures before making any writes.
+        for procedure in APPROVED_PROCEDURES.values():
+            if procedure.ability_id in catalog:
+                validate_approved_ability(catalog[procedure.ability_id], procedure)
+            elif not procedure.managed:
+                raise typer.BadParameter(
+                    f"Required stock ability missing: {procedure.technique_id}"
+                )
+        for procedure in APPROVED_PROCEDURES.values():
+            if procedure.ability_id not in catalog:
+                response = client.put(
+                    "/api/rest", json={"index": "abilities", **ability_definition(procedure)}
+                )
+                response.raise_for_status()
+                console.print(f"Installed fixed procedure {procedure.technique_id}")
+        final = client.get("/api/abilities")
+        final.raise_for_status()
+        installed = {a["ability_id"]: a for a in final.json()}
+        for procedure in APPROVED_PROCEDURES.values():
+            validate_approved_ability(installed[procedure.ability_id], procedure)
+    console.print(f"Verified {len(APPROVED_PROCEDURES)} pinned lab procedures.")
 
 
 @app.command("bas-detonate")
