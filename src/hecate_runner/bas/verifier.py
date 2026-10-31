@@ -166,10 +166,22 @@ class DetectionVerifier:
 
         # 3. Check for telemetry arrival
         # Check explicit events passed or generated in detonation
-        events_to_evaluate = list(raw_events or detonation.telemetry_signatures)
+        events_to_evaluate = list(
+            raw_events if raw_events is not None else detonation.telemetry_signatures
+        )
+        # Scheduling/execution receipts are not independent sensor observations.
+        events_to_evaluate = [
+            e for e in events_to_evaluate if e.get("data_source") != "caldera_link"
+        ]
         if events_to_evaluate:
             telemetry_arrived = True
-            notes.append(f"Received {len(events_to_evaluate)} emulated telemetry events.")
+            notes.append(
+                f"Received {len(events_to_evaluate)} telemetry event(s) for rule evaluation."
+            )
+        if backend == "lab_process":
+            notes.append(
+                "Independent Linux lab process sensor; local Sigma evaluation, no SIEM alert verification."
+            )
 
         # Check live SIEM baseline query if configured
         if self.query_provider and baseline_query:

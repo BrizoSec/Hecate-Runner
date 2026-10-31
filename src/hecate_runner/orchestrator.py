@@ -2417,9 +2417,6 @@ class Orchestrator:
         Targets lab/staging environments via MITRE CALDERA, Stratus Red Team, or Mock,
         and verifies telemetry arrival and detection rule triggering via DetectionVerifier.
         """
-        if not rules:
-            return
-
         from hecate_runner.bas import (
             DetonationRequest,
             DetonationTarget,
@@ -2430,6 +2427,46 @@ class Orchestrator:
 
         started = self.trail.elapsed
         provider_name = getattr(self.settings, "bas_mode", "mock")
+        if provider_name != "mock":
+            from hecate_runner.bas.approved import select_approved_rule
+            from hecate_runner.bas.runtime import run_approved_validation, skipped_bas
+
+            reason = ""
+            selection = None
+            if not self.settings.bas_auto_execute_live:
+                reason = "Unattended live BAS is disabled; manual validation remains available."
+            elif provider_name != "caldera":
+                reason = "Unattended BAS is supported only for reviewed Linux CALDERA procedures."
+            elif not {p.strip().lower() for p in req.platforms} & {"linux"}:
+                reason = "No approved lab platform for this hunt (Linux lab only)."
+            else:
+                selection = select_approved_rule(
+                    rules, req.hypothesis.techniques, self.settings.bas_auto_techniques
+                )
+                if selection is None:
+                    reason = "No approved procedure matches this hunt's Linux process rules."
+            if reason:
+                req.bas_verification = skipped_bas(self.settings, req.hunt_id, reason)
+            else:
+                assert selection is not None
+                procedure, rule_yaml = selection
+                req.bas_verification = run_approved_validation(
+                    self.settings, req.hunt_id, procedure, rule_yaml
+                )
+            result = req.bas_verification
+            self.trail.step(
+                "bas",
+                "%s for %s: %s; telemetry=%s, rule match=%s",
+                result["status"],
+                req.hunt_id,
+                result.get("reason") or "local sensor Sigma verification",
+                result.get("telemetry_arrived", False),
+                result.get("rule_triggered", False),
+            )
+            return
+
+        if not rules:
+            return
         try:
             provider = get_bas_provider(provider_name, self.settings)
         except Exception as exc:

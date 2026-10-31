@@ -260,6 +260,23 @@ class CalderaConnector(BASProvider):
                 )
             ability_id = abilities[0]
 
+        if request.params.get("approved_only"):
+            from hecate_runner.bas.approved import APPROVED_PROCEDURES, validate_approved_ability
+
+            procedure = APPROVED_PROCEDURES.get(request.technique_id)
+            if not procedure or request.platform != "linux" or ability_id != procedure.ability_id:
+                raise SafetyViolationError(
+                    "Unattended BAS requires a pinned, reviewed Linux procedure."
+                )
+            response = client.get("/api/v2/abilities")
+            if response.status_code == 404:
+                response = client.get("/api/abilities")
+            response.raise_for_status()
+            candidates = [a for a in response.json() if a.get("ability_id") == ability_id]
+            if len(candidates) != 1:
+                raise SafetyViolationError("Pinned BAS ability is missing or ambiguous.")
+            validate_approved_ability(candidates[0], procedure)
+
         start_time = datetime.now(UTC)
         op_name = (
             f"hecate_{request.hunt_id.lower()}_{request.technique_id.lower()}_{int(time.time())}"

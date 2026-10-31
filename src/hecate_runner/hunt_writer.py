@@ -770,6 +770,12 @@ def _render_bas_verification(req: DraftHuntRequest) -> str:
         return ""
     bas = req.bas_verification
     status = bas.get("status", "unknown")
+    if status == "skipped":
+        return (
+            "\n### Breach & Attack Simulation (BAS)\n\n**Skipped:** "
+            + str(bas.get("reason", "No approved procedure."))
+            + "\n"
+        )
     status_badge = {
         "verified_true_positive": "✅ **VERIFIED TRUE POSITIVE**",
         "detection_miss": "⚠️ **DETECTION MISS (Telemetry arrived, rule missed)**",
@@ -792,6 +798,7 @@ def _render_bas_verification(req: DraftHuntRequest) -> str:
         f"> **Closed-Loop Validation Result:** {status_badge}",
         "> ",
         f"> - **Provider:** `{provider}`",
+        f"> - **Verification scope:** `{bas.get('verification_scope', 'rule_evaluation')}`",
         f"> - **Target Technique:** `{technique}` ({bas.get('ability_id', '')})",
         f"> - **Telemetry Observed:** {'Yes' if bas.get('telemetry_arrived') else 'No'}",
         f"> - **Detection Triggered:** {'Yes' if bas.get('rule_triggered') else 'No'} ({hits} hit(s))",
@@ -1008,9 +1015,15 @@ def render_draft(req: DraftHuntRequest) -> str:
             else ""
         )
         + (
-            f"bas_verified: {str(req.bas_verification.get('status') == 'verified_true_positive').lower()}\n"
+            (
+                f"bas_verified: {str(req.bas_verification.get('status') == 'verified_true_positive').lower()}\n"
+                if req.bas_verification.get("status") != "skipped"
+                else ""
+            )
+            + f"bas_run_id: {json.dumps(req.bas_verification.get('run_id', ''))}\n"
             f"bas_provider: {json.dumps(req.bas_verification.get('provider', ''))}\n"
             f"bas_status: {json.dumps(req.bas_verification.get('status', ''))}\n"
+            f"bas_backend: {json.dumps(req.bas_verification.get('backend', ''))}\n"
             f"bas_detection_triggered: {str(bool(req.bas_verification.get('rule_triggered'))).lower()}\n"
             if req.bas_verification
             else ""

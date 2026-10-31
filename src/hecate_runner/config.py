@@ -274,6 +274,21 @@ class Settings(BaseSettings):
         alias="HECATE_BAS_AUTO_EXECUTE_LIVE",
         description="Permit unattended live BAS from the drafting pipeline (manual CLI remains available).",
     )
+    bas_auto_techniques: Any = Field(
+        default_factory=list,
+        alias="HECATE_BAS_AUTO_TECHNIQUES",
+        description="Explicit subset of reviewed Linux lab procedures: T1033, T1057, T1083.",
+    )
+    bas_telemetry: Literal["none", "lab_process"] = Field(
+        default="none",
+        alias="HECATE_BAS_TELEMETRY",
+        description="Independent local process sensor used for live lab verification.",
+    )
+    bas_sensor_container: str = Field(
+        default="hecate-bas-agent",
+        alias="HECATE_BAS_SENSOR_CONTAINER",
+        description="Isolated Docker lab agent running the execve process sensor.",
+    )
     bas_mode: Literal["mock", "caldera", "stratus", "local_sandbox", "live_lab"] = Field(
         default="mock",
         alias="HECATE_BAS_MODE",
@@ -1349,7 +1364,9 @@ class Settings(BaseSettings):
     def _expand_workspace(cls, v: Path) -> Path:
         return v.expanduser().resolve()
 
-    @field_validator("bas_allowed_hosts", "bas_allowed_accounts", mode="after")
+    @field_validator(
+        "bas_allowed_hosts", "bas_allowed_accounts", "bas_auto_techniques", mode="after"
+    )
     @classmethod
     def _parse_comma_or_json_list(cls, v: Any) -> list[str]:
         if isinstance(v, str):
@@ -1367,6 +1384,15 @@ class Settings(BaseSettings):
         if isinstance(v, (list, tuple, set)):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
+
+    @field_validator("bas_auto_techniques", mode="after")
+    @classmethod
+    def _approved_bas_techniques(cls, value: list[str]) -> list[str]:
+        from hecate_runner.bas.approved import APPROVED_PROCEDURES
+
+        if set(value) - APPROVED_PROCEDURES.keys():
+            raise ValueError("Unattended BAS accepts only reviewed techniques T1033, T1057, T1083.")
+        return list(dict.fromkeys(value))
 
     def env_for_hecate(self) -> dict[str, str]:
         """Env vars to pass through when subprocessing the hecate-agent CLI.
