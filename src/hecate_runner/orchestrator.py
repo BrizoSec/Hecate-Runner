@@ -2444,7 +2444,7 @@ class Orchestrator:
                     rules, req.hypothesis.techniques, self.settings.bas_auto_techniques
                 )
                 if selection is None:
-                    reason = "No approved procedure matches this hunt's Linux process rules."
+                    reason = "No approved procedure exercises this hunt's Linux rule predicates."
             if reason:
                 req.bas_verification = skipped_bas(self.settings, req.hunt_id, reason)
             else:
