@@ -154,6 +154,9 @@ class LabProcessSensor:
         network = json.loads(self._docker("network", "inspect", "hecate-bas-lab"))[0]
         if not network.get("Internal"):
             raise SafetyViolationError("BAS lab network must be internal.")
+        from hecate_runner.bas.controller import validate_controller
+
+        validate_controller(json.loads(self._docker("inspect", "caldera"))[0])
         self.container_id = container["Id"]
         # Readiness: the tracer must have observed the agent's initial exec.
         trace = self._docker("exec", self.container_id, "head", "-c", "8192", TRACE_PATH)
