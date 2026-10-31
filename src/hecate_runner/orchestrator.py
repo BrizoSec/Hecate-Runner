@@ -744,6 +744,7 @@ class RunResult:
     draft_path: Path | None = None
     research_id: str | None = None
     parked_count: int = 0
+    cooldown_remaining_sec: float | None = None
 
     @property
     def ok(self) -> bool:
@@ -3037,9 +3038,11 @@ class Orchestrator:
                     elapsed,
                     effective_spacing,
                 )
+                remaining_sec = max(0.0, (effective_spacing - elapsed) * 3600.0)
                 return RunResult(
                     outcome="spacing_cooldown",
                     detail=f"{elapsed:.1f}h/{effective_spacing:.1f}h",
+                    cooldown_remaining_sec=remaining_sec,
                     parked_count=parked_count,
                 )
 

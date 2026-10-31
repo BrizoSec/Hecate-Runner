@@ -296,12 +296,31 @@ def daemon(
                 )
                 stop_event.wait(float(effective_interval))
             elif result.outcome == "spacing_cooldown":
+                # Do not thrash every 60s when cooldown has hours remaining.
+                # Sleep until cooldown expires, polling at least every 15m (900s)
+                # so newly arrived fast indicator sweeps are not starved,
+                # and no less than effective_interval.
+                rem_sec: float | None = getattr(result, "cooldown_remaining_sec", None)
+                if rem_sec is None and result.detail and "/" in result.detail:
+                    try:
+                        elapsed_str, total_str = result.detail.replace("h", "").split("/")
+                        rem = (float(total_str) - float(elapsed_str)) * 3600.0
+                        if rem > 0:
+                            rem_sec = rem
+                    except Exception:
+                        pass
+
+                if rem_sec is not None and rem_sec > 0:
+                    wait_sec = int(max(float(effective_interval), min(rem_sec, 900.0)))
+                else:
+                    wait_sec = effective_interval
+
                 log.info(
                     "Spacing cooldown active (%s). Checking again in %ds...",
                     result.detail or "",
-                    min(effective_interval, 60),
+                    wait_sec,
                 )
-                stop_event.wait(float(min(effective_interval, 60)))
+                stop_event.wait(float(wait_sec))
             else:
                 log.info(
                     "Cycle completed with status '%s'. Sleeping for %ds...",

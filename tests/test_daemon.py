@@ -71,6 +71,34 @@ class TestDaemonCommand:
         assert call_count == 1
         assert "Outcome: empty" in result.output
 
+    def test_daemon_spacing_cooldown_sleeps_appropriate_duration(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        slept_durations: list[float] = []
+
+        class FakeOrch:
+            def run_once(self, dry_run: bool = False) -> RunResult:
+                return RunResult(
+                    outcome="spacing_cooldown",
+                    detail="1.9h/6.0h",
+                    cooldown_remaining_sec=14760.0,
+                )
+
+        monkeypatch.setattr(
+            cli, "build_default_orchestrator", lambda s, ignore_quota=False: FakeOrch()
+        )
+        monkeypatch.setattr(
+            "threading.Event.wait",
+            lambda self, timeout=None: (
+                slept_durations.append(timeout) if timeout is not None else None
+            ),
+        )
+
+        result = runner.invoke(app, ["daemon", "--max-cycles", "2", "--interval", "60"])
+        assert result.exit_code == 0
+        assert "Outcome: spacing_cooldown" in result.output
+        assert slept_durations == [900.0]
+
     def test_daemon_fatal_exception_exits_one(
         self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

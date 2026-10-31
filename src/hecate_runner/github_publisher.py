@@ -15,6 +15,8 @@ import re
 import sqlite3
 import stat
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -228,11 +230,16 @@ class PromotionOutbox:
                     "Could not restrict GitHub outbox database permissions"
                 ) from exc
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.database, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout=30000")
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _initialize(self) -> None:
         with self._connect() as connection:
