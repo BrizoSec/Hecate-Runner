@@ -813,6 +813,42 @@ def deploy_queries_cmd(
     console.print(f"[bold]{deployed_count}[/bold] query(s) processed in {mode_str} mode.")
 
 
+@app.command("bas-check")
+def bas_check_cmd() -> None:
+    """Check approved lab procedures against real process events; save local BAS metrics."""
+    from hecate_runner.bas.approved import APPROVED_PROCEDURES
+    from hecate_runner.bas.runtime import run_approved_validation
+
+    settings = Settings()
+    procedures = [
+        APPROVED_PROCEDURES[t] for t in settings.bas_auto_techniques if t in APPROVED_PROCEDURES
+    ]
+    if not procedures:
+        console.print(
+            "[red]Configure HECATE_BAS_AUTO_TECHNIQUES with reviewed procedures first.[/red]"
+        )
+        raise typer.Exit(code=1)
+    failed = False
+    for procedure in procedures:
+        rule = (
+            "title: BAS Lab Process Sensor Control\nstatus: test\n"
+            "logsource:\n  product: linux\n  category: process_creation\n"
+            "detection:\n  selection:\n"
+            f"    Image|endswith: /{procedure.command}\n"
+            f"    CommandLine: {procedure.command}\n  condition: selection\n"
+        )
+        result = run_approved_validation(settings, "LAB-CHECK", procedure, rule)
+        console.print(f"{procedure.technique_id} ({procedure.command}): {result['status']}")
+        if result.get("reason"):
+            console.print(result["reason"])
+        failed |= result["status"] != "verified_true_positive"
+    console.print(
+        "Scope: independent local process sensor + Sigma evaluation; no SIEM alert claimed."
+    )
+    if failed:
+        raise typer.Exit(code=1)
+
+
 @app.command("bas-detonate")
 def bas_detonate_cmd(
     technique_id: Annotated[

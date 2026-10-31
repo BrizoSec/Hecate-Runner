@@ -1,5 +1,11 @@
 # BAS capability and host safety audit — 2026-10-27
 
+**2026-10-31 update:** The workspace owner authorized automatic execution limited
+to reviewed read-only procedures in the isolated Linux lab, with independent
+process observation. See [approved lab automation](BAS_AUTOMATION.md). The
+original recommendation below continues to apply to unrestricted technique
+execution, Windows/cloud procedures, and execution on the shared host.
+
 ## Result
 
 Isolated Linux CALDERA execution is working. The general host is **not yet fully hardened**: UFW is disabled and several host services listen on all interfaces. Administrator authentication and a decision about required LAN/Tailscale access are needed to complete firewall work.

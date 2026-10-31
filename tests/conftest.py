@@ -111,6 +111,10 @@ def _never_the_live_workspace(
     for var in _ENV_VARS_TO_ISOLATE:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("HECATE_RUNNER_MISP_PUBLISHING_ENABLED", "false")
+    monkeypatch.setenv("HECATE_BAS_ENABLED", "false")
+    monkeypatch.setenv("HECATE_BAS_AUTO_EXECUTE_LIVE", "false")
+    monkeypatch.setenv("HECATE_BAS_MODE", "mock")
+    monkeypatch.setenv("HECATE_BAS_AUTO_TECHNIQUES", "")
     monkeypatch.setenv("HECATE_WORKSPACE", str(tmp_path_factory.mktemp("unset-workspace")))
 
 

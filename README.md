@@ -219,6 +219,9 @@ uv run hecate-runner draft \
 ```
 
 ### Live Adversary Emulation & Breach Simulation (BAS)
+
+For unattended operation restricted to reviewed Linux lab procedures and real
+local process observation, see [approved BAS automation](docs/BAS_AUTOMATION.md).
 Execute on-demand adversary emulation or run closed-loop detection verification across Linux, Windows, or Cloud:
 
 ```bash
